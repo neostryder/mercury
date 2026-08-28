@@ -53,6 +53,13 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- Flagging now supports selecting multiple messages at once (Thunderbird's
+  `getDisplayedMessages` already returned an array - the popup only used
+  to send the first one). All selected messages go into the same
+  proposal, labeled `Message N of M`, capped at 10 messages / 2000 chars
+  each. `/rules/propose`'s payload shape changed from a single `message`
+  object to a `messages` array; no backward-compat kept since both ends
+  ship together.
 - Fixed the popup failing with "getDisplayedMessage is not a function":
   the real Thunderbird API is `messageDisplay.getDisplayedMessages`
   (plural, returns an array) - there is no singular `getDisplayedMessage`.

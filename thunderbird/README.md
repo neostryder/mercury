@@ -37,9 +37,12 @@ work - see the repo's CHANGELOG.
 
 ## Using it
 
-Open a message, click the **Flag for Mercury** button in the message
-display toolbar, describe how it (and similar messages) should be handled,
-and send. The popup shows the rule text that was actually added.
+Open a message (or select several in a list view), click the **Flag for
+Mercury** button in the message display toolbar, describe how it/they -
+and similar messages - should be handled, and send. Every selected message
+goes into the same proposal, so "these three are all the same phishing
+campaign, bounce anything like them" works as one flag rather than three.
+The popup shows the proposed rule text; check Telegram to approve it.
 
 ## Why a message-display action, not a context menu
 

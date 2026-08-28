@@ -1,4 +1,4 @@
-let currentMessage = null;
+let currentMessages = [];
 
 function extractPlainText(part) {
   if (!part) return "";
@@ -19,20 +19,27 @@ async function init() {
   const statusEl = document.getElementById("status");
 
   try {
-    // getDisplayedMessages (plural) is the real API - it returns an array,
-    // even for a single-message view, and there is no singular
-    // getDisplayedMessage. No tabId here on purpose: omitting it uses
-    // Thunderbird's own "currently active tab" default, which is what a
-    // message-display-action popup wants.
-    const displayed = await messenger.messageDisplay.getDisplayedMessages();
-    currentMessage = displayed && displayed.length ? displayed[0] : null;
+    // getDisplayedMessages (plural) returns every message displayed in the
+    // tab - more than one when several are selected in a list view. No
+    // tabId here on purpose: omitting it uses Thunderbird's own "currently
+    // active tab" default, which is what a message-display-action popup
+    // wants.
+    currentMessages = await messenger.messageDisplay.getDisplayedMessages();
 
-    if (!currentMessage) {
+    if (!currentMessages || !currentMessages.length) {
       statusEl.textContent = "No message is currently displayed.";
       submitButton.disabled = true;
       return;
     }
-    document.getElementById("subject").textContent = currentMessage.subject || "(no subject)";
+
+    const subjectEl = document.getElementById("subject");
+    if (currentMessages.length === 1) {
+      subjectEl.textContent = currentMessages[0].subject || "(no subject)";
+    } else {
+      subjectEl.textContent = `${currentMessages.length} messages selected: ${currentMessages
+        .map((m) => m.subject || "(no subject)")
+        .join("; ")}`;
+    }
 
     submitButton.addEventListener("click", () => onSubmit(submitButton, statusEl));
   } catch (err) {
@@ -59,9 +66,16 @@ async function onSubmit(submitButton, statusEl) {
       return;
     }
 
-    const full = await messenger.messages.getFull(currentMessage.id);
-    const bodyText = extractPlainText(full);
-    const fromDisplay = (currentMessage.author || "").toString();
+    const messages = await Promise.all(
+      currentMessages.map(async (m) => {
+        const full = await messenger.messages.getFull(m.id);
+        return {
+          subject: m.subject || "",
+          from: (m.author || "").toString(),
+          text: extractPlainText(full).slice(0, 8000),
+        };
+      })
+    );
 
     const resp = await fetch(`${mercuryUrl.replace(/\/$/, "")}/rules/propose`, {
       method: "POST",
@@ -69,14 +83,7 @@ async function onSubmit(submitButton, statusEl) {
         "Content-Type": "application/json",
         "X-Mercury-Secret": mercurySecret,
       },
-      body: JSON.stringify({
-        instruction,
-        message: {
-          subject: currentMessage.subject || "",
-          from: fromDisplay,
-          text: bodyText.slice(0, 8000),
-        },
-      }),
+      body: JSON.stringify({ instruction, messages }),
     });
 
     const data = await resp.json();
