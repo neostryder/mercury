@@ -50,3 +50,11 @@ The reference deployment here runs it as a `launchd` job on macOS this
 way: a wrapper script pulls the secret from a secrets manager and execs
 the gateway, and the `launchd` job (`RunAtLoad` + `KeepAlive`) points at
 that wrapper rather than the Python script directly.
+
+If your backend's Docker runtime itself sits on a VM (Colima, Lima,
+Rancher Desktop, and similar), a container-level restart policy (`restart:
+unless-stopped` in `docker-compose.yml`) only covers the container - it
+does nothing if the VM underneath it wedges or fails to come back after a
+reboot. That needs its own periodic health check (a scheduled script that
+checks the runtime responds, and restarts it with escalating force if not)
+independent of whatever's watching the gateway process above.

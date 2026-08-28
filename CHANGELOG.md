@@ -63,3 +63,10 @@
   `nohup ... &`, and fetching `AGENT_GATEWAY_SECRET` at process start
   rather than embedding it in a supervisor unit file. The reference
   deployment now does this via a `launchd` job on macOS.
+- Documented that a VM-based Docker runtime (Colima, Lima, etc.) needs its
+  own periodic health check independent of the container's own restart
+  policy, since `restart: unless-stopped` doesn't help if the VM
+  underneath it wedges. The reference deployment now runs a watchdog that
+  checks Docker responsiveness every 5 minutes and escalates through
+  restart strategies if not, also verifying the Mercury container itself
+  comes back up.
