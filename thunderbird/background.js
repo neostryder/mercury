@@ -79,10 +79,21 @@ async function tagMessageWithCategory(message) {
   });
 }
 
-await ensureCategoryTagsExist();
+// A failure here must never take down the rest of this script - the menu
+// and popup registered above are load-bearing and cannot be allowed to
+// depend on the tagging feature succeeding.
+try {
+  await ensureCategoryTagsExist();
+} catch (err) {
+  console.error("Mercury: failed to set up category tags", err);
+}
 
 messenger.messages.onNewMailReceived.addListener(async (folder, messageList) => {
   for (const message of messageList.messages) {
-    await tagMessageWithCategory(message);
+    try {
+      await tagMessageWithCategory(message);
+    } catch (err) {
+      console.error("Mercury: failed to tag message", message.id, err);
+    }
   }
 });

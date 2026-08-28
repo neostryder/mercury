@@ -283,3 +283,10 @@
   `MERCURY_DASHBOARD_PASSWORD` (the same Basic Auth the browser dashboard
   already uses) and `MERCURY_DIGEST_SMTP_USER`/`MERCURY_DIGEST_SMTP_PASSWORD`;
   any missing, and it logs a skip reason at startup instead of running.
+- Fixed the context menu entry and icon vanishing after the category-chip
+  update: `ensureCategoryTagsExist()` ran unguarded at background-script
+  top level, after the context menu and its click listener were already
+  registered - an uncaught rejection there could take the whole background
+  page down with it. Wrapped it and the per-message tagging call in their
+  own try/catch, logging instead of throwing, so a tagging failure can't
+  affect the menu, popup, or icon. Bumped to 0.3.4.
