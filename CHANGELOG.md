@@ -157,3 +157,26 @@
   full message and reasoning, so it can be reviewed later without having
   had to catch it live. Logging is fire-and-forget and never affects
   delivery if it fails.
+- Approving an action (mailbox or unsubscribe) now sends an immediate
+  "working on it" message before the agent call, which can take a while -
+  the button-tap toast alone was too easy to miss, leaving it unclear
+  whether a tap or reply had actually registered. The agent is also now
+  asked to post its own brief progress updates as it works (e.g. "Examining
+  the unsubscribe link...") rather than going quiet until the final report.
+- Removed the parenthetical disposition explanation from the
+  Blacklist/Greylist/No bounce button labels themselves (it stays in the
+  question text above them).
+- The rule-proposal interpreter can now be told an instruction arrived via
+  speech-to-text dictation (a `via_dictation` flag, plumbed through from
+  `/rules/propose` but not yet set by any real input method) - it's asked to
+  read past likely transcription errors and infer intent rather than take
+  garbled phrasing literally, still deferring to the normal revise-feedback
+  loop when genuinely unclear.
+- Gave the extension a real icon (a winged-helmet shield mark) instead of
+  Thunderbird's default puzzle-piece placeholder - used in `icons/`, the
+  toolbar button, and the context-menu entry. The source image had a
+  checkerboard baked into its pixels as fake transparency rather than a real
+  alpha channel; rebuilt with a genuine one by flood-filling only the
+  background region connected to the image border (so similarly-toned
+  pixels inside the artwork itself are left alone), then cropped and padded
+  to a square at the sizes Thunderbird actually uses (16/32/48/64/96/128).

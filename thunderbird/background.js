@@ -9,6 +9,7 @@ try {
     id: "mercury-flag",
     contexts: ["message_list"],
     title: "Flag for Mercury",
+    icons: { "16": "icons/icon-16.png", "32": "icons/icon-32.png" },
   });
 } catch (err) {
   if (!err.message?.includes("already exists")) throw err;

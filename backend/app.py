@@ -41,7 +41,7 @@ notifier = get_notifier()
 approval_store = ApprovalStore(PENDING_APPROVALS_PATH)
 telegram_approvals = TelegramApprovals(
     approval_store,
-    interpret=lambda instruction, ctx: interpret_instruction(instruction, ctx),
+    interpret=lambda instruction, ctx, via_dictation=False: interpret_instruction(instruction, ctx, via_dictation),
     revise=lambda feedback, rule, action, ctx: revise_instruction(feedback, rule, action, ctx),
     finalize=lambda rule, source="rule_proposal": _finalize_rule(rule, source),
     execute_action=lambda action, ctx: dispatch_action(action, ctx),
@@ -127,9 +127,23 @@ def _parse_rule_and_action(content: str) -> tuple[str | None, str | None]:
     return rule, action
 
 
-async def interpret_instruction(instruction: str, message_context: str) -> tuple[str, str | None]:
+async def interpret_instruction(
+    instruction: str, message_context: str, via_dictation: bool = False
+) -> tuple[str, str | None]:
+    dictation_note = (
+        """
+Note: this instruction was produced via speech-to-text dictation and may
+contain transcription errors. If a word or phrase looks wrong or out of
+place, infer the most likely intended meaning from context rather than
+taking it literally. If it's genuinely unclear even after that, propose
+your best interpretation anyway and note the uncertainty - the recipient
+can correct it through the normal revise-feedback reply.
+"""
+        if via_dictation
+        else ""
+    )
     prompt = f"""The recipient flagged one or more emails and gave a free-text instruction
-for how they, and similar messages, should be handled going forward. Turn
+for how they, and similar messages, should be handled going forward.{dictation_note} Turn
 that instruction into a self-contained rule to add to a standing rules
 ledger that a future spam/phishing verdict step will read alongside every
 new message - it will have no access to this conversation or the flagged
@@ -226,6 +240,11 @@ anything beyond exactly what is described - if it is unclear, or falls
 outside your skill's approved scope (folder, message count, or action
 type), stop and report why instead of guessing or improvising.
 
+Before you begin, and as you complete each meaningful step, send a brief
+status update to this same Telegram chat (e.g. "Checking the Spam folder...",
+"Deleting 3 messages...") using your own Telegram-sending capability, so the
+recipient sees progress instead of waiting in silence for the final report.
+
 Approved action:
 ---
 {action}
@@ -259,6 +278,12 @@ async def execute_unsubscribe_action(action: str, message_context: str) -> tuple
     request for a standing rule."""
     prompt = f"""The recipient has approved an unsubscribe request and it should be carried
 out now, using your browsing skill.
+
+Before you begin, and as you complete each meaningful step, send a brief
+status update to this same Telegram chat (e.g. "Examining the unsubscribe
+link...", "Submitting the unsubscribe form...") using your own
+Telegram-sending capability, so the recipient sees progress instead of
+waiting in silence for the final report.
 
 First, evaluate whether the unsubscribe route is safe to use at all. Find
 the unsubscribe mechanism in the flagged message below - a List-Unsubscribe
@@ -524,6 +549,7 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
     payload = await request.json()
     instruction = payload.get("instruction", "")
     messages = payload.get("messages", [])
+    via_dictation = bool(payload.get("via_dictation", False))
     max_messages = 10
 
     try:
@@ -536,7 +562,7 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             blocks.append(f"{header}\nFrom: {from_display}\nSubject: {subject}\n\n{body}"[:2000])
         message_context = redact("\n\n---\n\n".join(blocks)[:8000])
         redacted_instruction = redact(instruction)
-        _, rule, action = await telegram_approvals.propose_new(redacted_instruction, message_context)
+        _, rule, action = await telegram_approvals.propose_new(redacted_instruction, message_context, via_dictation)
         return {"ok": True, "status": "pending", "rule": rule, "action": action}
     except Exception as exc:
         try:

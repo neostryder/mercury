@@ -37,9 +37,9 @@ MAX_ROUNDS = 5
 API_BASE = "https://api.telegram.org/bot{token}"
 
 BOUNCE_OPTIONS = {
-    "hard": "Blacklist (hard bounce)",
-    "soft": "Greylist (soft bounce)",
-    "none": "No bounce",
+    "hard": {"label": "Blacklist", "description": "Blacklist (hard bounce)"},
+    "soft": {"label": "Greylist", "description": "Greylist (soft bounce)"},
+    "none": {"label": "No bounce", "description": "No bounce"},
 }
 
 
@@ -57,8 +57,10 @@ class TelegramApprovals:
         self._bounce_decisions: dict[str, str] = {}  # decision_id -> domain
         self._offset = 0
 
-    async def propose_new(self, instruction: str, message_context: str) -> tuple[str, str, str | None]:
-        rule, action = await self._interpret(instruction, message_context)
+    async def propose_new(
+        self, instruction: str, message_context: str, via_dictation: bool = False
+    ) -> tuple[str, str, str | None]:
+        rule, action = await self._interpret(instruction, message_context, via_dictation)
         proposal_id = self._store.create(rule, action, message_context)
         await self._send_proposal(proposal_id, rule, action)
         return proposal_id, rule, action
@@ -192,12 +194,13 @@ class TelegramApprovals:
     async def ask_bounce_decision(self, domain: str, recommendation: str | None) -> None:
         decision_id = secrets.token_hex(4)
         self._bounce_decisions[decision_id] = domain
-        rec_note = f"\nMy recommendation: {BOUNCE_OPTIONS.get(recommendation, 'No bounce')}." if recommendation else ""
+        rec = BOUNCE_OPTIONS.get(recommendation, {}).get("description") if recommendation else None
+        rec_note = f"\nMy recommendation: {rec}." if rec else ""
         text = f"Add {domain} to a bounce list?{rec_note}"
         keyboard = {
             "inline_keyboard": [[
-                {"text": label, "callback_data": f"bounce:{disposition}:{decision_id}"}
-                for disposition, label in BOUNCE_OPTIONS.items()
+                {"text": opt["label"], "callback_data": f"bounce:{disposition}:{decision_id}"}
+                for disposition, opt in BOUNCE_OPTIONS.items()
             ]]
         }
         await self._send(None, text, keyboard=keyboard)
@@ -209,6 +212,10 @@ class TelegramApprovals:
             await self._finalize(proposal["rule"], "rule_proposal")
             result_lines.append(f"Rule added: {proposal['rule']}")
         if proposal.get("action"):
+            # The action itself (a real agent call - browsing, mailbox work)
+            # can take a while; an instant chat message here matters more
+            # than the answerCallbackQuery toast, which is easy to miss.
+            await self._send(None, "Approved - working on it now...")
             outcome, followup = await self._execute_action(proposal["action"], proposal["message_context"])
             result_lines.append(outcome)
         if not result_lines:
