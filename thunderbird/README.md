@@ -59,6 +59,16 @@ goes into the same proposal, so "these three are all the same phishing
 campaign, bounce anything like them" works as one flag rather than three.
 The popup shows the proposed rule text; check Telegram to approve it.
 
+## Why it asks for access to all sites
+
+The manifest declares `host_permissions: ["*://*/*"]` so the popup's
+request to your Mercury URL isn't blocked by CORS - Firefox/Thunderbird
+extension pages need an explicit host permission to bypass CORS for a
+cross-origin fetch, and since your Mercury URL is something you type into
+the options page rather than a fixed address baked into the extension,
+there's no narrower pattern to declare it against ahead of time. It's
+still used for exactly one thing: the POST to your own configured URL.
+
 ## Why a message-display action, not a context menu
 
 A toolbar button next to an open message keeps the flow to one click plus

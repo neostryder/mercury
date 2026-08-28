@@ -53,6 +53,12 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- Fixed "NetworkError when attempting to fetch resource" on send: the
+  popup's cross-origin POST to the configured Mercury URL was being
+  blocked by CORS, since Firefox/Thunderbird extension pages need an
+  explicit host permission to bypass it. Added `host_permissions:
+  ["*://*/*"]` - can't be scoped narrower since the Mercury URL is
+  user-configured rather than fixed at build time.
 - Fixed the popup always reporting "No message is currently displayed"
   even with a message open. Two mistakes at once, both confirmed against
   Thunderbird's own official messageDisplay example: `getDisplayedMessages`
