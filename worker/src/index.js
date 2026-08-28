@@ -6,6 +6,9 @@
 // Thunderbird extension) straight to the backend and returns its real
 // response - that call is a direct, synchronous user action, not something
 // arriving under SMTP bounce-risk, so there is nothing to protect it from.
+const INGEST_TIMEOUT_MS = 20000;
+const KNOWN_DISPOSITIONS = [250, 421, 550];
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== 'POST') {
@@ -17,22 +20,23 @@ export default {
     const backendUrl = `${env.BACKEND_BASE_URL}${pathname}`;
 
     if (pathname === '/ingest') {
-      // Handed to the backend in the background: the response below does
-      // not wait on it. Shadow mode always accepts, so there is nothing for
-      // the backend's result to change on this request yet.
-      ctx.waitUntil(forwardInBackground(backendUrl, bodyText, env));
-      return new Response('OK', { status: 200 });
+      return proxyIngest(backendUrl, bodyText, env);
     }
 
     return proxySynchronously(backendUrl, bodyText, env);
   },
 };
 
-async function forwardInBackground(backendUrl, bodyText, env) {
+// Enforcement now depends on this call completing, but a self-hosted outage
+// or a slow backend must still never itself cause a bounce of legitimate
+// mail - see docs/ARCHITECTURE.md. Anything short of a clean, recognized
+// disposition from the backend fails open (accept) rather than risking a
+// false bounce.
+async function proxyIngest(backendUrl, bodyText, env) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), INGEST_TIMEOUT_MS);
   try {
-    await fetch(backendUrl, {
+    const resp = await fetch(backendUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -41,9 +45,14 @@ async function forwardInBackground(backendUrl, bodyText, env) {
       body: bodyText,
       signal: controller.signal,
     });
+    const text = await resp.text();
+    if (KNOWN_DISPOSITIONS.includes(resp.status)) {
+      return new Response(text, { status: resp.status, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(text || 'OK', { status: 250 });
   } catch (err) {
-    // Backend unreachable or slow. Nothing to do in shadow mode - the
-    // message was already accepted above.
+    // Backend unreachable, slow, or errored - accept rather than guess.
+    return new Response('OK', { status: 250 });
   } finally {
     clearTimeout(timeout);
   }

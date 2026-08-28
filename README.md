@@ -16,10 +16,13 @@ whether it's spam or phishing instead of matching a sender pattern - while
 still leaning on my own judgment for the messages I care enough to give it
 an explicit rule about. That's the "rules ledger" described below.
 
-I'm running Mercury in shadow mode against my own real inbox right now: it
-never blocks anything, it reports a verdict and reasoning to me on every
-message so I can judge whether it's actually right before I ever let it
-touch delivery.
+Mercury ran in shadow mode against my own real inbox for a while first: it
+never blocked anything, it reported a verdict and reasoning on every
+message so I could judge whether it was actually right before I ever let it
+touch delivery. It now enforces its own recommended disposition (accept /
+soft-defer / hard-bounce) at SMTP time. A `MERCURY_SHADOW_MODE=true`
+environment variable reverts to report-only without a code change or
+redeploy, if a bad disposition ever needs to be walked back fast.
 
 ## How it works
 
@@ -37,9 +40,12 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    and hard-bounces mail that was never actually spam. Putting an
    effectively-always-up edge Worker in front of your self-hosted backend
    removes your own uptime from that failure path entirely.
-2. The Worker hands the message to your self-hosted **backend** in the
-   background and accepts the webhook call immediately - your backend
-   being slow or briefly down cannot itself cause a bounce.
+2. The Worker waits on your self-hosted **backend**'s real verdict and
+   returns its disposition as the webhook response - but only when that
+   disposition is a clean, recognized one; a backend that's slow,
+   unreachable, or errors out still fails open (accept) rather than ever
+   risking a bounce caused by infrastructure rather than the message
+   itself.
 3. The backend **redacts** any of the recipient's own known addresses
    found in the message (see below) before anything leaves the process.
 4. The redacted message is scored by a **prompt-injection classifier**.
@@ -50,9 +56,8 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    it's the reason the pipeline is shaped the way it is.
 5. The redacted message, the injection score, and your standing **rules
    ledger** go to a **judge** for a verdict: SPAM, PHISH, LEGIT, or UNSURE,
-   plus a recommended disposition (accept / soft-defer / hard-bounce) and
-   its reasoning. Nothing is enforced from this yet in shadow mode - it's
-   a recommendation.
+   plus a disposition (accept / soft-defer / hard-bounce) and its
+   reasoning, which is what actually gets enforced (see "Status" below).
 6. A **notifier** sends you the verdict and reasoning. If anything in the
    pipeline itself fails, you get an alert instead of silence.
 
@@ -160,12 +165,12 @@ for why that separation matters here in particular.
 
 ## Status
 
-**Shadow mode.** Every message gets a verdict and a report; nothing is
-ever blocked or bounced yet. See [`CHANGELOG.md`](CHANGELOG.md) for what's
-built and what's still ahead (an enforcement mode once shadow-mode
-verdicts have been reviewed against enough real mail, and a signed,
-installable build of the Thunderbird extension rather than a
-temporary/unpacked one).
+**Enforcing.** Every message gets a verdict, and its disposition (accept /
+soft-defer / hard-bounce) is now acted on at SMTP time, not just reported.
+See [`CHANGELOG.md`](CHANGELOG.md) for what's built and what's still ahead
+(a signed, installable build of the Thunderbird extension rather than a
+temporary/unpacked one; extensive activity logging and a daily summary
+digest).
 
 ## Repository layout
 

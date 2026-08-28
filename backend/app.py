@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from approvals import ApprovalStore
 from providers.classifier import get_classifier
@@ -14,6 +15,10 @@ from providers.notifier import get_notifier
 from telegram_approvals import TelegramApprovals
 
 SHARED_SECRET = os.environ["MERCURY_SHARED_SECRET"]
+# Rollback lever only - enforcement is the default now that it has been turned
+# on. Set MERCURY_SHADOW_MODE=true and restart to go back to report-only
+# without a code change, if a bad disposition needs to be walked back fast.
+SHADOW_MODE = os.environ.get("MERCURY_SHADOW_MODE", "false").lower() == "true"
 RULES_LEDGER_PATH = Path(os.environ.get("MERCURY_RULES_LEDGER_PATH", "/data/rules_ledger.json"))
 IDENTITIES_PATH = Path(os.environ.get("MERCURY_IDENTITIES_PATH", "/data/identities.json"))
 PENDING_APPROVALS_PATH = Path(os.environ.get("MERCURY_PENDING_APPROVALS_PATH", "/data/pending_approvals.json"))
@@ -302,8 +307,8 @@ Email (personal addresses redacted):
 
 Respond with:
 - a verdict: SPAM, PHISH, LEGIT, or UNSURE
-- a recommended disposition if this were live (not yet enforced - shadow mode
-  only): 250 (accept), 421 (soft-defer), or 550 (hard bounce)
+- a disposition: 250 (accept), 421 (soft-defer), or 550 (hard bounce) - this
+  is enforced at SMTP time, not just advisory, so weigh it accordingly
 - one or two sentences of reasoning
 
 Format exactly as:
@@ -353,29 +358,42 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         rules = load_rules_ledger()
         verdict = await judge_email(redacted_content[:6000], injection, rules)
 
+        enforced_disposition = "250" if SHADOW_MODE else verdict["disposition"]
+        mode_note = (
+            "(shadow mode - message delivered normally regardless of verdict)"
+            if SHADOW_MODE
+            else f"Enforced: {enforced_disposition}"
+        )
         report = (
-            "Mercury shadow report\n"
+            "Mercury report\n"
             f"From: {redact(from_display)}\n"
             f"Subject: {subject}\n"
             f"Injection check: {injection['label']} ({injection['score']:.3f})\n"
             f"Verdict: {verdict['verdict']}\n"
             f"Recommended disposition: {verdict['disposition']}\n"
             f"Reasoning: {verdict['reasoning']}\n"
-            "(shadow mode - message delivered normally regardless of verdict)"
+            f"{mode_note}"
         )
         await notifier.send(report[:4000])
 
-        return {
-            "ok": True,
-            "verdict": verdict["verdict"],
-            "disposition": verdict["disposition"],
-            "injection": injection["label"],
-        }
+        return JSONResponse(
+            status_code=int(enforced_disposition),
+            content={
+                "ok": True,
+                "verdict": verdict["verdict"],
+                "disposition": verdict["disposition"],
+                "enforced": enforced_disposition,
+                "injection": injection["label"],
+            },
+        )
     except Exception as exc:
         # The pipeline itself failed (classifier down, model call failed, etc).
-        # This must not fail silently - the whole point of the shadow report
-        # is that every message gets a signal. Best-effort alert even though
-        # the thing that just broke might be the same call this now retries.
+        # This must fail open (accept) regardless of enforcement - a broken
+        # classifier or a slow model call must never itself cause a bounce of
+        # legitimate mail. It also must not fail silently - the whole point of
+        # the report is that every message gets a signal. Best-effort alert
+        # even though the thing that just broke might be the same call this
+        # now retries.
         alert = (
             "\U0001f6a8 Mercury pipeline error\n"
             f"Subject: {subject}\n"
@@ -385,7 +403,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             await notifier.send(alert[:4000])
         except Exception:
             pass
-        return {"ok": False, "error": str(exc)}
+        return JSONResponse(status_code=250, content={"ok": False, "error": str(exc)})
 
 
 @app.post("/rules/propose")

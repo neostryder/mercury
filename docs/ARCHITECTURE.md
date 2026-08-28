@@ -24,13 +24,14 @@ purpose; Cloudflare Workers is what I already had DNS on.
 ## Pipeline
 
 1. Your mail host POSTs the parsed message to the Worker's public hostname.
-2. **If the path is `/ingest`** (the mail-webhook path): the Worker hands
-   the payload to the backend in the background and returns 200
-   immediately, without waiting on the backend at all. In shadow mode there
-   is nothing for the backend's result to change about this response, and
-   once enforcement is added, a backend that cannot be reached in time must
-   still resolve to "accept" rather than a bounce caused merely by backend
-   downtime.
+2. **If the path is `/ingest`** (the mail-webhook path): the Worker waits
+   on the backend's response and returns its disposition (250/421/550) as
+   the webhook's own HTTP status - this is what ForwardEmail's webhook
+   contract expects, per the design goal above of an edge gate producing
+   the actual bounce decision. But a backend that's unreachable, slow past
+   a fixed timeout, or returns anything other than one of those three
+   recognized codes must still resolve to "accept" (250) - infrastructure
+   trouble is never itself a legitimate reason to bounce a message.
 3. **Any other path** (e.g. `/rules/propose`, used by the Thunderbird
    extension) is proxied synchronously - the caller is a direct,
    interactive user action, not something under SMTP bounce-risk, so the
@@ -44,9 +45,11 @@ purpose; Cloudflare Workers is what I already had DNS on.
 6. The redacted content, the injection score, and the current rules ledger
    are given to the judge provider for a semantic verdict (SPAM / PHISH /
    LEGIT / UNSURE) plus a recommended disposition, with reasoning.
-7. The notifier provider sends the verdict and reasoning. The message is
-   delivered normally regardless of the verdict - shadow mode does not
-   enforce anything yet.
+7. The notifier provider sends the verdict and reasoning. The disposition
+   is what the Worker actually returned to the mail host in step 2 -
+   unless `MERCURY_SHADOW_MODE=true` is set, which reverts to reporting
+   only (the backend always returns 250/accept in that mode, and the
+   report says so) without a code change or redeploy.
 
 ## Providers
 

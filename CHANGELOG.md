@@ -114,3 +114,11 @@
   if unsafe, unsubscribing is skipped and the domain is set to hard-bounce
   instead. See "Executing an approved unsubscribe" in
   `docs/ARCHITECTURE.md`.
+- **Enforcement is now live.** The backend's `/ingest` response status is
+  the judge's actual disposition (250/421/550) rather than always 200, and
+  the Worker gate now waits for it and returns it to the mail host - but
+  fails open (accept) on anything short of a clean, recognized disposition
+  from the backend (unreachable, slow past a fixed timeout, or an
+  unrecognized status), so infrastructure trouble can never itself cause a
+  bounce. `MERCURY_SHADOW_MODE=true` reverts to report-only without a code
+  change or redeploy.
