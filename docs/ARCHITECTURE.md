@@ -57,6 +57,27 @@ purpose; Cloudflare Workers is what I already had DNS on.
    backend always returns 250/accept in that mode) without a code change or
    redeploy.
 
+## Delivering an accepted message
+
+ForwardEmail's webhook is a terminal, parallel delivery target - its
+response is read only for logging and never used to add headers or
+otherwise influence a separately-configured mailbox recipient on the same
+alias (confirmed against ForwardEmail's own source, `helpers/on-data-mx.js`).
+That means the webhook's disposition can only actually gate delivery if the
+mailbox's own address is removed from an alias's recipient list entirely,
+leaving the webhook as the sole recipient - at which point something has to
+take over delivering an accepted message onward.
+
+That something is Mercury itself: on a 250 (accept) outside shadow mode,
+`backend/mail_delivery.py` delivers the original raw message (included in
+the webhook payload, not a reconstruction) into the real mailbox via IMAP
+APPEND, tagged with `X-Mercury-Verdict`, `X-Mercury-Category`, and
+`X-Mercury-Disposition` headers. A soft-deferred (421) or hard-bounced
+(550) message is simply never appended. Gated by
+`MERCURY_DELIVER_ACCEPTED_MAIL` (default off) - turning it on must happen
+in lockstep with removing the mailbox's own address from every affected
+alias, never independently, or a message would be delivered twice.
+
 ## Event log
 
 Every verdict, rule change, and mailbox/unsubscribe action is recorded to a

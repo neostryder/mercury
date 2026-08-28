@@ -200,3 +200,32 @@
   (301) rather than relying on a zone-level setting, and dashboard
   responses send `Strict-Transport-Security` so the browser remembers to
   use HTTPS for this domain going forward.
+- Fixed real mail never reaching the pipeline at all: the ForwardEmail
+  catch-all and test aliases were configured against `/webhook` and
+  `/webhook-test`, but the Worker and backend only ever implemented
+  `/ingest` - every real incoming message had been 404ing since the alias
+  was created. Confirmed by checking the backend's own request log rather
+  than assuming the configured URL matched the code. Fixed by treating
+  `/webhook` and `/webhook-test` identically to `/ingest`.
+- Discovered (via the ForwardEmail API, checking the actual alias
+  configuration rather than assuming) that the catch-all alias - and five
+  other aliases - deliver directly to `aaron@rpgm.tools`'s real mailbox in
+  parallel with, or instead of, the Mercury webhook. Since ForwardEmail
+  delivers to multiple recipients on one alias independently with no
+  cross-talk, this meant Mercury's disposition had never actually been
+  able to block anything from reaching the inbox.
+- Added the other half of enforcement: an accepted (250) message is now
+  delivered into the real mailbox by Mercury itself via IMAP APPEND
+  (`backend/mail_delivery.py`), tagged with `X-Mercury-Verdict`,
+  `X-Mercury-Category`, and `X-Mercury-Disposition` headers, using the
+  original raw message ForwardEmail's webhook payload includes rather than
+  a reconstruction. Soft-deferred and hard-bounced messages are simply
+  never appended - that's what makes enforcement actually binding, instead
+  of advisory alongside an independent parallel delivery. Gated by
+  `MERCURY_DELIVER_ACCEPTED_MAIL` (default off) since flipping it on must
+  happen together with removing the mailbox's own address from each
+  affected alias's recipient list, never one without the other.
+- Fixed the backend Dockerfile's explicit per-file COPY list (the same
+  pattern that caused a real outage earlier this session) by copying every
+  `.py` file in the directory instead, so a future new module can't be
+  left out of the image by omission again.

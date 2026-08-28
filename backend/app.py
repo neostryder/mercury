@@ -10,6 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import event_log
+import mail_delivery
 from approvals import ApprovalStore
 from providers.classifier import get_classifier
 from providers.judge import get_judge
@@ -490,6 +491,25 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             "full_content": raw_content[:20000] if is_hard_bounce else None,
             "analysis": verdict["reasoning"] if is_hard_bounce else None,
         })
+
+        raw_message = payload.get("raw")
+        if enforced_disposition == "250" and not SHADOW_MODE:
+            if raw_message:
+                delivery_result = await asyncio.to_thread(
+                    mail_delivery.deliver_accepted_message,
+                    raw_message, verdict["verdict"], verdict["category"], enforced_disposition,
+                )
+            else:
+                delivery_result = "skipped (no raw message in payload)"
+            if mail_delivery.DELIVER_ACCEPTED_MAIL:
+                event_log.log_event("actions", {
+                    "executed_at": _now(),
+                    "kind": "DELIVER",
+                    "details": subject,
+                    "outcome_summary": delivery_result,
+                    "result": delivery_result,
+                    "domain": _domain_of(from_display),
+                })
 
         if verdict["alert"] in ("STANDARD", "URGENT"):
             prefix = "\U0001f6a8 URGENT" if verdict["alert"] == "URGENT" else "Mercury report"

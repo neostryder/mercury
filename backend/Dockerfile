@@ -2,7 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py approvals.py telegram_approvals.py event_log.py ./
+COPY *.py ./
 COPY providers ./providers
 EXPOSE 8720
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8720"]
