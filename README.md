@@ -171,11 +171,13 @@ for why that separation matters here in particular.
 ## Status
 
 **Enforcing.** Every message gets a verdict, and its disposition (accept /
-soft-defer / hard-bounce) is now acted on at SMTP time, not just reported.
-See [`CHANGELOG.md`](CHANGELOG.md) for what's built and what's still ahead
-(a signed, installable build of the Thunderbird extension rather than a
-temporary/unpacked one; extensive activity logging and a daily summary
-digest).
+soft-defer / hard-bounce) is acted on directly - an accepted message is
+delivered by Mercury itself, so there is no separate path into the real
+mailbox left for its disposition to not apply to. See
+[`CHANGELOG.md`](CHANGELOG.md) for what's built and what's still ahead (a
+signed, installable build of the Thunderbird extension rather than a
+temporary/unpacked one; a daily summary digest on top of the dashboard and
+event log that already exist).
 
 ## Repository layout
 
