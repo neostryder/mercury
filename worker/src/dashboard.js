@@ -3,6 +3,96 @@
 // third-party host being up. Talks to the /dashboard/api/* endpoints on the
 // same origin, which the browser's cached Basic-Auth credential already
 // covers once the page itself has loaded.
+
+// Duplicated from the page's own CSS custom properties (:root, below)
+// rather than referenced via var() - these values are baked into SVG
+// presentation attributes generated here on the Worker, outside the
+// stylesheet's cascade, so there is nothing for var() to resolve against.
+const CHART_COLORS = {
+  border: '#263241',
+  muted: '#8b98a5',
+  accent: '#4da3ff',
+  good: '#2ea043',
+  warn: '#d29922',
+  bad: '#f85149',
+  extra: ['#a371f7', '#39c5cf', '#e3b341', '#ff9bce', '#7ee787', '#ffa657'],
+};
+
+function escSvg(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+// Dense ascending list of the last `days` UTC dates, so a chart has one bar
+// per day even for a day D1's GROUP BY produced no row for at all.
+function lastNDays(days) {
+  const out = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    out.push(isoDate(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i))));
+  }
+  return out;
+}
+
+function shortDay(iso) {
+  return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+// Renders a stacked bar chart as raw SVG markup, built entirely from D1
+// query results on the Worker itself - no client-side charting library, no
+// canvas. `days` is an ascending array of 'YYYY-MM-DD' strings; `series` is
+// [{ key, label, color }]; `byDay` maps a date to { [key]: count }, missing
+// keys treated as 0.
+function renderStackedBarSVG(days, series, byDay, { width = 760, height = 220 } = {}) {
+  const padL = 34, padR = 12, padT = 10, padB = 30;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const n = Math.max(1, days.length);
+  const barGap = 2;
+  const barW = Math.max(1, plotW / n - barGap);
+
+  const totals = days.map((d) => {
+    const row = byDay[d] || {};
+    return series.reduce((sum, s) => sum + (row[s.key] || 0), 0);
+  });
+  const maxTotal = Math.max(1, ...totals);
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((frac) => {
+    const y = padT + plotH * (1 - frac);
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}" stroke="${CHART_COLORS.border}" stroke-width="1" />` +
+      `<text x="${(padL - 6).toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="${CHART_COLORS.muted}">${Math.round(maxTotal * frac)}</text>`;
+  }).join('');
+
+  const bars = days.map((d, i) => {
+    const row = byDay[d] || {};
+    const x = padL + i * (plotW / n);
+    let yCursor = padT + plotH;
+    return series.map((s) => {
+      const v = row[s.key] || 0;
+      if (v <= 0) return '';
+      const segH = (v / maxTotal) * plotH;
+      yCursor -= segH;
+      return `<rect x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${barW.toFixed(1)}" height="${segH.toFixed(1)}" fill="${s.color}"><title>${escSvg(shortDay(d))} - ${escSvg(s.label)}: ${v}</title></rect>`;
+    }).join('');
+  }).join('');
+
+  const labelEvery = Math.max(1, Math.ceil(n / 8));
+  const xLabels = days.map((d, i) => {
+    if (i % labelEvery !== 0) return '';
+    const x = padL + i * (plotW / n) + barW / 2;
+    return `<text x="${x.toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="${CHART_COLORS.muted}">${escSvg(shortDay(d))}</text>`;
+  }).join('');
+
+  const legend = series.map((s, i) => `<g transform="translate(${padL + i * 108}, ${(height - padB + 20).toFixed(1)})"><rect width="9" height="9" fill="${s.color}" /><text x="14" y="8.5" font-size="10" fill="${CHART_COLORS.muted}">${escSvg(s.label)}</text></g>`).join('');
+
+  return `<svg viewBox="0 0 ${width} ${height + 20}" xmlns="http://www.w3.org/2000/svg">${gridLines}${bars}${xLabels}${legend}</svg>`;
+}
+
+export { CHART_COLORS, lastNDays, renderStackedBarSVG };
+
 export const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -111,6 +201,25 @@ export const DASHBOARD_HTML = `<!doctype html>
   .empty { padding: 32px; text-align: center; color: var(--muted); }
   .scroll-x { overflow-x: auto; }
   .subject-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+  .chart-panel { margin-bottom: 14px; }
+  tr.bounce-row { cursor: pointer; }
+  tr.bounce-row .caret { display: inline-block; transition: transform .1s; color: var(--muted); }
+  tr.bounce-row.open .caret { transform: rotate(90deg); }
+  tr.bounce-detail td { background: var(--panel-2); }
+  .detail-box { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; max-height: 320px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 4px; }
+  .detail-block { margin-bottom: 14px; }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+  .btn.danger { background: var(--bad); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .reverse-status { font-size: 12px; color: var(--muted); margin-left: 8px; }
+  .action-item-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+  .action-item-row:last-child { border-bottom: none; }
+  .action-item-row.done { opacity: .45; }
+  .action-item-row.done .action-item-summary { text-decoration: line-through; }
+  .action-item-row input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; }
+  .action-item-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
   @media (max-width: 640px) {
     main { padding: 16px; }
     header { padding: 16px; }
@@ -130,6 +239,33 @@ export const DASHBOARD_HTML = `<!doctype html>
     <h2>Category breakdown (last 7 days)</h2>
     <div class="panel" style="padding: 18px 20px;">
       <div class="bars" id="categoryBars"><div class="empty">Loading...</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Trends (last 30 days)</h2>
+    <div class="panel chart-panel" style="padding: 18px 20px;">
+      <div class="chart-title">Message volume by disposition</div>
+      <div class="chart-wrap" id="volumeTrend"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="panel" style="padding: 18px 20px;">
+      <div class="chart-title">Category volume</div>
+      <div class="chart-wrap" id="categoryTrend"><div class="empty">Loading...</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Action items</h2>
+    <div class="panel" id="actionItemsPanel"><div class="empty">Loading...</div></div>
+  </section>
+
+  <section>
+    <h2>Hard bounces</h2>
+    <div class="panel scroll-x">
+      <table id="bouncesTable">
+        <thead><tr><th></th><th>Time</th><th>From</th><th>Subject</th><th>Category</th><th>Rule</th></tr></thead>
+        <tbody><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+      </table>
     </div>
   </section>
 
@@ -260,10 +396,153 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   loadMessages(btn.dataset.filter);
 });
 
+async function loadTrends() {
+  const res = await fetch('/dashboard/api/trends');
+  const data = await res.json();
+  document.getElementById('volumeTrend').innerHTML = data.volumeSvg || '<div class="empty">No data yet.</div>';
+  document.getElementById('categoryTrend').innerHTML = data.categorySvg || '<div class="empty">No data yet.</div>';
+}
+
+const bounceDetailCache = {};
+
+async function loadHardBounces() {
+  const res = await fetch('/dashboard/api/hard-bounces');
+  const rows = await res.json();
+  const tbody = document.querySelector('#bouncesTable tbody');
+  tbody.innerHTML = rows.length ? rows.map(r => \`
+    <tr class="bounce-row" data-id="\${r.id}">
+      <td><span class="caret">&#9656;</span></td>
+      <td>\${esc(fmtTime(r.received_at))}</td>
+      <td>\${esc(r.from_domain)}</td>
+      <td class="subject-cell" title="\${esc(r.subject)}">\${esc(r.subject)}</td>
+      <td>\${esc(r.category)}</td>
+      <td>\${r.triggered_rule ? '<span class="pill disp-421">rule</span>' : '<span class="muted">-</span>'}</td>
+    </tr>
+    <tr class="bounce-detail" data-detail-for="\${r.id}" style="display:none;"><td colspan="6"></td></tr>\`).join('')
+    : '<tr><td colspan="6" class="empty">No hard bounces yet.</td></tr>';
+}
+
+async function toggleBounceDetail(row) {
+  const id = row.dataset.id;
+  const detailRow = document.querySelector(\`tr.bounce-detail[data-detail-for="\${id}"]\`);
+  const wasOpen = row.classList.contains('open');
+  document.querySelectorAll('tr.bounce-row.open').forEach(r => r.classList.remove('open'));
+  document.querySelectorAll('tr.bounce-detail').forEach(d => d.style.display = 'none');
+  if (wasOpen) return;
+
+  row.classList.add('open');
+  const cell = detailRow.querySelector('td');
+  detailRow.style.display = '';
+  cell.innerHTML = '<div class="empty">Loading...</div>';
+
+  let detail = bounceDetailCache[id];
+  if (!detail) {
+    const res = await fetch('/dashboard/api/hard-bounces/' + id);
+    if (!res.ok) {
+      cell.innerHTML = '<div class="empty">Could not load this message.</div>';
+      return;
+    }
+    detail = await res.json();
+    bounceDetailCache[id] = detail;
+  }
+
+  cell.innerHTML = \`
+    <div style="padding: 14px 4px;">
+      <div class="detail-block">
+        <strong>Judge reasoning</strong>
+        <div class="detail-box">\${esc(detail.reasoning || detail.analysis || '(none saved)')}</div>
+      </div>
+      <div class="detail-block">
+        <strong>Full saved message</strong>
+        <div class="detail-box">\${esc(detail.full_content || '(none saved)')}</div>
+      </div>
+      \${detail.triggered_rule ? \`
+      <div class="detail-block">
+        <strong>Rule that triggered this bounce</strong>
+        <div class="detail-box">\${esc(detail.triggered_rule)}</div>
+        <button class="btn danger" data-reverse-rule="\${esc(detail.triggered_rule)}">Reverse this rule</button>
+        <span class="reverse-status"></span>
+      </div>\` : '<div class="muted">No specific standing rule was identified for this disposition.</div>'}
+    </div>\`;
+}
+
+async function reverseRule(btn) {
+  const rule = btn.dataset.reverseRule;
+  if (!window.confirm('Remove this rule from the standing rules ledger?')) return;
+  btn.disabled = true;
+  const status = btn.nextElementSibling;
+  status.textContent = 'Reversing...';
+  try {
+    const res = await fetch('/dashboard/api/rules/reverse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rule }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok !== false) {
+      status.textContent = 'Reversed.';
+    } else {
+      status.textContent = 'Failed: ' + (data.error || res.status);
+      btn.disabled = false;
+    }
+  } catch (err) {
+    status.textContent = 'Failed: ' + err;
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('bouncesTable').addEventListener('click', (e) => {
+  const reverseBtn = e.target.closest('[data-reverse-rule]');
+  if (reverseBtn) {
+    reverseRule(reverseBtn);
+    return;
+  }
+  const row = e.target.closest('tr.bounce-row');
+  if (row) toggleBounceDetail(row);
+});
+
+async function loadActionItems() {
+  const res = await fetch('/dashboard/api/action-items');
+  const rows = await res.json();
+  const panel = document.getElementById('actionItemsPanel');
+  panel.innerHTML = rows.length ? rows.map(r => \`
+    <div class="action-item-row" data-id="\${r.id}">
+      <input type="checkbox" data-complete-id="\${r.id}">
+      <div>
+        <div class="action-item-summary">\${esc(r.summary)}</div>
+        <div class="action-item-meta">\${esc(r.kind)} - \${esc(fmtTime(r.created_at))}\${r.related_message_id ? ' - message #' + r.related_message_id : ''}</div>
+      </div>
+    </div>\`).join('') : '<div class="empty">No open action items.</div>';
+}
+
+document.getElementById('actionItemsPanel').addEventListener('change', async (e) => {
+  const box = e.target.closest('[data-complete-id]');
+  if (!box || !box.checked) return;
+  const id = box.dataset.completeId;
+  const row = box.closest('.action-item-row');
+  box.disabled = true;
+  try {
+    const res = await fetch('/dashboard/api/action-items/' + id + '/complete', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok && data.completed) {
+      row.classList.add('done');
+    } else {
+      box.checked = false;
+      box.disabled = false;
+    }
+  } catch (err) {
+    box.checked = false;
+    box.disabled = false;
+  }
+});
+
 loadSummary();
 loadMessages('');
 loadRules();
 loadActions();
+loadTrends();
+loadHardBounces();
+loadActionItems();
 </script>
 </body>
 </html>

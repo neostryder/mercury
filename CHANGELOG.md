@@ -192,9 +192,29 @@
   `DASHBOARD_PASSWORD` Worker secret - the browser prompts once and
   remembers it; Cloudflare Access (restricting by the actual owner email)
   is a stronger option to layer on later if wanted, but needs Zero Trust
-  account configuration this Worker can't set up on its own. Charts/trends,
-  a full hard-bounce detail viewer, and an action-item checklist are not
-  built yet - tracked in issue #14.
+  account configuration this Worker can't set up on its own.
+- Added trend charts (message volume by disposition, category volume) over
+  the last 30 days to the dashboard, rendered as inline SVG built from D1
+  query results on the Worker itself - no client-side charting library or
+  canvas (`renderStackedBarSVG` in `worker/src/dashboard.js`).
+- Added a hard-bounce detail view: an aggregate list of every hard-bounced
+  message, expandable per row to the full saved message text and the
+  judge's full reasoning, plus - when a specific standing rule decided the
+  disposition - that rule's text and a control to reverse it. The judge now
+  reports which rule (if any) applied, verbatim, alongside its verdict
+  (`RULE_MATCH` in `backend/app.py`'s prompt), stored in a new
+  `messages.triggered_rule` column. Reversal calls a new backend endpoint,
+  `POST /rules/reverse`, authenticated the same way the backend's own calls
+  into the Worker's `/log` route are (`X-Mercury-Secret` against the shared
+  secret both sides hold) - the rules ledger lives only on the backend's
+  filesystem, not in D1, so the Worker cannot remove a rule from it
+  directly.
+- Added an action-item checklist to the dashboard: open `action_items` rows
+  with a checkbox that marks one complete
+  (`POST /dashboard/api/action-items/{id}/complete`, setting the existing
+  `completed_at` column rather than adding a redundant boolean one).
+- Both the rule reversal and action-item completion are recorded to the
+  `admin_log` table.
 - Fixed the dashboard loading over plain HTTP with a "Not Secure" warning:
   the Worker now redirects any `http://` request to `https://` itself
   (301) rather than relying on a zone-level setting, and dashboard
