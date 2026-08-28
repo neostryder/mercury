@@ -195,3 +195,8 @@
   account configuration this Worker can't set up on its own. Charts/trends,
   a full hard-bounce detail viewer, and an action-item checklist are not
   built yet - tracked in issue #14.
+- Fixed the dashboard loading over plain HTTP with a "Not Secure" warning:
+  the Worker now redirects any `http://` request to `https://` itself
+  (301) rather than relying on a zone-level setting, and dashboard
+  responses send `Strict-Transport-Security` so the browser remembers to
+  use HTTPS for this domain going forward.

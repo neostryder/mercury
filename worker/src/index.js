@@ -30,7 +30,12 @@ const LOG_TABLES = {
 
 export default {
   async fetch(request, env, ctx) {
-    const { pathname, search } = new URL(request.url);
+    const url = new URL(request.url);
+    if (url.protocol === 'http:') {
+      url.protocol = 'https:';
+      return Response.redirect(url.toString(), 301);
+    }
+    const { pathname, search } = url;
 
     if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
       const unauthorized = checkDashboardAuth(request, env);
@@ -80,13 +85,19 @@ function checkDashboardAuth(request, env) {
   });
 }
 
+const HSTS = 'max-age=31536000; includeSubDomains';
+
 async function handleDashboard(pathname, search, env) {
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
-    return new Response(DASHBOARD_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    return new Response(DASHBOARD_HTML, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Strict-Transport-Security': HSTS },
+    });
   }
 
   const params = new URLSearchParams(search);
-  const json = (data) => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+  const json = (data) => new Response(JSON.stringify(data), {
+    headers: { 'Content-Type': 'application/json', 'Strict-Transport-Security': HSTS },
+  });
 
   try {
     if (pathname === '/dashboard/api/summary') {
