@@ -81,10 +81,14 @@ def append_rule(rule: str) -> None:
 async def interpret_rule(instruction: str, message_context: str) -> str:
     prompt = f"""The recipient flagged an email and gave a free-text instruction for
 how it, and similar messages, should be handled going forward. Turn that
-instruction into a single, self-contained rule sentence to add to a standing
-rules ledger that a future spam/phishing verdict step will read alongside
-every new message - it will have no access to this conversation or the
-flagged message once added, so the rule must stand alone.
+instruction into a self-contained rule to add to a standing rules ledger
+that a future spam/phishing verdict step will read alongside every new
+message - it will have no access to this conversation or the flagged
+message once added, so the rule must stand alone. Use as much of the
+instruction's detail and nuance as it takes to capture it accurately -
+prefer one sentence when the instruction is that simple, but do not
+compress away a real distinction the recipient actually drew just to force
+it into one.
 
 The flagged message (context only, redacted):
 ---
@@ -96,8 +100,7 @@ Recipient's instruction:
 {instruction}
 ---
 
-Respond with ONLY the single rule sentence - no preamble, no quotes, no
-numbering."""
+Respond with ONLY the rule itself - no preamble, no quotes, no numbering."""
     content = await judge.ask(prompt)
     return content.strip().strip('"')
 

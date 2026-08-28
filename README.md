@@ -57,10 +57,10 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    pipeline itself fails, you get an alert instead of silence.
 
 A companion **Thunderbird extension** (`thunderbird/`) lets you flag a
-message you're looking at and describe, in a sentence, how it and similar
-messages should be handled - that instruction gets interpreted by the same
-judge and appended to the rules ledger, so future verdicts take it into
-account.
+message you're looking at and describe, in as much detail as the situation
+needs, how it and similar messages should be handled - that instruction
+gets interpreted by the same judge and appended to the rules ledger, so
+future verdicts take it into account.
 
 ## Providers: what's swappable
 

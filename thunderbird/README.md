@@ -40,5 +40,5 @@ and send. The popup shows the rule text that was actually added.
 ## Why a message-display action, not a context menu
 
 A toolbar button next to an open message keeps the flow to one click plus
-one sentence, and reads directly off the message already on screen rather
-than requiring a folder-list selection first.
+as much explanation as you want to give, and reads directly off the message
+already on screen rather than requiring a folder-list selection first.
