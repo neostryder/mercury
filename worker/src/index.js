@@ -52,11 +52,19 @@ export default {
     }
 
     const bodyText = await request.text();
-    const backendUrl = `${env.BACKEND_BASE_URL}${pathname}`;
 
-    if (pathname === '/ingest') {
-      return proxyIngest(backendUrl, bodyText, env);
+    // The ForwardEmail aliases were actually configured against /webhook and
+    // /webhook-test (never /ingest) - a naming mismatch that meant every
+    // real incoming message 404'd against this Worker/backend from the
+    // start, discovered by checking the backend's own request log rather
+    // than assuming the configured URL matched. Treated identically to
+    // /ingest here (backendUrl is normalized to the real route) rather than
+    // requiring a ForwardEmail-side change to fix.
+    if (pathname === '/ingest' || pathname === '/webhook' || pathname === '/webhook-test') {
+      return proxyIngest(`${env.BACKEND_BASE_URL}/ingest`, bodyText, env);
     }
+
+    const backendUrl = `${env.BACKEND_BASE_URL}${pathname}`;
 
     return proxySynchronously(backendUrl, bodyText, env);
   },
