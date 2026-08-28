@@ -53,6 +53,11 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- Fixed the popup failing with "getDisplayedMessage is not a function":
+  the real Thunderbird API is `messageDisplay.getDisplayedMessages`
+  (plural, returns an array) - there is no singular `getDisplayedMessage`.
+  My earlier fix for the dead submit button had guessed the wrong method
+  name.
 - `gateway/README.md` now documents running the gateway under a real
   process supervisor (systemd/launchd/pm2/etc.) instead of a bare
   `nohup ... &`, and fetching `AGENT_GATEWAY_SECRET` at process start

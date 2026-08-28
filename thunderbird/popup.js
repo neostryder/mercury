@@ -19,12 +19,13 @@ async function init() {
   const statusEl = document.getElementById("status");
 
   try {
-    // No tabId here on purpose: a message-display-action popup isn't a tab
-    // in the mail-tab-strip sense, so querying for "the active tab" from
-    // inside the popup itself does not reliably resolve to the 3-pane
-    // window's displayed message. Omitting it uses Thunderbird's own
-    // "currently active tab" default instead.
-    currentMessage = await messenger.messageDisplay.getDisplayedMessage();
+    // getDisplayedMessages (plural) is the real API - it returns an array,
+    // even for a single-message view, and there is no singular
+    // getDisplayedMessage. No tabId here on purpose: omitting it uses
+    // Thunderbird's own "currently active tab" default, which is what a
+    // message-display-action popup wants.
+    const displayed = await messenger.messageDisplay.getDisplayedMessages();
+    currentMessage = displayed && displayed.length ? displayed[0] : null;
 
     if (!currentMessage) {
       statusEl.textContent = "No message is currently displayed.";
