@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Mercury Rule Flagger",
+  "version": "0.1.0",
+  "description": "Flag a message and describe in plain language how it should be handled.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mercury-rule-flagger@example.com",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": ["messagesRead", "storage"],
+  "message_display_action": {
+    "default_popup": "popup.html",
+    "default_title": "Flag for Mercury"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

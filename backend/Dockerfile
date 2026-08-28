@@ -2,6 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py loremaster_client.py ./
+COPY app.py ./
+COPY providers ./providers
 EXPOSE 8720
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8720"]

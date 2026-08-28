@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: sans-serif; width: 320px; padding: 8px; margin: 0; }
+  h1 { font-size: 1em; margin: 0 0 4px; }
+  #subject { font-size: 0.85em; color: #777; margin-bottom: 6px; overflow-wrap: break-word; }
+  textarea { width: 100%; height: 80px; box-sizing: border-box; font-family: inherit; }
+  button { margin-top: 6px; }
+  #status { font-size: 0.85em; color: #555; margin-top: 6px; min-height: 2.4em; overflow-wrap: break-word; }
+</style>
+</head>
+<body>
+  <h1>Flag for Mercury</h1>
+  <div id="subject"></div>
+  <textarea id="instruction" placeholder="How should this message, and similar ones, be handled going forward?"></textarea>
+  <button id="submit">Send to Mercury</button>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

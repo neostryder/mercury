@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Mercury connection</title></head>
+<body style="font-family: sans-serif; max-width: 480px; padding: 12px;">
+  <h3>Mercury connection</h3>
+  <p>
+    Point this at your own Mercury deployment's public URL (the Worker
+    gate's hostname - the same one your ForwardEmail webhook uses) and the
+    value configured as <code>MERCURY_SHARED_SECRET</code> on your backend.
+  </p>
+  <label>Mercury URL<br>
+    <input id="url" type="text" style="width:100%" placeholder="https://mercury.example.com">
+  </label><br><br>
+  <label>Shared secret<br>
+    <input id="secret" type="password" style="width:100%">
+  </label><br><br>
+  <button id="save">Save</button>
+  <div id="status" style="margin-top:8px; color:#555;"></div>
+  <script src="options.js"></script>
+</body>
+</html>

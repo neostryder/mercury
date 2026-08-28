@@ -3,22 +3,22 @@ import os
 import re
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from loremaster_client import ask_loremaster
+from providers.classifier import get_classifier
+from providers.judge import get_judge
+from providers.notifier import get_notifier
 
 app = FastAPI()
 
 SHARED_SECRET = os.environ["MERCURY_SHARED_SECRET"]
-BILBO_CLASSIFIER_URL = os.environ.get(
-    "BILBO_CLASSIFIER_URL", "http://192.168.2.154:8009/classify"
-)
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["MERCURY_TELEGRAM_CHAT_ID"]
-RULES_LEDGER_PATH = Path(os.environ.get("RULES_LEDGER_PATH", "/data/rules_ledger.json"))
+RULES_LEDGER_PATH = Path(os.environ.get("MERCURY_RULES_LEDGER_PATH", "/data/rules_ledger.json"))
 IDENTITIES_PATH = Path(os.environ.get("MERCURY_IDENTITIES_PATH", "/data/identities.json"))
 EMAIL_RE = re.compile(r"\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
+
+classifier = get_classifier()
+judge = get_judge()
+notifier = get_notifier()
 
 
 def load_known_identities() -> list[tuple[str, set[str], bool]]:
@@ -71,11 +71,35 @@ def load_rules_ledger() -> list[str]:
         return []
 
 
-async def check_prompt_injection(text: str) -> dict:
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(BILBO_CLASSIFIER_URL, json={"text": text})
-        r.raise_for_status()
-        return r.json()
+def append_rule(rule: str) -> None:
+    RULES_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    rules = load_rules_ledger()
+    rules.append(rule)
+    RULES_LEDGER_PATH.write_text(json.dumps({"rules": rules}, indent=2))
+
+
+async def interpret_rule(instruction: str, message_context: str) -> str:
+    prompt = f"""The recipient flagged an email and gave a free-text instruction for
+how it, and similar messages, should be handled going forward. Turn that
+instruction into a single, self-contained rule sentence to add to a standing
+rules ledger that a future spam/phishing verdict step will read alongside
+every new message - it will have no access to this conversation or the
+flagged message once added, so the rule must stand alone.
+
+The flagged message (context only, redacted):
+---
+{message_context}
+---
+
+Recipient's instruction:
+---
+{instruction}
+---
+
+Respond with ONLY the single rule sentence - no preamble, no quotes, no
+numbering."""
+    content = await judge.ask(prompt)
+    return content.strip().strip('"')
 
 
 async def judge_email(redacted_content: str, injection: dict, rules: list[str]) -> dict:
@@ -105,7 +129,7 @@ VERDICT: <verdict>
 DISPOSITION: <250|421|550>
 REASONING: <reasoning>
 """
-    content = await ask_loremaster(prompt)
+    content = await judge.ask(prompt)
 
     verdict, disposition, reasoning = "UNSURE", "250", content.strip()
     m = re.search(r"VERDICT:\s*(\w+)", content)
@@ -118,18 +142,6 @@ REASONING: <reasoning>
     if m3:
         reasoning = m3.group(1).strip()
     return {"verdict": verdict, "disposition": disposition, "reasoning": reasoning}
-
-
-async def send_telegram(text: str) -> None:
-    async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "disable_web_page_preview": True,
-            },
-        )
 
 
 @app.get("/health")
@@ -155,7 +167,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         raw_content = f"From: {from_display}\nSubject: {subject}\n\n{text_body}"
         redacted_content = redact(raw_content)
 
-        injection = await check_prompt_injection(redacted_content[:4000])
+        injection = await classifier.check(redacted_content[:4000])
         rules = load_rules_ledger()
         verdict = await judge_email(redacted_content[:6000], injection, rules)
 
@@ -169,7 +181,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             f"Reasoning: {verdict['reasoning']}\n"
             "(shadow mode - message delivered normally regardless of verdict)"
         )
-        await send_telegram(report[:4000])
+        await notifier.send(report[:4000])
 
         return {
             "ok": True,
@@ -188,7 +200,51 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             f"{type(exc).__name__}: {exc}"
         )
         try:
-            await send_telegram(alert[:4000])
+            await notifier.send(alert[:4000])
+        except Exception:
+            pass
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/rules/propose")
+async def propose_rule(request: Request, x_mercury_secret: str | None = Header(None)):
+    """Called by the Thunderbird extension when a message is flagged with a
+    free-text handling instruction. The instruction is interpreted into one
+    ledger rule and appended immediately - there is no confirmation step yet,
+    so every addition is also reported so it can be reviewed or hand-edited
+    out of rules_ledger.json after the fact.
+    """
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    payload = await request.json()
+    instruction = payload.get("instruction", "")
+    message = payload.get("message", {})
+    subject = message.get("subject", "")
+    from_display = message.get("from", "")
+    body = message.get("text", "")
+
+    try:
+        message_context = redact(f"From: {from_display}\nSubject: {subject}\n\n{body}"[:4000])
+        redacted_instruction = redact(instruction)
+        rule = await interpret_rule(redacted_instruction, message_context)
+        append_rule(rule)
+
+        await notifier.send(
+            "Mercury: new rule added from Thunderbird\n"
+            f"Instruction: {redacted_instruction}\n"
+            f"Flagged message subject: {subject}\n"
+            f"Rule added: {rule}\n"
+            "(edit or remove it in rules_ledger.json if this isn't right)"
+        )
+        return {"ok": True, "rule": rule}
+    except Exception as exc:
+        try:
+            await notifier.send(
+                "\U0001f6a8 Mercury rule-proposal error\n"
+                f"Instruction: {instruction}\n"
+                f"{type(exc).__name__}: {exc}"
+            )
         except Exception:
             pass
         return {"ok": False, "error": str(exc)}

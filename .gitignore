@@ -7,3 +7,4 @@ __pycache__/
 *.env
 data/
 identities.json
+worker/wrangler.toml

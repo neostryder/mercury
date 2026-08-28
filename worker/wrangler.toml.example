@@ -1,0 +1,18 @@
+# Copy to wrangler.toml and fill in your own values before deploying - the
+# real wrangler.toml is gitignored so your hostnames don't end up committed.
+#
+# "mercury.example.com" must be a hostname on a zone Cloudflare already
+# manages for you (see docs/ARCHITECTURE.md for why this runs as a Worker
+# rather than pointing the webhook straight at your backend). BACKEND_BASE_URL
+# is your self-hosted backend's origin, with no path - the Worker forwards
+# each request's own path onto it.
+name = "mercury-gate"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+BACKEND_BASE_URL = "https://your-backend-host.example.com"
+
+[[routes]]
+pattern = "mercury.example.com"
+custom_domain = true
