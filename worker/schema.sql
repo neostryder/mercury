@@ -60,3 +60,14 @@ CREATE TABLE IF NOT EXISTS admin_log (
   event TEXT,
   detail TEXT
 );
+
+-- Migration, apply once against an existing remote database (CREATE TABLE
+-- IF NOT EXISTS above is safe to re-run; ALTER TABLE ADD COLUMN is not -
+-- SQLite has no IF NOT EXISTS form for it, so re-running this against a
+-- database that already has the column errors with "duplicate column name").
+--
+-- Records which standing rule, if any, determined a message's disposition -
+-- captured verbatim by the judge at classification time (backend/app.py) -
+-- so the dashboard's hard-bounce detail view can show it and support
+-- reversing that specific rule from the ledger.
+ALTER TABLE messages ADD COLUMN triggered_rule TEXT;

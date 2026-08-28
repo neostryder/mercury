@@ -116,6 +116,15 @@ def append_rule(rule: str) -> None:
     RULES_LEDGER_PATH.write_text(json.dumps({"rules": rules}, indent=2))
 
 
+def remove_rule(rule: str) -> bool:
+    rules = load_rules_ledger()
+    if rule not in rules:
+        return False
+    rules.remove(rule)
+    RULES_LEDGER_PATH.write_text(json.dumps({"rules": rules}, indent=2))
+    return True
+
+
 def _parse_rule_and_action(content: str) -> tuple[str | None, str | None]:
     rule_match = re.search(r"RULE:\s*(.+?)(?:\nACTION:|\Z)", content, re.DOTALL)
     action_match = re.search(r"ACTION:\s*(.+)", content, re.DOTALL)
@@ -359,6 +368,18 @@ async def _finalize_rule(rule: str, source: str = "manual") -> None:
     })
 
 
+async def _reverse_rule(rule: str, source: str = "dashboard_reversal") -> bool:
+    removed = remove_rule(rule)
+    if removed:
+        event_log.log_event("rule_changes", {
+            "changed_at": _now(),
+            "action": "removed",
+            "rule_text": rule,
+            "source": source,
+        })
+    return removed
+
+
 CATEGORIES = [
     "NEWSLETTER", "PROMOTIONAL", "TRANSACTIONAL", "SHIPPING_DELIVERY",
     "ACCOUNT_SECURITY", "PERSONAL", "SOCIAL", "FINANCIAL",
@@ -397,6 +418,10 @@ Respond with:
   confidence in this disposition); NONE for routine traffic the daily
   summary already covers, which is most messages including most hard bounces
 - one or two sentences of reasoning
+- which standing rule, if any, decided this disposition on its own (rather
+  than general judgment) - copy that rule's text back exactly as it appears
+  in the standing rules list above, so it can be identified and reversed
+  later if it turns out to be wrong; NONE if no single listed rule applied
 
 Format exactly as:
 VERDICT: <verdict>
@@ -404,6 +429,7 @@ DISPOSITION: <250|421|550>
 CATEGORY: <category>
 ALERT: <NONE|STANDARD|URGENT>
 REASONING: <reasoning>
+RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 """
     content = await judge.ask(prompt)
 
@@ -421,15 +447,25 @@ REASONING: <reasoning>
     m4 = re.search(r"ALERT:\s*(NONE|STANDARD|URGENT)", content, re.IGNORECASE)
     if m4:
         alert = m4.group(1).upper()
-    m5 = re.search(r"REASONING:\s*(.+)", content, re.DOTALL)
+    m5 = re.search(r"REASONING:\s*(.+?)(?:\nRULE_MATCH:|\Z)", content, re.DOTALL)
     if m5:
         reasoning = m5.group(1).strip()
+    triggered_rule = None
+    m6 = re.search(r"RULE_MATCH:\s*(.+)", content, re.DOTALL)
+    if m6:
+        candidate = m6.group(1).strip().strip('"')
+        # Only trusted if it matches a rule actually on the ledger - the
+        # model can otherwise paraphrase or invent text that would silently
+        # fail (or worse, match the wrong entry) when used to reverse a rule.
+        if candidate and candidate.upper() != "NONE" and candidate in rules:
+            triggered_rule = candidate
     return {
         "verdict": verdict,
         "disposition": disposition,
         "category": category,
         "alert": alert,
         "reasoning": reasoning,
+        "triggered_rule": triggered_rule,
     }
 
 
@@ -490,6 +526,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             "shadow_mode": 1 if SHADOW_MODE else 0,
             "full_content": raw_content[:20000] if is_hard_bounce else None,
             "analysis": verdict["reasoning"] if is_hard_bounce else None,
+            "triggered_rule": verdict["triggered_rule"],
         })
 
         raw_message = payload.get("raw")
@@ -553,6 +590,30 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         except Exception:
             pass
         return JSONResponse(status_code=250, content={"ok": False, "error": str(exc)})
+
+
+@app.post("/rules/reverse")
+async def reverse_rule_endpoint(request: Request, x_mercury_secret: str | None = Header(None)):
+    """Called by the Worker dashboard's hard-bounce detail view. The rules
+    ledger lives only on this backend's filesystem (see load_rules_ledger
+    above), not in D1, so reversing a rule removes it from
+    rules_ledger.json directly and logs the removal via event_log the same
+    way _finalize_rule logs an addition. Identified by the rule's own exact
+    text (the ledger has no separate id of its own) - the caller already has
+    it, from the message's saved triggered_rule.
+    """
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    payload = await request.json()
+    rule = payload.get("rule", "")
+    if not rule:
+        raise HTTPException(status_code=400, detail="missing rule")
+
+    removed = await _reverse_rule(rule)
+    if not removed:
+        raise HTTPException(status_code=404, detail="rule not found in ledger")
+    return {"ok": True, "removed": rule}
 
 
 @app.post("/rules/propose")
