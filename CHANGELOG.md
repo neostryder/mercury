@@ -53,3 +53,8 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- `gateway/README.md` now documents running the gateway under a real
+  process supervisor (systemd/launchd/pm2/etc.) instead of a bare
+  `nohup ... &`, and fetching `AGENT_GATEWAY_SECRET` at process start
+  rather than embedding it in a supervisor unit file. The reference
+  deployment now does this via a `launchd` job on macOS.

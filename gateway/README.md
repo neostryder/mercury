@@ -27,8 +27,26 @@ Set `AGENT_GATEWAY_SECRET` to a random shared secret; the backend must be
 configured with the same value. This endpoint is meant for a private
 network - it has no other authentication.
 
-Run it as whatever your platform's supervised-background-process mechanism
-is (a systemd unit, a launchd job, a supervisor process) so it restarts if
-it crashes or the host reboots. The reference deployment here just uses
-`nohup ... &` while validating shadow mode; that is not durable and should
-be replaced before relying on Mercury long-term.
+## Running it reliably
+
+Run it under whatever your platform's supervised-background-process
+mechanism is, not a bare `nohup ... &`, so it comes back on its own after a
+crash or a reboot - a `systemd` unit on Linux, a `launchd` job on macOS, a
+process manager like `pm2` or `forever` for a Node-based agent CLI. Two
+things matter regardless of which one you use:
+
+- **Restart on both crash and boot.** `systemd`'s `Restart=always` plus
+  `WantedBy=multi-user.target`, or `launchd`'s `KeepAlive` plus
+  `RunAtLoad`, are the equivalent knobs - the specific keys differ, the
+  requirement doesn't.
+- **Keep `AGENT_GATEWAY_SECRET` out of the unit file itself** if your
+  supervisor can avoid it - fetch it at process start from wherever you
+  already keep secrets (a secrets manager CLI, an env file read at launch)
+  rather than embedding the live value in a file that outlives a rotation.
+  A small wrapper script that exports the secret and then `exec`s the
+  gateway process is enough for most supervisors.
+
+The reference deployment here runs it as a `launchd` job on macOS this
+way: a wrapper script pulls the secret from a secrets manager and execs
+the gateway, and the `launchd` job (`RunAtLoad` + `KeepAlive`) points at
+that wrapper rather than the Python script directly.
