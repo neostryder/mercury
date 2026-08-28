@@ -6,6 +6,8 @@
 // Thunderbird extension) straight to the backend and returns its real
 // response - that call is a direct, synchronous user action, not something
 // arriving under SMTP bounce-risk, so there is nothing to protect it from.
+import { DASHBOARD_HTML } from './dashboard.js';
+
 const INGEST_TIMEOUT_MS = 20000;
 const KNOWN_DISPOSITIONS = [250, 421, 550];
 
@@ -28,11 +30,17 @@ const LOG_TABLES = {
 
 export default {
   async fetch(request, env, ctx) {
+    const { pathname, search } = new URL(request.url);
+
+    if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
+      const unauthorized = checkDashboardAuth(request, env);
+      if (unauthorized) return unauthorized;
+      return handleDashboard(pathname, search, env);
+    }
+
     if (request.method !== 'POST') {
       return new Response('OK', { status: 200 });
     }
-
-    const { pathname } = new URL(request.url);
 
     if (pathname === '/log') {
       return handleLog(request, env);
@@ -48,6 +56,87 @@ export default {
     return proxySynchronously(backendUrl, bodyText, env);
   },
 };
+
+// Low-friction single-user gate: standard HTTP Basic Auth, which the browser
+// prompts for once and then remembers for the rest of the session - no
+// login page, no cookies/sessions to manage. Restricted to whoever holds
+// DASHBOARD_PASSWORD (a Worker secret), not tied to a specific email
+// address the way Cloudflare Access would be; that's a stronger option to
+// layer on later if wanted, but requires Zero Trust account configuration
+// beyond what this Worker can set up on its own.
+function checkDashboardAuth(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  if (auth.startsWith('Basic ')) {
+    try {
+      const [, password] = atob(auth.slice(6)).split(':');
+      if (password === env.DASHBOARD_PASSWORD) return null;
+    } catch (err) {
+      // fall through to challenge
+    }
+  }
+  return new Response('Authentication required', {
+    status: 401,
+    headers: { 'WWW-Authenticate': 'Basic realm="Mercury Dashboard"' },
+  });
+}
+
+async function handleDashboard(pathname, search, env) {
+  if (pathname === '/dashboard' || pathname === '/dashboard/') {
+    return new Response(DASHBOARD_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  }
+
+  const params = new URLSearchParams(search);
+  const json = (data) => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+
+  try {
+    if (pathname === '/dashboard/api/summary') {
+      const db = env.MERCURY_LOG;
+      const [last24h, hardBounces24h, urgent24h, actions24h, ruleChanges7d, ruleCountRow, categories7d] = await Promise.all([
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day')").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day') AND enforced_disposition = '550'").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day') AND alert_level = 'URGENT'").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM actions WHERE executed_at >= datetime('now', '-1 day')").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM rule_changes WHERE changed_at >= datetime('now', '-7 day')").first(),
+        db.prepare('SELECT COUNT(*) AS n FROM (SELECT rule_text FROM rule_changes GROUP BY rule_text HAVING SUM(CASE WHEN action = \'added\' THEN 1 ELSE -1 END) > 0)').first(),
+        db.prepare("SELECT category, COUNT(*) AS count FROM messages WHERE received_at >= datetime('now', '-7 day') GROUP BY category ORDER BY count DESC").all(),
+      ]);
+      return json({
+        last24h: {
+          total: last24h?.n ?? 0,
+          hardBounces: hardBounces24h?.n ?? 0,
+          urgent: urgent24h?.n ?? 0,
+          actions: actions24h?.n ?? 0,
+        },
+        last7d: { ruleChanges: ruleChanges7d?.n ?? 0 },
+        ruleCount: ruleCountRow?.n ?? 0,
+        categories: categories7d?.results ?? [],
+      });
+    }
+
+    if (pathname === '/dashboard/api/messages') {
+      const disposition = params.get('disposition');
+      const stmt = disposition
+        ? env.MERCURY_LOG.prepare('SELECT * FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT 100').bind(disposition)
+        : env.MERCURY_LOG.prepare('SELECT * FROM messages ORDER BY id DESC LIMIT 100');
+      const result = await stmt.all();
+      return json(result.results ?? []);
+    }
+
+    if (pathname === '/dashboard/api/rules') {
+      const result = await env.MERCURY_LOG.prepare('SELECT * FROM rule_changes ORDER BY id DESC LIMIT 50').all();
+      return json(result.results ?? []);
+    }
+
+    if (pathname === '/dashboard/api/actions') {
+      const result = await env.MERCURY_LOG.prepare('SELECT * FROM actions ORDER BY id DESC LIMIT 50').all();
+      return json(result.results ?? []);
+    }
+  } catch (err) {
+    return json({ ok: false, error: String(err) });
+  }
+
+  return new Response('not found', { status: 404 });
+}
 
 // Logging endpoint for the backend's event log (see backend/event_log.py) -
 // the backend has no Cloudflare credentials of its own, so it reaches D1

@@ -180,3 +180,18 @@
   background region connected to the image border (so similarly-toned
   pixels inside the artwork itself are left alone), then cropped and padded
   to a square at the sizes Thunderbird actually uses (16/32/48/64/96/128).
+- Added the categorized taxonomy's two missing common cases -
+  shipping/delivery notices and political/fundraising asks - as their own
+  labels rather than folding into transactional/promotional.
+- Added a first dashboard at `/dashboard` on the Worker's own domain: 24h/7d
+  summary cards, a category breakdown, a filterable (accepted/deferred/
+  bounced) recent-activity table with color-coded rows, and recent rule
+  changes and actions - all reading live from the D1 event log
+  (`worker/src/dashboard.js`, new `/dashboard/api/*` routes in
+  `worker/src/index.js`). Gated by HTTP Basic Auth against a
+  `DASHBOARD_PASSWORD` Worker secret - the browser prompts once and
+  remembers it; Cloudflare Access (restricting by the actual owner email)
+  is a stronger option to layer on later if wanted, but needs Zero Trust
+  account configuration this Worker can't set up on its own. Charts/trends,
+  a full hard-bounce detail viewer, and an action-item checklist are not
+  built yet - tracked in issue #14.
