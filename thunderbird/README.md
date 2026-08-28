@@ -15,25 +15,40 @@ whole proposal, or anything else and it's treated as feedback: the
 proposal gets revised and sent again. See the "Rules ledger" and "Approval
 loop" sections of the main [README](../README.md) for how that works.
 
-## Installing (development / personal use)
+## Installing
 
-Thunderbird only requires a signed XPI for install via the Add-ons Manager
-proper. For personal use, load it unpacked instead:
+Thunderbird only auto-updates and persists across restarts for an
+installed (non-temporary) add-on, which normally means a signed XPI. This
+extension isn't signed, so persisting it means allowing unsigned installs
+for your profile:
 
-1. In Thunderbird, open **Tools -> Developer Tools -> Debug Add-ons** (or
-   navigate to `about:debugging#/runtime/this-firefox` equivalent for
-   Thunderbird - **Add-ons -> gear icon -> Debug Add-ons**).
-2. Click **Load Temporary Add-on** and select this directory's
-   `manifest.json`.
-3. Open the extension's options (from the Add-ons Manager) and set:
+1. In Thunderbird, open **Settings**, search for "config editor" in the
+   search box, and open it (accept the warning).
+2. Search for `xpinstall.signatures.required` and set it to `false`.
+3. Download the latest `.xpi` from
+   [GitHub Releases](https://github.com/neostryder/mercury/releases)
+   (`mercury-rule-flagger.xpi`).
+4. Add-ons Manager -> gear icon -> **Install Add-on From File** -> select
+   the downloaded `.xpi`.
+5. Open the extension's options (from the Add-ons Manager) and set:
    - **Mercury URL** - your Worker gate's public hostname (the same one
      ForwardEmail's webhook calls), e.g. `https://mercury.example.com`.
    - **Shared secret** - the same value as your backend's
      `MERCURY_SHARED_SECRET`.
 
-A temporary add-on is removed when Thunderbird restarts; reload it from the
-same screen when needed. Packaging a persistent, signed build is future
-work - see the repo's CHANGELOG.
+From then on it checks `thunderbird/updates.json` in this repo for new
+versions on Thunderbird's own schedule (or via Add-ons Manager -> gear
+icon -> **Check for Updates**) and updates itself - no more manual
+reinstalls, as long as `xpinstall.signatures.required` stays `false`.
+
+For development instead of a real install, **Debug Add-ons -> Load
+Temporary Add-on** and select this directory's `manifest.json` works as
+before, but a temporary add-on doesn't persist or auto-update.
+
+Releasing a new version (for anyone maintaining a fork): bump the
+`version` in `manifest.json`, then push a `thunderbird-vX.Y.Z` tag
+matching it - `.github/workflows/release-thunderbird.yml` builds the
+`.xpi`, attaches it to a GitHub Release, and points `updates.json` at it.
 
 ## Using it
 

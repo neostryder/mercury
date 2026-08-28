@@ -1,0 +1,12 @@
+{
+  "addons": {
+    "mercury-rule-flagger@example.com": {
+      "updates": [
+        {
+          "version": "0.2.0",
+          "update_link": "https://github.com/neostryder/mercury/releases/latest/download/mercury-rule-flagger.xpi"
+        }
+      ]
+    }
+  }
+}

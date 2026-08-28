@@ -53,6 +53,14 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- The Thunderbird extension now has a real release process: a
+  `thunderbird-vX.Y.Z` tag triggers `.github/workflows/release-thunderbird.yml`,
+  which builds the `.xpi`, attaches it to a GitHub Release, and points
+  `thunderbird/updates.json` at it. The extension's `manifest.json` now
+  declares `browser_specific_settings.gecko.update_url` pointing at that
+  file, so an installed (non-temporary) copy checks for and applies new
+  versions on its own - no more manual reinstall per release, as long as
+  unsigned installs are still allowed for the profile. Bumped to 0.2.0.
 - Flagging now supports selecting multiple messages at once (Thunderbird's
   `getDisplayedMessages` already returned an array - the popup only used
   to send the first one). All selected messages go into the same

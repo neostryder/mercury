@@ -1,0 +1,65 @@
+name: Release Thunderbird extension
+
+on:
+  push:
+    tags:
+      - 'thunderbird-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/thunderbird-v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify manifest.json version matches the tag
+        run: |
+          MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('thunderbird/manifest.json'))['version'])")
+          if [ "$MANIFEST_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "thunderbird/manifest.json version ($MANIFEST_VERSION) does not match tag version (${{ steps.version.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Build the xpi
+        run: |
+          cd thunderbird
+          zip -r -X ../mercury-rule-flagger.xpi manifest.json popup.html popup.js options.html options.js
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" mercury-rule-flagger.xpi \
+            --title "Thunderbird extension v${{ steps.version.outputs.version }}" \
+            --notes "See CHANGELOG.md for what changed in this version."
+
+      - name: Point the update manifest at this release
+        run: |
+          git fetch origin main
+          git checkout main
+          python3 - <<PYEOF
+          import json
+          path = "thunderbird/updates.json"
+          data = json.load(open(path))
+          addon_id = next(iter(data["addons"]))
+          data["addons"][addon_id]["updates"] = [{
+              "version": "${{ steps.version.outputs.version }}",
+              "update_link": "https://github.com/${{ github.repository }}/releases/latest/download/mercury-rule-flagger.xpi",
+          }]
+          with open(path, "w") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+          PYEOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add thunderbird/updates.json
+          git diff --cached --quiet || git commit -m "Point the Thunderbird update manifest at v${{ steps.version.outputs.version }}"
+          git push origin main
