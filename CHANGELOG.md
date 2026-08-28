@@ -99,3 +99,18 @@
   checks Docker responsiveness every 5 minutes and escalates through
   restart strategies if not, also verifying the Mercury container itself
   comes back up.
+- Added a `message_list` right-click context menu entry ("Flag for
+  Mercury") to the Thunderbird extension, alongside the existing toolbar
+  button - it opens the same popup via `messageDisplayAction.openPopup()`,
+  so flagging no longer requires opening the message first.
+- A thumbs-up reaction on a proposal message in Telegram now approves it,
+  same as replying "yes".
+- Added an unsubscribe action, alongside the existing mailbox action, for
+  instructions that ask to be unsubscribed from a sender. Its safety is
+  evaluated first (a link with no clear relationship to the sender's own
+  domain, or a page asking for credentials, is treated as unsafe and never
+  visited); if safe, tracking query parameters are stripped and the
+  unsubscribe is completed, then the sending domain is set to soft-bounce;
+  if unsafe, unsubscribing is skipped and the domain is set to hard-bounce
+  instead. See "Executing an approved unsubscribe" in
+  `docs/ARCHITECTURE.md`.

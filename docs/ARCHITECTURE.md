@@ -90,18 +90,28 @@ there actually becomes a committed rule.
 ## Approval loop
 
 `/rules/propose` never writes to the ledger directly. It asks the judge
-provider to interpret the flagged instruction into two things: a
-standalone rule for the ledger, and, separately, whether the instruction
-also calls for an action on mail that already exists (e.g. deleting
-messages already sitting in a folder) - narrowly scoped to a folder,
-message set, and action, rather than left for the executing step to
-interpret further. Both are sent to Telegram as one proposal
-(`backend/telegram_approvals.py`), independent of whichever `Notifier`
-provider is configured for one-way alerts, since this needs a channel that
-can receive a reply, not just deliver a message:
+provider to interpret the flagged instruction into a standalone rule for
+the ledger, and, separately, whether the instruction also calls for an
+immediate action - one of two kinds:
 
-- A reply of "yes" commits the rule to the ledger and, if there was one,
-  hands the action to the judge provider to carry out (see below).
+- `MAILBOX: <details>` - something done to mail that already exists (e.g.
+  deleting messages already sitting in a folder), narrowly scoped to a
+  folder, message set, and action rather than left for the executing step
+  to interpret further.
+- `UNSUBSCRIBE: <details>` - see "Executing an approved unsubscribe" below.
+  Because its outcome (safe vs. unsafe) decides the standing rule rather
+  than the other way around, the rule half of the proposal is `NONE` for
+  this kind - the executing step adds its own rule once it knows the
+  outcome, instead of the approval step committing one upfront.
+
+Both are sent to Telegram as one proposal (`backend/telegram_approvals.py`),
+independent of whichever `Notifier` provider is configured for one-way
+alerts, since this needs a channel that can receive a reply, not just
+deliver a message:
+
+- A reply of "yes", or a thumbs-up reaction on the proposal message, commits
+  the rule to the ledger (if there was one) and, if there was an action,
+  hands it to the judge provider to carry out (see below).
 - A reply of "no" discards the whole proposal.
 - Anything else is treated as feedback: the judge revises the proposal and
   a new one is sent, capped at a few rounds so a persistently
@@ -113,15 +123,43 @@ mid-conversation.
 
 ## Executing an approved mailbox action
 
-An approved action is not carried out by the backend itself - it is handed
-to the same judge provider (the agent behind the gateway) as a further
-prompt, on the understanding that it will use its own scoped mailbox-action
-skill (folder-and-action-limited, e.g. delete-within-Spam-only) to do it and
-report back what happened. This keeps the backend from ever needing
-standing mailbox-write credentials of its own: the only thing that can
-actually touch the mailbox is the already-vetted agent, and only after
+An approved `MAILBOX` action is not carried out by the backend itself - it
+is handed to the same judge provider (the agent behind the gateway) as a
+further prompt, on the understanding that it will use its own scoped
+mailbox-action skill (folder-and-action-limited, e.g. delete-within-Spam-only)
+to do it and report back what happened. This keeps the backend from ever
+needing standing mailbox-write credentials of its own: the only thing that
+can actually touch the mailbox is the already-vetted agent, and only after
 explicit, per-action human approval. See "Prompt injection: why it shapes
 this design" below for why that boundary matters here specifically.
+
+## Executing an approved unsubscribe
+
+An approved `UNSUBSCRIBE` action is also handed to the judge provider, using
+its browsing skill, but with an evaluation step first: it is prompted to
+find the flagged message's unsubscribe mechanism (a `List-Unsubscribe`
+header, or a link in the body) and judge whether the route is safe -
+unsafe if the link's domain has no clear relationship to the sender or a
+known mailing-list provider acting for it, if the page asks for credentials
+or payment details, or if anything about it looks like a phishing attempt
+rather than a standard opt-out; uncertain is treated as unsafe.
+
+If safe: tracking query parameters are stripped from the URL before
+visiting it, and only a single confirm click or form submit is attempted -
+anything more involved stops rather than improvising further.
+If unsafe: the link is never visited at all.
+
+The backend parses a structured `SAFE / DOMAIN / SUMMARY` reply (not free
+text - the same reason the rule/action split above is parsed rather than
+inferred) and appends the resulting rule to the ledger itself: soft-bounce
+the sender's domain if the unsubscribe was safe and completed, hard-bounce
+it if it was judged unsafe and skipped. This is the one path where the
+backend commits a rule outside the approve-then-finalize flow above,
+because that outcome is exactly what the recipient approved by saying yes
+to the proposal - a domain-only disposition change, decided by a safety
+judgment already made under the same prompt-injection discipline as
+everything else here, not a new arbitrary rule the judge invented on its
+own.
 
 ## Prompt injection: why it shapes this design
 

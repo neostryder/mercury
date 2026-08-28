@@ -52,12 +52,27 @@ matching it - `.github/workflows/release-thunderbird.yml` builds the
 
 ## Using it
 
-Open a message (or select several in a list view), click the **Flag for
-Mercury** button in the message display toolbar, describe how it/they -
-and similar messages - should be handled, and send. Every selected message
-goes into the same proposal, so "these three are all the same phishing
-campaign, bounce anything like them" works as one flag rather than three.
-The popup shows the proposed rule text; check Telegram to approve it.
+Either open a message (or select several in a list view) and click the
+**Flag for Mercury** button in the message display toolbar, or right-click
+a message (or a multi-selection) in the list and choose **Flag for
+Mercury** from the context menu - both open the same popup. Describe how
+it/they - and similar messages - should be handled, and send. Every
+selected message goes into the same proposal, so "these three are all the
+same phishing campaign, bounce anything like them" works as one flag
+rather than three. The popup shows the proposed rule text; check Telegram
+to approve it (a reply of "yes", or a thumbs-up reaction on the proposal
+message, both approve it).
+
+Two special requests get their own handling beyond a plain rule:
+
+- **Deleting existing mail** ("delete similar messages already in my Spam
+  folder") is carried out as a separately-scoped action once approved, not
+  folded into the standing rule.
+- **Unsubscribing** ("unsubscribe me if it's safe, otherwise hard bounce
+  the domain") has its safety evaluated first - a malicious-looking
+  unsubscribe link is never visited. See the "Executing an approved
+  unsubscribe" section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
+  for exactly how that evaluation works.
 
 ## Why it asks for access to all sites
 
@@ -69,8 +84,10 @@ the options page rather than a fixed address baked into the extension,
 there's no narrower pattern to declare it against ahead of time. It's
 still used for exactly one thing: the POST to your own configured URL.
 
-## Why a message-display action, not a context menu
+## Why both a message-display action and a context menu
 
-A toolbar button next to an open message keeps the flow to one click plus
-as much explanation as you want to give, and reads directly off the message
-already on screen rather than requiring a folder-list selection first.
+The toolbar button keeps the flow to one click when a message is already
+open. The `message_list` context-menu item (`background.js`) covers
+flagging straight from the list without opening anything first - it works
+by calling `messageDisplayAction.openPopup()`, so it's the same popup
+either way, reading off whatever the list has selected.

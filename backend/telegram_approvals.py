@@ -10,12 +10,15 @@ not just send them.
 
 Flow: propose() sends a message describing the rule (and any immediate
 mailbox action) and remembers its message_id. poll_forever() long-polls for
-replies; a reply to that message is read as "yes"/"no", or, for anything
-else, as feedback to revise the proposal and send a new one. Approval
-commits the rule and, if there was one, hands the action off for execution
-and reports the outcome back to the same chat.
+replies; a reply to that message is read as "yes"/"no", a thumbs-up reaction
+on it counts the same as "yes", and anything else is read as feedback to
+revise the proposal and send a new one. Approval commits the rule (unless
+the proposal has none - some actions, like an outcome-dependent unsubscribe
+attempt, decide their own rule after running) and, if there was an action,
+hands it off for execution and reports the outcome back to the same chat.
 """
 import asyncio
+import json
 import os
 
 import httpx
@@ -24,6 +27,7 @@ from approvals import ApprovalStore
 
 MAX_ROUNDS = 5
 API_BASE = "https://api.telegram.org/bot{token}"
+THUMBS_UP_PREFIX = "\U0001F44D"  # matches skin-tone variants too
 
 
 class TelegramApprovals:
@@ -73,7 +77,11 @@ class TelegramApprovals:
                 try:
                     resp = await client.get(
                         f"{self._api}/getUpdates",
-                        params={"offset": self._offset, "timeout": 30},
+                        params={
+                            "offset": self._offset,
+                            "timeout": 30,
+                            "allowed_updates": json.dumps(["message", "message_reaction"]),
+                        },
                     )
                     resp.raise_for_status()
                     for update in resp.json().get("result", []):
@@ -85,6 +93,11 @@ class TelegramApprovals:
                     await asyncio.sleep(5)
 
     async def _handle_update(self, update: dict) -> None:
+        reaction = update.get("message_reaction")
+        if reaction:
+            await self._handle_reaction(reaction)
+            return
+
         message = update.get("message")
         if not message:
             return
@@ -109,12 +122,28 @@ class TelegramApprovals:
         else:
             await self._revise_proposal(proposal_id, proposal, reply_text)
 
+    async def _handle_reaction(self, reaction: dict) -> None:
+        new_emojis = {r.get("emoji", "") for r in reaction.get("new_reaction", []) if r.get("type") == "emoji"}
+        if not any(e.startswith(THUMBS_UP_PREFIX) for e in new_emojis):
+            return
+        proposal_id = self._message_to_proposal.get(reaction.get("message_id"))
+        if not proposal_id:
+            return
+        proposal = self._store.get(proposal_id)
+        if not proposal:
+            return
+        await self._approve(proposal_id, proposal)
+
     async def _approve(self, proposal_id: str, proposal: dict) -> None:
-        await self._finalize(proposal["rule"])
-        result_lines = [f"Rule added: {proposal['rule']}"]
+        result_lines = []
+        if proposal.get("rule"):
+            await self._finalize(proposal["rule"])
+            result_lines.append(f"Rule added: {proposal['rule']}")
         if proposal.get("action"):
             outcome = await self._execute_action(proposal["action"], proposal["message_context"])
-            result_lines.append(f"Mailbox action result: {outcome}")
+            result_lines.append(outcome)
+        if not result_lines:
+            result_lines.append("Approved, but there was nothing to add or do.")
         self._store.discard(proposal_id)
         await self._send(None, "\n".join(result_lines))
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Mercury Rule Flagger",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Flag a message and describe in plain language how it should be handled.",
   "browser_specific_settings": {
     "gecko": {
@@ -10,8 +10,12 @@
       "update_url": "https://raw.githubusercontent.com/neostryder/mercury/main/thunderbird/updates.json"
     }
   },
-  "permissions": ["messagesRead", "storage"],
+  "permissions": ["messagesRead", "storage", "menus"],
   "host_permissions": ["*://*/*"],
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
   "message_display_action": {
     "default_popup": "popup.html",
     "default_title": "Flag for Mercury"

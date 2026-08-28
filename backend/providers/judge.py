@@ -28,7 +28,7 @@ class Judge(Protocol):
 
 
 class HttpAgentGatewayJudge:
-    def __init__(self, url: str, secret: str, timeout: float = 45.0):
+    def __init__(self, url: str, secret: str, timeout: float = 180.0):
         self._url = url
         self._secret = secret
         self._timeout = timeout
