@@ -81,7 +81,8 @@ async function onSubmit(submitButton, statusEl) {
     const data = await resp.json();
     statusEl.classList.remove("ok", "err");
     if (data.ok) {
-      statusEl.textContent = `Rule added: ${data.rule}`;
+      const actionNote = data.action ? ` Also proposed: ${data.action}.` : "";
+      statusEl.textContent = `Proposed: ${data.rule}${actionNote} Check Telegram to approve.`;
       statusEl.classList.add("ok");
     } else {
       statusEl.textContent = `Mercury reported an error: ${data.error || resp.status}`;

@@ -83,11 +83,45 @@ A standing set of natural-language handling rules, supplied over time
 to this specific address"). The ledger is given to the judge alongside
 each new message rather than compiled into fixed logic, so a new rule takes
 effect on the next message without a code change. Rules can be edited by
-hand in `rules_ledger.json`, or added through the Thunderbird extension's
-`/rules/propose` endpoint, which interprets a flagged message plus a
-free-text instruction into one rule via the judge provider and appends it
-immediately - there is no confirmation step yet, so every automatic
-addition is also reported through the notifier.
+hand in `rules_ledger.json`, or proposed through the Thunderbird extension's
+`/rules/propose` endpoint - see "Approval loop" below for how a proposal
+there actually becomes a committed rule.
+
+## Approval loop
+
+`/rules/propose` never writes to the ledger directly. It asks the judge
+provider to interpret the flagged instruction into two things: a
+standalone rule for the ledger, and, separately, whether the instruction
+also calls for an action on mail that already exists (e.g. deleting
+messages already sitting in a folder) - narrowly scoped to a folder,
+message set, and action, rather than left for the executing step to
+interpret further. Both are sent to Telegram as one proposal
+(`backend/telegram_approvals.py`), independent of whichever `Notifier`
+provider is configured for one-way alerts, since this needs a channel that
+can receive a reply, not just deliver a message:
+
+- A reply of "yes" commits the rule to the ledger and, if there was one,
+  hands the action to the judge provider to carry out (see below).
+- A reply of "no" discards the whole proposal.
+- Anything else is treated as feedback: the judge revises the proposal and
+  a new one is sent, capped at a few rounds so a persistently
+  misunderstood proposal can't loop forever.
+
+Proposals are persisted (`backend/approvals.py`,
+`pending_approvals.json`) so a backend restart doesn't strand one
+mid-conversation.
+
+## Executing an approved mailbox action
+
+An approved action is not carried out by the backend itself - it is handed
+to the same judge provider (the agent behind the gateway) as a further
+prompt, on the understanding that it will use its own scoped mailbox-action
+skill (folder-and-action-limited, e.g. delete-within-Spam-only) to do it and
+report back what happened. This keeps the backend from ever needing
+standing mailbox-write credentials of its own: the only thing that can
+actually touch the mailbox is the already-vetted agent, and only after
+explicit, per-action human approval. See "Prompt injection: why it shapes
+this design" below for why that boundary matters here specifically.
 
 ## Prompt injection: why it shapes this design
 

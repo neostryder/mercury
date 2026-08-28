@@ -6,10 +6,14 @@ The instruction and the flagged message are sent to your Mercury backend's
 `/rules/propose` endpoint, which asks your configured judge provider to turn
 the instruction into a single rule and appends it to the rules ledger.
 
-There is no confirmation step yet: the interpreted rule is added
-immediately, and a notification is sent through your configured notifier so
-you can review (or hand-edit out of `rules_ledger.json`) anything that
-wasn't interpreted the way you meant.
+Nothing is committed on send. The backend interprets the instruction into a
+standalone rule - and, if the instruction also asked for something to be
+done to mail that already exists (delete, move, and so on), a separately
+scoped action - and sends both to you over Telegram for approval. Reply
+"yes" to commit the rule and carry out any action, "no" to discard the
+whole proposal, or anything else and it's treated as feedback: the
+proposal gets revised and sent again. See the "Rules ledger" and "Approval
+loop" sections of the main [README](../README.md) for how that works.
 
 ## Installing (development / personal use)
 

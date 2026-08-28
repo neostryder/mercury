@@ -44,3 +44,12 @@
 - Redesigned the Thunderbird extension's popup and options page with a
   Mercury-themed look (a winged caduceus mark, a silver/sky-blue/gold
   palette) instead of unstyled default form controls.
+- `/rules/propose` no longer commits a rule immediately. It now proposes a
+  rule (and, if the instruction also calls for an action on mail that
+  already exists, a separately scoped action) over Telegram and waits for a
+  reply: "yes" commits the rule and carries out any action via the judge
+  provider's own mailbox-action skill, "no" discards it, anything else is
+  treated as feedback and the proposal is revised and re-sent (capped at a
+  few rounds). New `backend/approvals.py` (persisted pending proposals) and
+  `backend/telegram_approvals.py` (the reply loop itself, independent of
+  whichever Notifier is configured).

@@ -130,8 +130,33 @@ A standing set of plain-language handling rules
 (`backend/data/rules_ledger.json` at runtime, gitignored), given to the
 judge alongside every new message. A new rule takes effect on the very next
 message, no code change or redeploy required. Rules can be added by hand,
-or through the Thunderbird extension, which interprets a flagged message
-plus your instruction into one rule via the judge and appends it.
+or proposed through the Thunderbird extension - see "Approval loop" below
+for how a proposal becomes a committed rule.
+
+## Approval loop
+
+Flagging a message in Thunderbird doesn't write anything by itself. The
+backend asks the judge to turn the instruction into a standalone rule and,
+separately, to say whether the instruction also calls for an action on mail
+that already exists (e.g. "delete this and anything like it from Spam") -
+if so, that action is scoped narrowly (which folder, which messages, what
+to do) rather than left open-ended. Both go to you over Telegram as one
+proposal:
+
+- Reply **yes** to commit the rule to the ledger and, if there was one,
+  carry out the action.
+- Reply **no** to discard the whole proposal.
+- Reply with anything else and it's read as feedback - the judge revises
+  the proposal and sends it again (capped at a few rounds, so a
+  misunderstood proposal can't loop forever).
+
+The action step itself is carried out by the same agent behind the judge
+seam, using whatever scoped mailbox-action skill you've given it - not by
+the backend directly. That keeps the backend from ever needing standing
+mailbox-write credentials of its own: the one thing capable of touching
+your mailbox is the already-vetted agent, and only after your explicit
+approval of that specific action. See "Prompt injection and safety" above
+for why that separation matters here in particular.
 
 ## Status
 
