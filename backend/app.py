@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+import digest
 import event_log
 import mail_delivery
 from approvals import ApprovalStore
@@ -52,8 +53,10 @@ telegram_approvals = TelegramApprovals(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     poll_task = asyncio.create_task(telegram_approvals.poll_forever())
+    digest_task = asyncio.create_task(digest.run_forever(judge))
     yield
     poll_task.cancel()
+    digest_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)

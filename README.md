@@ -173,18 +173,20 @@ for why that separation matters here in particular.
 **Enforcing.** Every message gets a verdict, and its disposition (accept /
 soft-defer / hard-bounce) is acted on directly - an accepted message is
 delivered by Mercury itself, so there is no separate path into the real
-mailbox left for its disposition to not apply to. See
+mailbox left for its disposition to not apply to. A daily digest email
+(`backend/digest.py`) now covers the same 24 hours the dashboard shows, sent
+once a day rather than requiring a visit to check it. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's built and what's still ahead (a
 signed, installable build of the Thunderbird extension rather than a
-temporary/unpacked one; a daily summary digest on top of the dashboard and
-event log that already exist).
+temporary/unpacked one).
 
 ## Repository layout
 
 - `worker/` - the Cloudflare Worker gate. See its own comments and
   `docs/ARCHITECTURE.md`.
 - `backend/` - the FastAPI service: redaction, rules ledger, the three
-  provider seams, and the `/ingest` and `/rules/propose` endpoints.
+  provider seams, the `/ingest` and `/rules/propose` endpoints, and the
+  daily digest email (`digest.py`).
 - `gateway/` - a generic, stdlib-only HTTP shim for exposing a CLI-driven
   agent as the judge provider's backing implementation.
 - `thunderbird/` - the message-flagging extension.
