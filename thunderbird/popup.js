@@ -18,17 +18,26 @@ async function init() {
   const submitButton = document.getElementById("submit");
   const statusEl = document.getElementById("status");
 
-  const [tab] = await messenger.tabs.query({ active: true, currentWindow: true });
-  currentMessage = await messenger.messageDisplay.getDisplayedMessage(tab.id);
+  try {
+    // No tabId here on purpose: a message-display-action popup isn't a tab
+    // in the mail-tab-strip sense, so querying for "the active tab" from
+    // inside the popup itself does not reliably resolve to the 3-pane
+    // window's displayed message. Omitting it uses Thunderbird's own
+    // "currently active tab" default instead.
+    currentMessage = await messenger.messageDisplay.getDisplayedMessage();
 
-  if (!currentMessage) {
-    statusEl.textContent = "No message is currently displayed.";
+    if (!currentMessage) {
+      statusEl.textContent = "No message is currently displayed.";
+      submitButton.disabled = true;
+      return;
+    }
+    document.getElementById("subject").textContent = currentMessage.subject || "(no subject)";
+
+    submitButton.addEventListener("click", () => onSubmit(submitButton, statusEl));
+  } catch (err) {
+    statusEl.textContent = `Failed to read the open message: ${err.message}`;
     submitButton.disabled = true;
-    return;
   }
-  document.getElementById("subject").textContent = currentMessage.subject || "(no subject)";
-
-  submitButton.addEventListener("click", () => onSubmit(submitButton, statusEl));
 }
 
 async function onSubmit(submitButton, statusEl) {
@@ -70,13 +79,18 @@ async function onSubmit(submitButton, statusEl) {
     });
 
     const data = await resp.json();
+    statusEl.classList.remove("ok", "err");
     if (data.ok) {
       statusEl.textContent = `Rule added: ${data.rule}`;
+      statusEl.classList.add("ok");
     } else {
       statusEl.textContent = `Mercury reported an error: ${data.error || resp.status}`;
+      statusEl.classList.add("err");
       submitButton.disabled = false;
     }
   } catch (err) {
+    statusEl.classList.remove("ok");
+    statusEl.classList.add("err");
     statusEl.textContent = `Failed to reach Mercury: ${err.message}`;
     submitButton.disabled = false;
   }

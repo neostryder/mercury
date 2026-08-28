@@ -1,21 +1,141 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>Mercury connection</title></head>
-<body style="font-family: sans-serif; max-width: 480px; padding: 12px;">
-  <h3>Mercury connection</h3>
-  <p>
-    Point this at your own Mercury deployment's public URL (the Worker
-    gate's hostname - the same one your ForwardEmail webhook uses) and the
-    value configured as <code>MERCURY_SHARED_SECRET</code> on your backend.
+<head>
+<meta charset="utf-8">
+<title>Mercury connection</title>
+<style>
+  :root {
+    --bg-0: #0b0d14;
+    --bg-1: #151827;
+    --bg-2: #1d2136;
+    --border: #2e3350;
+    --silver: #cbd5e6;
+    --silver-dim: #8b93ac;
+    --sky: #7dd3fc;
+    --gold: #e0b872;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 24px 20px 32px;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: linear-gradient(160deg, var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-2) 100%);
+    color: var(--silver);
+    min-height: 100vh;
+  }
+
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+
+  h1 {
+    margin: 0;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 1.4em;
+    background: linear-gradient(90deg, var(--silver) 0%, var(--sky) 60%, var(--gold) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  p.lede {
+    color: var(--silver-dim);
+    font-size: 0.9em;
+    line-height: 1.5;
+    margin: 10px 0 24px;
+  }
+
+  p.lede code {
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--sky);
+  }
+
+  label {
+    display: block;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--silver-dim);
+    margin-bottom: 6px;
+  }
+
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 0.95em;
+    background: var(--bg-0);
+    color: var(--silver);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    margin-bottom: 18px;
+    font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  input:focus {
+    border-color: var(--sky);
+    box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.15);
+  }
+
+  button {
+    padding: 10px 20px;
+    font-size: 0.95em;
+    font-weight: 600;
+    color: #0b0d14;
+    background: linear-gradient(90deg, var(--sky) 0%, var(--silver) 100%);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+
+  button:hover { filter: brightness(1.08); }
+
+  #status {
+    display: inline-block;
+    margin-left: 12px;
+    font-size: 0.85em;
+    color: #86e7b8;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <svg width="30" height="30" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="wingGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#cbd5e6"/>
+          <stop offset="60%" stop-color="#7dd3fc"/>
+          <stop offset="100%" stop-color="#e0b872"/>
+        </linearGradient>
+      </defs>
+      <line x1="24" y1="8" x2="24" y2="40" stroke="url(#wingGrad)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M24 40c-4 0-7-3-7-7 4 0 7 2 7 5 0-3 3-5 7-5 0 4-3 7-7 7z" fill="url(#wingGrad)"/>
+      <path d="M24 12c-3-3-4-6-3-9 3 1 5 3 5 6 1-3 3-5 6-6 1 3 0 6-3 9-2-1-3-1-5 0z" fill="url(#wingGrad)"/>
+      <path d="M13 15c-2-4-1-8 1-10 2 2 3 5 2 8-1-1-2-1-3 2z" fill="url(#wingGrad)" opacity="0.9"/>
+      <path d="M35 15c2-4 1-8-1-10-2 2-3 5-2 8 1-1 2-1 3 2z" fill="url(#wingGrad)" opacity="0.9"/>
+      <circle cx="24" cy="24" r="3.6" fill="none" stroke="url(#wingGrad)" stroke-width="1.6"/>
+    </svg>
+    <h1>Mercury connection</h1>
+  </header>
+  <p class="lede">
+    Point this at your own Mercury deployment's public URL (the Worker gate's
+    hostname - the same one your ForwardEmail webhook uses) and the value
+    configured as <code>MERCURY_SHARED_SECRET</code> on your backend.
   </p>
-  <label>Mercury URL<br>
-    <input id="url" type="text" style="width:100%" placeholder="https://mercury.example.com">
-  </label><br><br>
-  <label>Shared secret<br>
-    <input id="secret" type="password" style="width:100%">
-  </label><br><br>
-  <button id="save">Save</button>
-  <div id="status" style="margin-top:8px; color:#555;"></div>
+  <label for="url">Mercury URL</label>
+  <input id="url" type="text" placeholder="https://mercury.example.com">
+  <label for="secret">Shared secret</label>
+  <input id="secret" type="password">
+  <div>
+    <button id="save">Save</button>
+    <span id="status"></span>
+  </div>
   <script src="options.js"></script>
 </body>
 </html>

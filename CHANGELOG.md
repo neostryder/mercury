@@ -33,3 +33,14 @@
   notifier, not yet gated behind a confirmation step).
 - `worker/wrangler.toml` is now gitignored (a `.example` template is
   committed instead) so a real deployment's hostnames are never committed.
+- Fixed the Thunderbird popup silently doing nothing on click: it looked up
+  the active message via `tabs.query({currentWindow: true})`, which does not
+  reliably resolve to the 3-pane window's displayed message from inside a
+  message-display-action popup, so the lookup failed before the button's
+  click handler was ever attached. It now asks
+  `messageDisplay.getDisplayedMessage()` for the active tab directly, and
+  `init()` reports a visible error instead of failing silently if it can't
+  read the open message.
+- Redesigned the Thunderbird extension's popup and options page with a
+  Mercury-themed look (a winged caduceus mark, a silver/sky-blue/gold
+  palette) instead of unstyled default form controls.
