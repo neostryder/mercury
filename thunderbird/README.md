@@ -74,6 +74,20 @@ Two special requests get their own handling beyond a plain rule:
   unsubscribe" section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
   for exactly how that evaluation works.
 
+## Category tags
+
+Every new message that lands with an `X-Mercury-Category` header (added by
+`backend/mail_delivery.py` when it delivers an accepted message via IMAP -
+see the main [README](../README.md)) gets a matching native Thunderbird tag
+applied automatically, with its own color per category. The tag shows up
+as a colored chip in both the message list and the message view, same as
+any other Thunderbird tag. Tags already on a message are left in place -
+the category tag is added alongside them, not instead of them.
+
+The full set of category tags (`Mercury: Newsletter`, `Mercury: Phishing`,
+and so on) is created once, the first time the extension's background
+script runs, and left alone on every later restart if already present.
+
 ## Why it asks for access to all sites
 
 The manifest declares `host_permissions: ["*://*/*"]` so the popup's

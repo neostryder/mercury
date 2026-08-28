@@ -239,3 +239,13 @@
   pattern that caused a real outage earlier this session) by copying every
   `.py` file in the directory instead, so a future new module can't be
   left out of the image by omission again.
+- The Thunderbird extension now applies a color-coded native tag to every
+  new message, one per judge category, based on its `X-Mercury-Category`
+  header. `messenger.messages.tags.create()` runs once per category at
+  background-script startup, checked against `tags.list()` first so it
+  stays idempotent across restarts; `onNewMailReceived` then reads each new
+  message's full headers, matches the category to its tag, and applies it
+  via `messenger.messages.update()`, merging with any tags already on the
+  message rather than replacing them. Added the `accountsRead`,
+  `messagesUpdate`, `messagesTags`, and `messagesTagsList` permissions this
+  requires. Bumped to 0.3.3.
