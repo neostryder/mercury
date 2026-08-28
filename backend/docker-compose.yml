@@ -11,7 +11,4 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - MERCURY_TELEGRAM_CHAT_ID=${MERCURY_TELEGRAM_CHAT_ID}
     volumes:
-      - mercury_data:/data
-
-volumes:
-  mercury_data:
+      - ./data:/data
