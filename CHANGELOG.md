@@ -239,3 +239,17 @@
   pattern that caused a real outage earlier this session) by copying every
   `.py` file in the directory instead, so a future new module can't be
   left out of the image by omission again.
+- Added a daily digest email (`backend/digest.py`): once a day at 7am
+  America/Phoenix time (a fixed UTC-7 offset - Arizona does not observe
+  DST), the backend gathers the last 24 hours of activity from the Worker's
+  existing `/dashboard/api/*` routes over authenticated HTTPS, and sends a
+  standalone HTML email (inline CSS only) to `aaron@rpgm.tools` covering
+  message volume, verdict and category breakdowns, a ledger of rule
+  changes/actions/hard bounces, the current standard/urgent alert list, and
+  a short insights paragraph from the judge provider. Sent from
+  `gandalf@rpgm.tools` via ForwardEmail's SMTP. Runs as a plain `asyncio`
+  background task inside the existing FastAPI service - no new dependency
+  and no separate cron container. Gated by `MERCURY_DASHBOARD_USER`/
+  `MERCURY_DASHBOARD_PASSWORD` (the same Basic Auth the browser dashboard
+  already uses) and `MERCURY_DIGEST_SMTP_USER`/`MERCURY_DIGEST_SMTP_PASSWORD`;
+  any missing, and it logs a skip reason at startup instead of running.
