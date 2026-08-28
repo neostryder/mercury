@@ -225,6 +225,16 @@
   `MERCURY_DELIVER_ACCEPTED_MAIL` (default off) since flipping it on must
   happen together with removing the mailbox's own address from each
   affected alias's recipient list, never one without the other.
+- Validated the IMAP delivery path end to end (a test message landed in
+  the real mailbox tagged with the right headers), then cut over all six
+  affected ForwardEmail aliases (the catch-all, `dallenb4`, the
+  `aaron*/strider*/aragorn*/neostryder*` regex alias, `verification`,
+  `/^dallen(.*)$/`, and `/^finance(.*)$/`) to route through Mercury instead
+  of delivering to `aaron@rpgm.tools` directly, preserving any other
+  co-recipient on the same alias (e.g. `dallenb4@rpgm.tools` stays on the
+  `/^dallen(.*)$/` alias, unfiltered, exactly as before). Enforcement is
+  now actually binding for the first time - every path that reaches the
+  real inbox goes through Mercury's classifier and rules ledger first.
 - Fixed the backend Dockerfile's explicit per-file COPY list (the same
   pattern that caused a real outage earlier this session) by copying every
   `.py` file in the directory instead, so a future new module can't be
