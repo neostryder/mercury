@@ -1,0 +1,11 @@
+{
+  "name": "mercury-gate",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.127.0"
+  }
+}

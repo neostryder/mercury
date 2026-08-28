@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.env
+data/
+identities.json

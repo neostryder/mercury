@@ -1,0 +1,6 @@
+{
+  "identities": [
+    { "domain": "example.com", "local_parts": ["someone"], "prefix_match": false },
+    { "domain": "example.org", "local_parts": ["someprefix"], "prefix_match": true }
+  ]
+}
