@@ -144,28 +144,45 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
 
     payload = await request.json()
     subject = payload.get("subject", "")
-    text_body = payload.get("text") or payload.get("html", "")
-    from_field = payload.get("from", "")
-    from_display = (
-        from_field.get("text") if isinstance(from_field, dict) else str(from_field)
-    )
 
-    raw_content = f"From: {from_display}\nSubject: {subject}\n\n{text_body}"
-    redacted_content = redact(raw_content)
+    try:
+        text_body = payload.get("text") or payload.get("html", "")
+        from_field = payload.get("from", "")
+        from_display = (
+            from_field.get("text") if isinstance(from_field, dict) else str(from_field)
+        )
 
-    injection = await check_prompt_injection(redacted_content[:4000])
-    rules = load_rules_ledger()
-    verdict = await judge_email(redacted_content[:6000], injection, rules)
+        raw_content = f"From: {from_display}\nSubject: {subject}\n\n{text_body}"
+        redacted_content = redact(raw_content)
 
-    report = (
-        "Mercury shadow report\n"
-        f"From: {redact(from_display)}\n"
-        f"Subject: {subject}\n"
-        f"Injection check: {injection['label']} ({injection['score']:.3f})\n"
-        f"Verdict: {verdict['verdict']}\n"
-        f"Reasoning: {verdict['reasoning']}\n"
-        "(shadow mode - message delivered normally regardless of verdict)"
-    )
-    await send_telegram(report[:4000])
+        injection = await check_prompt_injection(redacted_content[:4000])
+        rules = load_rules_ledger()
+        verdict = await judge_email(redacted_content[:6000], injection, rules)
 
-    return {"ok": True, "verdict": verdict["verdict"], "injection": injection["label"]}
+        report = (
+            "Mercury shadow report\n"
+            f"From: {redact(from_display)}\n"
+            f"Subject: {subject}\n"
+            f"Injection check: {injection['label']} ({injection['score']:.3f})\n"
+            f"Verdict: {verdict['verdict']}\n"
+            f"Reasoning: {verdict['reasoning']}\n"
+            "(shadow mode - message delivered normally regardless of verdict)"
+        )
+        await send_telegram(report[:4000])
+
+        return {"ok": True, "verdict": verdict["verdict"], "injection": injection["label"]}
+    except Exception as exc:
+        # The pipeline itself failed (classifier down, model call failed, etc).
+        # This must not fail silently - the whole point of the shadow report
+        # is that every message gets a signal. Best-effort alert even though
+        # the thing that just broke might be the same call this now retries.
+        alert = (
+            "\U0001f6a8 Mercury pipeline error\n"
+            f"Subject: {subject}\n"
+            f"{type(exc).__name__}: {exc}"
+        )
+        try:
+            await send_telegram(alert[:4000])
+        except Exception:
+            pass
+        return {"ok": False, "error": str(exc)}
