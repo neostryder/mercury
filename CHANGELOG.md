@@ -53,6 +53,14 @@
   few rounds). New `backend/approvals.py` (persisted pending proposals) and
   `backend/telegram_approvals.py` (the reply loop itself, independent of
   whichever Notifier is configured).
+- Fixed the popup always reporting "No message is currently displayed"
+  even with a message open. Two mistakes at once, both confirmed against
+  Thunderbird's own official messageDisplay example: `getDisplayedMessages`
+  needs an explicit tab id (querying with no tabId does not reliably find
+  the displayed message from inside this popup, contrary to my previous
+  fix's assumption), and it resolves to a `MessageList` object
+  (`{messages: [...], ...}`), not a bare array - the code was checking
+  `.length` on the wrapper object, which is always `undefined`.
 - The Thunderbird extension now has a real release process: a
   `thunderbird-vX.Y.Z` tag triggers `.github/workflows/release-thunderbird.yml`,
   which builds the `.xpi`, attaches it to a GitHub Release, and points

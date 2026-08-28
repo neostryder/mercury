@@ -19,14 +19,16 @@ async function init() {
   const statusEl = document.getElementById("status");
 
   try {
-    // getDisplayedMessages (plural) returns every message displayed in the
-    // tab - more than one when several are selected in a list view. No
-    // tabId here on purpose: omitting it uses Thunderbird's own "currently
-    // active tab" default, which is what a message-display-action popup
-    // wants.
-    currentMessages = await messenger.messageDisplay.getDisplayedMessages();
+    // Per Thunderbird's own messageDisplay example: the tab must be looked
+    // up explicitly (currentWindow correctly resolves to the mail window
+    // even from inside this popup - omitting tabId does not reliably find
+    // the displayed message), and getDisplayedMessages resolves to a
+    // MessageList object ({messages: [...], ...}), not a bare array.
+    const [tab] = await messenger.tabs.query({ active: true, currentWindow: true });
+    const result = await messenger.messageDisplay.getDisplayedMessages(tab.id);
+    currentMessages = (result && result.messages) || [];
 
-    if (!currentMessages || !currentMessages.length) {
+    if (!currentMessages.length) {
       statusEl.textContent = "No message is currently displayed.";
       submitButton.disabled = true;
       return;
