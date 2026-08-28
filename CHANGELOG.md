@@ -122,3 +122,38 @@
   unrecognized status), so infrastructure trouble can never itself cause a
   bounce. `MERCURY_SHADOW_MODE=true` reverts to report-only without a code
   change or redeploy.
+- Fixed the "Flag for Mercury" context-menu entry never appearing: it was
+  only registered inside `runtime.onInstalled`, which Thunderbird's own
+  official `quickfilter` example warns against for exactly this reason -
+  `menus.create()` now runs unconditionally at background-script top level
+  (guarded against the resulting "already exists" rejection on a normal
+  restart), matching the pattern Thunderbird's own examples use.
+- Replaced thumbs-up-reaction approval with inline keyboard buttons
+  (Approve/Discard) on each proposal message. Telegram's Bot API only
+  delivers `message_reaction` updates when the bot is an administrator in
+  the chat - a role that cannot exist in a private one-on-one chat, so a
+  reaction there was silently never received. Plain "yes"/"no" text replies
+  still work as before; anything else is still read as revision feedback.
+- Unsubscribe no longer adds a bounce rule automatically. It reports its own
+  outcome back to Telegram first (`UNSUBSCRIBED` / `FAILED` /
+  `SKIPPED_UNSAFE`, plus a summary), then separately asks - as its own
+  inline-button question - whether to add the sending domain to the
+  blacklist (hard bounce), the greylist (soft bounce), or leave it alone. An
+  unsubscribe request is not itself a request for a standing rule.
+- The verdict step now also assigns a category (from a fixed label set:
+  newsletter, promotional, transactional, account security, personal,
+  social, financial, phishing, scam, malware, other) and its own alert
+  level (none / standard / urgent) - a judgment call on whether the
+  recipient should be pinged in Telegram right now versus having it show up
+  in the daily summary and dashboard instead. Only standard and urgent
+  alerts reach Telegram individually now; routine traffic, including most
+  hard bounces, no longer pings on every message.
+- Added a structured event log backing a forthcoming dashboard and daily
+  summary: every verdict, rule change, and mailbox/unsubscribe action is
+  now recorded to a Cloudflare D1 database (`worker/schema.sql`), written
+  through a new authenticated `/log` route on the Worker gate rather than
+  giving the backend its own Cloudflare credentials
+  (`backend/event_log.py`). A hard-bounce recommendation also saves the
+  full message and reasoning, so it can be reviewed later without having
+  had to catch it live. Logging is fire-and-forget and never affects
+  delivery if it fails.

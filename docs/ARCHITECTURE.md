@@ -44,12 +44,31 @@ purpose; Cloudflare Workers is what I already had DNS on.
    treated as instructions by the judge.
 6. The redacted content, the injection score, and the current rules ledger
    are given to the judge provider for a semantic verdict (SPAM / PHISH /
-   LEGIT / UNSURE) plus a recommended disposition, with reasoning.
-7. The notifier provider sends the verdict and reasoning. The disposition
-   is what the Worker actually returned to the mail host in step 2 -
-   unless `MERCURY_SHADOW_MODE=true` is set, which reverts to reporting
-   only (the backend always returns 250/accept in that mode, and the
-   report says so) without a code change or redeploy.
+   LEGIT / UNSURE) plus a recommended disposition, a category, an alert
+   level (none / standard / urgent - the judge's own call on whether this
+   is worth a same-day ping), and reasoning.
+7. Every verdict is recorded to the event log (see "Event log" below)
+   regardless of alert level. The notifier provider only actually sends to
+   Telegram when the alert level is standard or urgent - routine traffic,
+   including most hard bounces, is left for the daily summary and dashboard
+   instead of pinging on every message. The disposition enforced is what
+   the Worker actually returned to the mail host in step 2 - unless
+   `MERCURY_SHADOW_MODE=true` is set, which reverts to reporting only (the
+   backend always returns 250/accept in that mode) without a code change or
+   redeploy.
+
+## Event log
+
+Every verdict, rule change, and mailbox/unsubscribe action is recorded to a
+Cloudflare D1 database (`worker/schema.sql`) - the foundation for a
+dashboard and daily summary digest. The backend has no Cloudflare
+credentials of its own; it reaches D1 through an authenticated `/log` route
+on the Worker gate (`worker/src/index.js`), which already holds the D1
+binding, via `backend/event_log.py`. Logging is fire-and-forget: a failure
+there never affects delivery of the message it was logging. A hard-bounce
+recommendation also saves the message's full content and the judge's
+reasoning, so it can be reviewed - and a rule reversed - without having had
+to catch it live.
 
 ## Providers
 
@@ -102,22 +121,25 @@ immediate action - one of two kinds:
   folder, message set, and action rather than left for the executing step
   to interpret further.
 - `UNSUBSCRIBE: <details>` - see "Executing an approved unsubscribe" below.
-  Because its outcome (safe vs. unsafe) decides the standing rule rather
-  than the other way around, the rule half of the proposal is `NONE` for
-  this kind - the executing step adds its own rule once it knows the
-  outcome, instead of the approval step committing one upfront.
+  An unsubscribe request is not itself a request for a standing rule, so
+  the rule half of the proposal is always `NONE` for this kind - whether to
+  add one is asked separately, afterward, once the outcome is known.
 
 Both are sent to Telegram as one proposal (`backend/telegram_approvals.py`),
 independent of whichever `Notifier` provider is configured for one-way
 alerts, since this needs a channel that can receive a reply, not just
-deliver a message:
+deliver a message. The proposal carries inline Approve/Discard buttons
+(`callback_query` updates) rather than relying on a reaction - Telegram's
+Bot API only delivers `message_reaction` updates when the bot is an
+administrator in the chat, a role that cannot exist in a private one-on-one
+chat, so a thumbs-up there is never actually received:
 
-- A reply of "yes", or a thumbs-up reaction on the proposal message, commits
-  the rule to the ledger (if there was one) and, if there was an action,
-  hands it to the judge provider to carry out (see below).
-- A reply of "no" discards the whole proposal.
-- Anything else is treated as feedback: the judge revises the proposal and
-  a new one is sent, capped at a few rounds so a persistently
+- Tapping Approve, or replying "yes", commits the rule to the ledger (if
+  there was one) and, if there was an action, hands it to the judge
+  provider to carry out (see below).
+- Tapping Discard, or replying "no", discards the whole proposal.
+- Any other text reply is treated as feedback: the judge revises the
+  proposal and a new one is sent, capped at a few rounds so a persistently
   misunderstood proposal can't loop forever.
 
 Proposals are persisted (`backend/approvals.py`,
@@ -149,20 +171,21 @@ rather than a standard opt-out; uncertain is treated as unsafe.
 
 If safe: tracking query parameters are stripped from the URL before
 visiting it, and only a single confirm click or form submit is attempted -
-anything more involved stops rather than improvising further.
-If unsafe: the link is never visited at all.
+anything more involved stops rather than treating it as `FAILED` instead of
+improvising further.
+If unsafe: the link is never visited at all, and the result is
+`SKIPPED_UNSAFE`.
 
-The backend parses a structured `SAFE / DOMAIN / SUMMARY` reply (not free
-text - the same reason the rule/action split above is parsed rather than
-inferred) and appends the resulting rule to the ledger itself: soft-bounce
-the sender's domain if the unsubscribe was safe and completed, hard-bounce
-it if it was judged unsafe and skipped. This is the one path where the
-backend commits a rule outside the approve-then-finalize flow above,
-because that outcome is exactly what the recipient approved by saying yes
-to the proposal - a domain-only disposition change, decided by a safety
-judgment already made under the same prompt-injection discipline as
-everything else here, not a new arbitrary rule the judge invented on its
-own.
+The backend parses a structured `SAFE / DOMAIN / RESULT / SUMMARY` reply
+(not free text - the same reason the rule/action split above is parsed
+rather than inferred) and reports the result back to Telegram immediately -
+`UNSUBSCRIBED`, `FAILED`, or `SKIPPED_UNSAFE`, plus the summary. No rule is
+committed at this point. Separately, the recipient is then asked (again via
+inline buttons) whether to add the sending domain to the blacklist (hard
+bounce), the greylist (soft bounce), or leave it alone - an unsubscribe
+request is not itself a request for a standing rule, so that decision is
+always its own explicit step rather than something the safety judgment
+decides on the recipient's behalf.
 
 ## Prompt injection: why it shapes this design
 

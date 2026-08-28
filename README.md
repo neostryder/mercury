@@ -56,10 +56,15 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    it's the reason the pipeline is shaped the way it is.
 5. The redacted message, the injection score, and your standing **rules
    ledger** go to a **judge** for a verdict: SPAM, PHISH, LEGIT, or UNSURE,
-   plus a disposition (accept / soft-defer / hard-bounce) and its
-   reasoning, which is what actually gets enforced (see "Status" below).
-6. A **notifier** sends you the verdict and reasoning. If anything in the
-   pipeline itself fails, you get an alert instead of silence.
+   plus a disposition (accept / soft-defer / hard-bounce), a category, an
+   alert level, and its reasoning - the disposition is what actually gets
+   enforced (see "Status" below).
+6. Every verdict is recorded to a structured **event log** regardless of
+   alert level - the foundation for a dashboard and daily summary. A
+   **notifier** only actually pings you in Telegram when the judge itself
+   flagged the message standard or urgent; routine traffic, including most
+   hard bounces, is left for the daily summary instead. If anything in the
+   pipeline itself fails, you still get an alert - that's never silent.
 
 A companion **Thunderbird extension** (`thunderbird/`) lets you flag a
 message you're looking at and describe, in as much detail as the situation
@@ -148,9 +153,9 @@ if so, that action is scoped narrowly (which folder, which messages, what
 to do) rather than left open-ended. Both go to you over Telegram as one
 proposal:
 
-- Reply **yes** to commit the rule to the ledger and, if there was one,
-  carry out the action.
-- Reply **no** to discard the whole proposal.
+- Tap **Approve** (or reply **yes**) to commit the rule to the ledger and,
+  if there was one, carry out the action.
+- Tap **Discard** (or reply **no**) to discard the whole proposal.
 - Reply with anything else and it's read as feedback - the judge revises
   the proposal and sends it again (capped at a few rounds, so a
   misunderstood proposal can't loop forever).

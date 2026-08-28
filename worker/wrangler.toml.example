@@ -16,3 +16,10 @@ BACKEND_BASE_URL = "https://your-backend-host.example.com"
 [[routes]]
 pattern = "mercury.example.com"
 custom_domain = true
+
+# Event log / dashboard data store. Create with `wrangler d1 create mercury-log`
+# and apply worker/schema.sql, then fill in the database_id it prints.
+[[d1_databases]]
+binding = "MERCURY_LOG"
+database_name = "mercury-log"
+database_id = "00000000-0000-0000-0000-000000000000"
