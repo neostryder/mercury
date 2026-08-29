@@ -322,4 +322,13 @@
   or "rule + action proposed" depending on what's actually there, instead
   of always showing a rule line (previously "Rule: None" when there wasn't
   one).
+- Added a caveat check to rule proposals: `interpret_instruction()` and
+  `revise_instruction()` now also judge whether a proposed rule actually
+  adds distinguishing criteria beyond the baseline verdict step's own
+  SPAM/PHISH/LEGIT/UNSURE reasoning, or whether it just restates "obviously
+  bad mail should be blocked" and would therefore never be the deciding
+  factor. The rules ledger is semantic by design - a broad rule is meant to
+  be supported - but the recipient now sees a direct heads-up before
+  approving one that's unlikely to ever do anything, instead of finding out
+  after the fact.
 

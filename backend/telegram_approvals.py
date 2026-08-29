@@ -65,13 +65,15 @@ class TelegramApprovals:
 
     async def propose_new(
         self, instruction: str, message_context: str, via_dictation: bool = False
-    ) -> tuple[str, str, str | None]:
-        rule, action = await self._interpret(instruction, message_context, via_dictation)
-        proposal_id = self._store.create(rule, action, message_context)
-        await self._send_proposal(proposal_id, rule, action)
+    ) -> tuple[str, str | None, str | None]:
+        rule, action, caveat = await self._interpret(instruction, message_context, via_dictation)
+        proposal_id = self._store.create(rule, action, message_context, caveat=caveat)
+        await self._send_proposal(proposal_id, rule, action, caveat)
         return proposal_id, rule, action
 
-    async def _send_proposal(self, proposal_id: str, rule: str | None, action: str | None) -> None:
+    async def _send_proposal(
+        self, proposal_id: str, rule: str | None, action: str | None, caveat: str | None = None
+    ) -> None:
         if rule and action:
             lines = ["Mercury: rule + action proposed", f"Rule: {rule}", f"Action: {action}"]
         elif rule:
@@ -80,6 +82,8 @@ class TelegramApprovals:
             lines = ["Mercury: action proposed", f"Action: {action}"]
         else:
             lines = ["Mercury: nothing to propose - the instruction didn't resolve to a rule or an action"]
+        if caveat:
+            lines.append(f"\n⚠️ {caveat}")
         lines.append('')
         lines.append('Tap a button, or reply to THIS message with feedback to revise it.')
         keyboard = {
@@ -270,8 +274,8 @@ class TelegramApprovals:
             await self._send(None, "Too many rounds of revision - discarded. Flag the message again to restart.")
             return
 
-        rule, action = await self._revise(
+        rule, action, caveat = await self._revise(
             feedback, proposal["rule"], proposal.get("action"), proposal["message_context"]
         )
-        self._store.update(proposal_id, rule=rule, action=action, rounds=rounds)
-        await self._send_proposal(proposal_id, rule, action)
+        self._store.update(proposal_id, rule=rule, action=action, caveat=caveat, rounds=rounds)
+        await self._send_proposal(proposal_id, rule, action, caveat)

@@ -128,21 +128,25 @@ def remove_rule(rule: str) -> bool:
     return True
 
 
-def _parse_rule_and_action(content: str) -> tuple[str | None, str | None]:
+def _parse_rule_action_caveat(content: str) -> tuple[str | None, str | None, str | None]:
     rule_match = re.search(r"RULE:\s*(.+?)(?:\nACTION:|\Z)", content, re.DOTALL)
-    action_match = re.search(r"ACTION:\s*(.+)", content, re.DOTALL)
+    action_match = re.search(r"ACTION:\s*(.+?)(?:\nCAVEAT:|\Z)", content, re.DOTALL)
+    caveat_match = re.search(r"CAVEAT:\s*(.+)", content, re.DOTALL)
     rule = rule_match.group(1).strip().strip('"') if rule_match else content.strip()
     action = action_match.group(1).strip().strip('"') if action_match else None
+    caveat = caveat_match.group(1).strip().strip('"') if caveat_match else None
     if rule and rule.upper().startswith("NONE"):
         rule = None
     if action and action.upper().startswith("NONE"):
         action = None
-    return rule, action
+    if caveat and caveat.upper().startswith("NONE"):
+        caveat = None
+    return rule, action, caveat
 
 
 async def interpret_instruction(
     instruction: str, message_context: str, via_dictation: bool = False
-) -> tuple[str, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     dictation_note = (
         """
 Note: this instruction was produced via speech-to-text dictation and may
@@ -196,6 +200,18 @@ immediate action:
 Format the ACTION line as "MAILBOX: <details>" or "UNSUBSCRIBE: <details>".
 If the instruction is only about future handling, say NONE.
 
+If you produced a RULE, separately judge whether it actually adds any
+distinguishing criteria beyond what the baseline verdict step would already
+do on its own (it already judges every message SPAM, PHISH, LEGIT, or
+UNSURE, with a disposition that follows naturally from that verdict). A
+rule that just restates "obviously bad mail should be blocked" - with no
+specific sender, domain, pattern, or nuance the baseline verdict might
+otherwise miss - is likely to never actually be the deciding factor, since
+the baseline step would reach the same conclusion on its own regardless of
+whether the rule exists. If that's the case here, say so directly and
+suggest what more specific detail would make it functional; otherwise NONE.
+This judgment only applies when RULE is not NONE.
+
 The flagged message(s) (context only, redacted):
 ---
 {message_context}
@@ -208,14 +224,15 @@ Recipient's instruction:
 
 Respond in exactly this format, nothing else:
 RULE: <the standalone rule, or NONE if the action's outcome decides it>
-ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>"""
+ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>
+CAVEAT: <a direct heads-up if the rule is likely non-functional as worded, or NONE>"""
     content = await judge.ask(prompt)
-    return _parse_rule_and_action(content)
+    return _parse_rule_action_caveat(content)
 
 
 async def revise_instruction(
     feedback: str, prior_rule: str, prior_action: str | None, message_context: str
-) -> tuple[str, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     prompt = f"""You previously proposed a rule (and possibly an action) from a flagged
 email, and the recipient replied with feedback instead of a plain yes/no.
 Revise your proposal in light of it.
@@ -241,11 +258,19 @@ Recipient's feedback:
 {feedback}
 ---
 
+If the revised RULE is not NONE, separately judge whether it actually adds
+any distinguishing criteria beyond what the baseline verdict step (SPAM,
+PHISH, LEGIT, or UNSURE, with a disposition that follows naturally from
+that verdict) would already do on its own - a rule that just restates
+"obviously bad mail should be blocked" is likely to never be the deciding
+factor. If so, say why directly; otherwise NONE.
+
 Respond in exactly this format, nothing else:
 RULE: <the revised standalone rule, or NONE>
-ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>"""
+ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>
+CAVEAT: <a direct heads-up if the rule is likely non-functional as worded, or NONE>"""
     content = await judge.ask(prompt)
-    return _parse_rule_and_action(content)
+    return _parse_rule_action_caveat(content)
 
 
 async def dispatch_action(action: str, message_context: str) -> tuple[str, dict | None]:

@@ -27,12 +27,13 @@ class ApprovalStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, indent=2))
 
-    def create(self, rule: str, action: str | None, message_context: str) -> str:
+    def create(self, rule: str, action: str | None, message_context: str, caveat: str | None = None) -> str:
         proposal_id = secrets.token_hex(4)
         data = self._load()
         data[proposal_id] = {
             "rule": rule,
             "action": action,
+            "caveat": caveat,
             "message_context": message_context,
             "rounds": 0,
         }
