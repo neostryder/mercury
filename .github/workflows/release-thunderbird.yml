@@ -31,7 +31,7 @@ jobs:
       - name: Build the xpi
         run: |
           cd thunderbird
-          zip -r -X ../mercury-rule-flagger.xpi manifest.json popup.html popup.js options.html options.js
+          zip -r -X ../mercury-rule-flagger.xpi manifest.json background.js popup.html popup.js options.html options.js icons
 
       - name: Create the GitHub release
         env:

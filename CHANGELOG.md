@@ -290,3 +290,11 @@
   page down with it. Wrapped it and the per-message tagging call in their
   own try/catch, logging instead of throwing, so a tagging failure can't
   affect the menu, popup, or icon. Bumped to 0.3.4.
+- Fixed the release workflow's `.xpi` never containing `background.js` or
+  `icons/` - only `manifest.json`, the popup, and the options page were
+  ever zipped, even though the manifest declares both as required
+  resources. Every installed release built by this pipeline has been
+  missing its own background script and icons since the workflow was
+  created; a temporary/unpacked load reads the whole folder directly and
+  was never affected, which is why this went unnoticed.
+
