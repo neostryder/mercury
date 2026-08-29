@@ -145,20 +145,28 @@ for how a proposal becomes a committed rule.
 
 ## Approval loop
 
-Flagging a message in Thunderbird doesn't write anything by itself. The
-backend asks the judge to turn the instruction into a standalone rule and,
-separately, to say whether the instruction also calls for an action on mail
-that already exists (e.g. "delete this and anything like it from Spam") -
-if so, that action is scoped narrowly (which folder, which messages, what
-to do) rather than left open-ended. Both go to you over Telegram as one
-proposal:
+Flagging a message in Thunderbird doesn't write anything by itself, and
+your instruction isn't forced into a rule whether you meant one or not.
+It opens a **brief** - an open-ended back-and-forth with the judge (your
+agent) about what should happen, not a rigid form. If your intent is
+genuinely unclear, or a real choice depends on your answer, it asks you
+directly over Telegram instead of guessing. Once it's ready, it proposes a
+standalone rule for the ledger and/or a narrowly scoped action on mail that
+already exists (e.g. "delete this and anything like it from Spam") - a rule
+that wouldn't actually change any future outcome (it just restates what the
+judge already does by default) gets flagged with a caveat before you
+approve it, not after:
 
-- Tap **Approve** (or reply **yes**) to commit the rule to the ledger and,
-  if there was one, carry out the action.
-- Tap **Discard** (or reply **no**) to discard the whole proposal.
-- Reply with anything else and it's read as feedback - the judge revises
-  the proposal and sends it again (capped at a few rounds, so a
-  misunderstood proposal can't loop forever).
+- Tap **Approve** (or reply **yes** to an active proposal) to commit the
+  rule to the ledger and, if there was one, carry out the action.
+- Tap **Discard** (or reply **no**) to end the brief without committing
+  anything.
+- Any other reply - to a question, a proposal, or even the final outcome
+  - continues the same conversation rather than going unanswered, capped
+  at a few rounds so a persistently unresolved brief can't loop forever.
+  A reply challenging an already-decided outcome still gets a real answer,
+  reasoned from the whole conversation, though it won't reopen the ledger
+  itself from that reply alone.
 
 The action step itself is carried out by the same agent behind the judge
 seam, using whatever scoped mailbox-action skill you've given it - not by

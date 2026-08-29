@@ -130,12 +130,33 @@ hand in `rules_ledger.json`, or proposed through the Thunderbird extension's
 `/rules/propose` endpoint - see "Approval loop" below for how a proposal
 there actually becomes a committed rule.
 
-## Approval loop
+## Approval loop: briefs, not forms
 
-`/rules/propose` never writes to the ledger directly. It asks the judge
-provider to interpret the flagged instruction into a standalone rule for
-the ledger, and, separately, whether the instruction also calls for an
-immediate action - one of two kinds:
+`/rules/propose` never writes to the ledger directly, and it does not treat
+a flagged instruction as a rigid form to fill in. It opens a **brief** - an
+open-ended collaboration with the judge provider (Loremaster) about a
+flagged message, re-interpreted as a whole conversation rather than parsed
+atomically. Each turn, `advance_brief()` (`backend/app.py`) is handed the
+full history plus the latest message and decides among four independent
+things, only one of which forces a stop:
+
+- `QUESTION` - genuinely unclear intent, or a real design choice that
+  depends on the recipient's answer, is asked directly rather than guessed
+  at. This is the ordinary way to handle a brief that isn't ready for a
+  rule or action yet, not a rare fallback - a question is mutually
+  exclusive with proposing anything that same turn.
+- `RULE` - a standing preference, self-contained enough to stand alone in
+  the ledger with no access to this conversation once added. `NONE` for a
+  one-time request about existing mail with no lasting preference implied.
+- `ACTION` - one of two kinds, described below, or `NONE`.
+- `CAVEAT` - only alongside a `RULE`: whether the rule actually adds
+  distinguishing criteria beyond what the baseline verdict step (SPAM,
+  PHISH, LEGIT, UNSURE, and the disposition that follows from it) would
+  already do on its own. A rule that just restates "obviously bad mail
+  should be blocked" is likely to never be the deciding factor, and the
+  recipient sees that heads-up before approving, not after.
+
+An `ACTION`, when present, is one of:
 
 - `MAILBOX: <details>` - something done to mail that already exists (e.g.
   deleting messages already sitting in a folder), narrowly scoped to a
@@ -143,29 +164,38 @@ immediate action - one of two kinds:
   to interpret further.
 - `UNSUBSCRIBE: <details>` - see "Executing an approved unsubscribe" below.
   An unsubscribe request is not itself a request for a standing rule, so
-  the rule half of the proposal is always `NONE` for this kind - whether to
-  add one is asked separately, afterward, once the outcome is known.
+  the rule half is always `NONE` for this kind - whether to add one is
+  asked separately, afterward, once the outcome is known.
 
-Both are sent to Telegram as one proposal (`backend/telegram_approvals.py`),
-independent of whichever `Notifier` provider is configured for one-way
-alerts, since this needs a channel that can receive a reply, not just
-deliver a message. The proposal carries inline Approve/Discard buttons
-(`callback_query` updates) rather than relying on a reaction - Telegram's
-Bot API only delivers `message_reaction` updates when the bot is an
-administrator in the chat, a role that cannot exist in a private one-on-one
-chat, so a thumbs-up there is never actually received:
+Sent to Telegram (`backend/telegram_approvals.py`), independent of whichever
+`Notifier` provider is configured for one-way alerts, since this needs a
+channel that can receive a reply, not just deliver a message. A question is
+plain text; a rule and/or action proposal carries inline Approve/Discard
+buttons (`callback_query` updates) rather than relying on a reaction -
+Telegram's Bot API only delivers `message_reaction` updates when the bot is
+an administrator in the chat, a role that cannot exist in a private
+one-on-one chat, so a thumbs-up there is never actually received:
 
-- Tapping Approve, or replying "yes", commits the rule to the ledger (if
-  there was one) and, if there was an action, hands it to the judge
-  provider to carry out (see below).
-- Tapping Discard, or replying "no", discards the whole proposal.
-- Any other text reply is treated as feedback: the judge revises the
-  proposal and a new one is sent, capped at a few rounds so a persistently
-  misunderstood proposal can't loop forever.
+- Tapping Approve, or replying "yes" to an active proposal, commits the
+  rule to the ledger (if there was one) and, if there was an action, hands
+  it to the judge provider to carry out (see below).
+- Tapping Discard, or replying "no", ends the brief without committing
+  anything.
+- Any other reply - to a question, to a proposal, to the "approved,
+  working on it" notice, or to the final outcome - continues the same
+  brief: every message Mercury sends is tracked back to its brief, not just
+  the first one, capped at a few rounds so a persistently unresolved brief
+  can't loop forever.
+- A reply to an already-resolved brief (challenging or asking about a
+  decision already made) is answered from the full history by
+  `discuss_resolved_brief()` - purely conversational, since it never
+  reopens the ledger or takes an action itself; that requires a new brief
+  or the dashboard's own reverse-rule control.
 
-Proposals are persisted (`backend/approvals.py`,
-`pending_approvals.json`) so a backend restart doesn't strand one
-mid-conversation.
+Briefs are persisted (`backend/approvals.py`, `pending_approvals.json`) -
+full turn history and a message-id-to-brief index, not just the latest
+proposal - so a backend restart doesn't strand one mid-conversation or
+orphan a reply to an older message in the thread.
 
 ## Executing an approved mailbox action
 

@@ -331,4 +331,15 @@
   be supported - but the recipient now sees a direct heads-up before
   approving one that's unlikely to ever do anything, instead of finding out
   after the fact.
+- Replaced the single-shot rule/action parse with an open-ended brief.
+  `interpret_instruction()`/`revise_instruction()` are gone; `advance_brief()`
+  decides among QUESTION/RULE/ACTION/CAVEAT each turn against the brief's
+  full history, so an unclear request gets asked about over Telegram
+  instead of forced into a rule. Every message Mercury sends for a brief -
+  not just its first proposal - is tracked back to it, so any reply
+  continues the same conversation rather than being silently dropped; a
+  resolved brief stays reachable too, and a later challenge to its outcome
+  gets a real answer from `discuss_resolved_brief()` rather than nothing.
+  `backend/approvals.py`'s store now holds full turn history and a
+  message-id-to-brief index rather than one flat proposal dict.
 
