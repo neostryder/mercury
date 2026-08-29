@@ -155,20 +155,30 @@ can correct it through the normal revise-feedback reply.
         if via_dictation
         else ""
     )
-    prompt = f"""The recipient flagged one or more emails and gave a free-text instruction
-for how they, and similar messages, should be handled going forward.{dictation_note} Turn
-that instruction into a self-contained rule to add to a standing rules
-ledger that a future spam/phishing verdict step will read alongside every
-new message - it will have no access to this conversation or the flagged
-message(s) once added, so the rule must stand alone. Use as much of the
-instruction's detail and nuance as it takes to capture it accurately -
-prefer one sentence when the instruction is that simple, but do not
-compress away a real distinction the recipient actually drew just to force
-it into one.
+    prompt = f"""The recipient flagged one or more emails and gave a free-text instruction.{dictation_note}
+Not every instruction is about changing how future mail gets handled - many
+are a one-time request to do something with mail that already exists, with
+no standing preference implied at all. Read the instruction on its own
+terms rather than assuming it must produce a rule.
+
+First, decide whether the instruction expresses a general, standing
+preference for how this sender or this kind of message should be handled
+going forward (RULE), as opposed to a one-time request about existing mail
+only (no RULE - NONE). If it does express a standing preference, turn it
+into a self-contained rule to add to a standing rules ledger that a future
+spam/phishing verdict step will read alongside every new message - it will
+have no access to this conversation or the flagged message(s) once added,
+so the rule must stand alone. Use as much of the instruction's detail and
+nuance as it takes to capture it accurately - prefer one sentence when the
+instruction is that simple, but do not compress away a real distinction the
+recipient actually drew just to force it into one. If the instruction is
+purely about what to do with the mail sitting in front of you right now,
+RULE is NONE - do not invent a standing preference the recipient never
+actually expressed just to have something to put there.
 
 Separately, decide whether the instruction also asks for something to be
-done right now, as opposed to only describing how future mail should be
-handled. There are two kinds of immediate action:
+done right now to mail that already exists. There are two kinds of
+immediate action:
 
 - MAILBOX: something done to mail that already exists (deleting or moving
   messages already sitting in a folder). Describe it specifically and

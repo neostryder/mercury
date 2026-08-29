@@ -71,10 +71,15 @@ class TelegramApprovals:
         await self._send_proposal(proposal_id, rule, action)
         return proposal_id, rule, action
 
-    async def _send_proposal(self, proposal_id: str, rule: str, action: str | None) -> None:
-        lines = ["Mercury: rule proposed", f"Rule: {rule}"]
-        if action:
-            lines.append(f"Also requested right now: {action}")
+    async def _send_proposal(self, proposal_id: str, rule: str | None, action: str | None) -> None:
+        if rule and action:
+            lines = ["Mercury: rule + action proposed", f"Rule: {rule}", f"Action: {action}"]
+        elif rule:
+            lines = ["Mercury: rule proposed", f"Rule: {rule}"]
+        elif action:
+            lines = ["Mercury: action proposed", f"Action: {action}"]
+        else:
+            lines = ["Mercury: nothing to propose - the instruction didn't resolve to a rule or an action"]
         lines.append('')
         lines.append('Tap a button, or reply to THIS message with feedback to revise it.')
         keyboard = {

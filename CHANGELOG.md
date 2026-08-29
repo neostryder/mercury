@@ -312,4 +312,14 @@
   up under tomorrow's date. Both the D1 query's `date(received_at)` and the
   chart's day-axis generation now shift by the same fixed 7 hours before
   taking the calendar date.
+- Fixed flagged-message requests always getting framed as a rule proposal,
+  even a purely one-time mailbox action with no standing preference
+  intended. `interpret_instruction()`'s prompt treated rule extraction as
+  the primary task and action detection as an afterthought; it now asks
+  whether the instruction expresses a standing preference and/or an action
+  on existing mail as two independent, equally optional questions. The
+  Telegram proposal message now reads "rule proposed", "action proposed",
+  or "rule + action proposed" depending on what's actually there, instead
+  of always showing a rule line (previously "Rule: None" when there wasn't
+  one).
 
