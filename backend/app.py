@@ -615,7 +615,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 f"Reasoning: {verdict['reasoning']}\n"
                 f"{mode_note}"
             )
-            await notifier.send(report[:4000])
+            await telegram_approvals.send_trackable_report(report[:4000], redacted_content[:8000])
 
         return JSONResponse(
             status_code=int(enforced_disposition),

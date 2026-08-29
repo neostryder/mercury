@@ -342,4 +342,13 @@
   gets a real answer from `discuss_resolved_brief()` rather than nothing.
   `backend/approvals.py`'s store now holds full turn history and a
   message-id-to-brief index rather than one flat proposal dict.
+- Fixed per-message verdict reports (the "Mercury report" / URGENT alerts
+  sent for a STANDARD or URGENT verdict) being unreplyable - they went out
+  through the one-way `Notifier` interface, which never captured a message
+  id, so a reply asking "why was this UNSURE" or "whitelist this sender"
+  had nothing to route back to. They now go out through
+  `send_trackable_report()`, opening a brief the same way a proposal does,
+  so they're a normal part of the same conversation. Pipeline-failure
+  alerts are unaffected - those aren't about a specific email and stay on
+  the plain one-way `Notifier` path.
 

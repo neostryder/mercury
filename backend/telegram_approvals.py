@@ -65,6 +65,18 @@ class TelegramApprovals:
         self._bounce_decisions: dict[str, tuple[str, str]] = {}  # decision_id -> (domain, brief_id)
         self._offset = 0
 
+    async def send_trackable_report(self, text: str, message_context: str) -> None:
+        """A per-message verdict report (unlike a pipeline-failure alert) is
+        about a specific email the recipient might reasonably want to react
+        to - "whitelist this sender", "why was this UNSURE" - so it opens a
+        brief the same way a proposal does, rather than firing through the
+        one-way Notifier with no way to ever pick up a reply to it."""
+        brief_id = self._store.create_brief(message_context)
+        self._store.append_turn(brief_id, "loremaster", text)
+        message_id = await self._send(text)
+        if message_id is not None:
+            self._store.track_message(message_id, brief_id)
+
     async def propose_new(
         self, instruction: str, message_context: str, via_dictation: bool = False
     ) -> tuple[str, str | None, str | None]:
