@@ -297,4 +297,19 @@
   missing its own background script and icons since the workflow was
   created; a temporary/unpacked load reads the whole folder directly and
   was never affected, which is why this went unnoticed.
+- Fixed a silent failure in the Telegram approval loop's final report:
+  `_send()` swallowed every exception with no logging, and never truncated
+  its outgoing text - a mailbox action's own report of what it did (e.g.
+  every message it deleted) can easily exceed Telegram's ~4096 character
+  limit, and Telegram rejects an oversized message outright. Now the text
+  is truncated before sending, a send failure is logged to `admin_log`
+  instead of disappearing, and a short fallback notice ("check the
+  dashboard's Recent Actions") is sent so the recipient is never left in
+  total silence about whether an approved action actually ran.
+- Fixed the dashboard's trend charts bucketing messages by UTC calendar
+  date instead of Phoenix time: a message received in the evening (Phoenix
+  is a fixed UTC-7 offset) already falls on the next UTC day, so it showed
+  up under tomorrow's date. Both the D1 query's `date(received_at)` and the
+  chart's day-axis generation now shift by the same fixed 7 hours before
+  taking the calendar date.
 

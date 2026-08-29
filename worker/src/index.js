@@ -116,7 +116,7 @@ async function handleDashboard(pathname, search, env, request) {
       const db = env.MERCURY_LOG;
       const [volumeRows, categoryRows] = await Promise.all([
         db.prepare(`
-          SELECT date(received_at) AS day,
+          SELECT date(received_at, '-7 hours') AS day,
             SUM(CASE WHEN enforced_disposition = '250' THEN 1 ELSE 0 END) AS accepted,
             SUM(CASE WHEN enforced_disposition = '421' THEN 1 ELSE 0 END) AS deferred,
             SUM(CASE WHEN enforced_disposition = '550' THEN 1 ELSE 0 END) AS bounced
@@ -125,7 +125,7 @@ async function handleDashboard(pathname, search, env, request) {
           GROUP BY day
         `).all(),
         db.prepare(`
-          SELECT date(received_at) AS day, category, COUNT(*) AS count
+          SELECT date(received_at, '-7 hours') AS day, category, COUNT(*) AS count
           FROM messages
           WHERE received_at >= datetime('now', '-30 day')
           GROUP BY day, category

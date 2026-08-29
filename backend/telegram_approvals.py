@@ -26,15 +26,21 @@ Inline keyboard buttons are the private-chat-compatible equivalent.
 """
 import asyncio
 import json
+import logging
 import os
 import secrets
+from datetime import datetime, timezone
 
 import httpx
 
+import event_log
 from approvals import ApprovalStore
 
 MAX_ROUNDS = 5
 API_BASE = "https://api.telegram.org/bot{token}"
+TELEGRAM_TEXT_LIMIT = 4000
+
+logger = logging.getLogger(__name__)
 
 BOUNCE_OPTIONS = {
     "hard": {"label": "Blacklist", "description": "Blacklist (hard bounce)"},
@@ -82,16 +88,43 @@ class TelegramApprovals:
             self._message_to_proposal[message_id] = proposal_id
 
     async def _send(self, proposal_id: str | None, text: str, keyboard: dict | None = None) -> int | None:
-        payload = {"chat_id": self._chat_id, "text": text}
+        # Telegram rejects a message over ~4096 characters outright - an
+        # agent's own report of what it did (e.g. every message it deleted)
+        # can easily run longer than that, and an unhandled 400 here used to
+        # mean the recipient never found out the action even ran.
+        truncated = len(text) > TELEGRAM_TEXT_LIMIT
+        payload = {
+            "chat_id": self._chat_id,
+            "text": text[:TELEGRAM_TEXT_LIMIT] + ("\n... (truncated)" if truncated else ""),
+        }
         if keyboard:
             payload["reply_markup"] = json.dumps(keyboard)
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(f"{self._api}/sendMessage", json=payload)
                 resp.raise_for_status()
                 return resp.json()["result"]["message_id"]
-            except Exception:
-                return None
+        except Exception as exc:
+            logger.error("Telegram send failed: %s", exc)
+            event_log.log_event("admin_log", {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "event": "telegram_send_failed",
+                "detail": f"{exc}",
+            })
+            await self._send_fallback_notice()
+            return None
+
+    async def _send_fallback_notice(self) -> None:
+        # A separate, minimal request rather than a recursive _send() call -
+        # it must not depend on the same payload that just failed.
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(f"{self._api}/sendMessage", json={
+                    "chat_id": self._chat_id,
+                    "text": "Mercury could not report back on its last action - check the dashboard's Recent Actions for what happened.",
+                })
+        except Exception as exc:
+            logger.error("Telegram fallback notice also failed: %s", exc)
 
     async def _answer_callback(self, callback_query_id: str, text: str = "") -> None:
         async with httpx.AsyncClient(timeout=15) as client:

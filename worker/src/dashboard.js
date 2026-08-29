@@ -30,7 +30,10 @@ function isoDate(d) {
 // per day even for a day D1's GROUP BY produced no row for at all.
 function lastNDays(days) {
   const out = [];
-  const now = new Date();
+  // Phoenix is a fixed UTC-7 offset (no DST) - shift before reading the UTC
+  // calendar fields so "today" lines up with the same day the D1 queries
+  // bucket by (see the matching `date(received_at, '-7 hours')` in index.js).
+  const now = new Date(Date.now() - 7 * 60 * 60 * 1000);
   for (let i = days - 1; i >= 0; i--) {
     out.push(isoDate(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i))));
   }
