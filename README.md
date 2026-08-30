@@ -51,13 +51,12 @@ ForwardEmail -> Worker gate -> backend -> authenticated sender lists
    itself.
 3. The backend checks the normalized sender against deterministic
    **blacklist** (550), **greylist** (421), and **whitelist** (250) entries.
-   Before honoring a match, it requires a clear SPF or DKIM pass in the raw
-   message's `Authentication-Results` headers that is aligned with the
-   claimed `From:` domain. Missing, failed, malformed, ambiguous, or
-   misaligned results make the message continue through normal content
-   scanning. An authenticated match is final and skips both content scanning
-   calls, including for whitelisted senders. Exact addresses take precedence
-   over domain entries.
+   Before honoring a match, it requires ForwardEmail's own `dmarc` webhook
+   field to report a pass for the claimed `From:` domain. Missing, failed,
+   or malformed results make the message continue through normal content
+   scanning instead. An authenticated match is final and skips both content
+   scanning calls, including for whitelisted senders. Exact addresses take
+   precedence over domain entries.
 4. Without an authenticated sender-list match, the backend **redacts** any
    of the recipient's own known addresses found in the message (see below),
    then sends the redacted copy to a **prompt-injection classifier**.
@@ -159,12 +158,11 @@ parts:
 - Three deterministic sender lists: blacklist (550), greylist (421), and
   whitelist (250). Entries are exact addresses or domains. Adding a selector
   to one list removes the same selector from the other two, and exact-address
-  matches override domain matches. A match is honored only when the raw
-  message contains a clear aligned SPF or DKIM pass. An exact authentication
-  domain or an authenticated DNS parent is aligned; a child domain alone is
-  not accepted as proof of its parent. Without a usable
-  `Authentication-Results` header, sender-list entries remain configured but
-  the deterministic fast path does not fire.
+  matches override domain matches. A match is honored only when ForwardEmail's
+  own `dmarc` webhook field reports a pass for the claimed domain. A domain
+  with no published DMARC policy never takes the deterministic fast path -
+  sender-list entries remain configured, but the message always falls
+  through to normal content scanning instead.
 - Three semantic rule buckets for content or context conditions that mean
   550, 421, or 250. The bucket supplies the disposition, so rule text does
   not need to repeat it.

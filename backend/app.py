@@ -992,11 +992,11 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         policy = policy_store.load()
         sender_match = policy_store.match_sender(sender_address, policy)
         authentication_skip = None
-        if sender_match and not sender_domain_is_authenticated(raw_message, sender_domain):
+        if sender_match and not sender_domain_is_authenticated(payload.get("dmarc"), sender_domain):
             authentication_skip = (
                 f"Skipped unauthenticated deterministic {sender_match.list_name} match "
-                f"for {sender_match.selector}: the raw message had no clear SPF or DKIM "
-                f"pass aligned with claimed From domain {sender_domain}."
+                f"for {sender_match.selector}: ForwardEmail's own DMARC verdict did not "
+                f"report a pass aligned with claimed From domain {sender_domain}."
             )
         if sender_match and not authentication_skip:
             injection, verdict = _deterministic_verdict(sender_match)

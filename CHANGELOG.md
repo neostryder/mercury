@@ -413,11 +413,14 @@
   including visible warnings for any unrecognized text encountered during
   legacy migration.
 - [Visible] Deterministic blacklist, greylist, and whitelist matches now
-  require a clear SPF or DKIM pass from the raw message's
-  `Authentication-Results` headers aligned with the claimed `From:` domain.
-  Missing, failed, malformed, ambiguous, or misaligned authentication sends
-  the message through the normal classifier and semantic judge, and the
-  message event records why the unauthenticated match was skipped.
-- [Internal] Added a dependency-free RFC822 authentication-results parser
-  with multi-header, folded-header, comment, exact-domain, parent-domain,
-  and fail-closed regression coverage.
+  require ForwardEmail's own `dmarc` webhook verdict to report a pass for
+  the claimed `From:` domain. A missing, failed, or malformed verdict sends
+  the message through the normal classifier and semantic judge instead, and
+  the message event records why the unauthenticated match was skipped. A
+  domain with no published DMARC policy never takes the deterministic path
+  in either direction - this was deliberately changed from an initial
+  approach that re-parsed the raw message's own `Authentication-Results`
+  headers, since those can carry a forged assertion claiming to be from a
+  server other than ForwardEmail itself (ForwardEmail only strips forgeries
+  of its own identity), which would have reopened the exact spoofing gap
+  this check exists to close.

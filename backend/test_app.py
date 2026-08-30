@@ -112,13 +112,7 @@ class AppTests(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _payload(self, address="news@example.com", authenticated=True):
-        domain = address.rsplit("@", 1)[1]
-        authentication = (
-            f"Authentication-Results: mx.test; dkim=pass header.d={domain}\r\n"
-            if authenticated
-            else ""
-        )
-        return {
+        payload = {
             "from": {
                 "text": f"Example News <{address}>",
                 "value": [{"name": "Example News", "address": address}],
@@ -126,10 +120,13 @@ class AppTests(unittest.TestCase):
             "subject": "A routine update",
             "text": "Your order has shipped.",
             "raw": (
-                f"{authentication}From: Example News <{address}>\r\n"
+                f"From: Example News <{address}>\r\n"
                 "Subject: A routine update\r\n\r\nBody"
             ),
         }
+        if authenticated:
+            payload["dmarc"] = {"status": {"result": "pass"}}
+        return payload
 
     def test_deterministic_sender_match_skips_classifier_and_judge(self):
         self.store.put_sender("blacklist", "example.com")
@@ -190,7 +187,8 @@ RULE_MATCH: NONE"""))
                     message["reasoning"],
                 )
                 self.assertIn(
-                    "no clear SPF or DKIM pass aligned with claimed From domain",
+                    "ForwardEmail's own DMARC verdict did not report a pass "
+                    "aligned with claimed From domain",
                     message["reasoning"],
                 )
 

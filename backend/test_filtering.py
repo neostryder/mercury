@@ -14,65 +14,31 @@ from filtering import (
 
 
 class SenderAuthenticationTests(unittest.TestCase):
-    def test_accepts_aligned_pass_across_multiple_result_headers(self):
-        raw = (
-            "Authentication-Results: first.test;\r\n"
-            " spf=softfail smtp.mailfrom=mailer@news.example.com\r\n"
-            "Authentication-Results: second.test;\r\n"
-            ' dkim=pass reason="signed; stable" header.d=EXAMPLE.COM.\r\n'
-            "From: News <news@news.example.com>\r\n\r\nBody"
-        )
+    def test_accepts_forwardemail_dmarc_pass(self):
+        dmarc = {"status": {"result": "pass"}}
+        self.assertTrue(sender_domain_is_authenticated(dmarc, "news.example.com"))
 
-        self.assertTrue(
-            sender_domain_is_authenticated(raw, "news.example.com")
-        )
+    def test_accepts_pass_result_case_insensitively_with_whitespace(self):
+        dmarc = {"status": {"result": " Pass "}}
+        self.assertTrue(sender_domain_is_authenticated(dmarc, "example.com"))
 
-    def test_accepts_aligned_spf_mailfrom(self):
-        raw = (
-            "Authentication-Results: mx.test; "
-            "spf=pass smtp.mailfrom=mailer@news.example.com\r\n"
-            "From: News <news@news.example.com>\r\n\r\nBody"
-        )
-
-        self.assertTrue(
-            sender_domain_is_authenticated(raw.encode(), "news.example.com")
-        )
-
-    def test_rejects_missing_failed_misaligned_or_ambiguous_results(self):
+    def test_rejects_missing_failed_or_malformed_results(self):
         cases = {
-            "missing": "From: News <news@example.com>\r\n\r\nBody",
-            "softfail": (
-                "Authentication-Results: mx.test; "
-                "spf=softfail smtp.mailfrom=news@example.com\r\n\r\nBody"
-            ),
-            "misaligned": (
-                "Authentication-Results: mx.test; "
-                "dkim=pass header.d=attacker.test\r\n\r\nBody"
-            ),
-            "missing identity": (
-                "Authentication-Results: mx.test; dkim=pass\r\n\r\nBody"
-            ),
-            "ambiguous identities": (
-                "Authentication-Results: mx.test; dkim=pass "
-                "header.d=example.com header.d=attacker.test\r\n\r\nBody"
-            ),
-            "pass only in comment": (
-                "Authentication-Results: mx.test; dkim=fail "
-                "(dkim=pass header.d=example.com) header.d=example.com\r\n\r\nBody"
-            ),
-            "pass only in body": (
-                "From: News <news@example.com>\r\n\r\n"
-                "Authentication-Results: mx.test; dkim=pass header.d=example.com"
-            ),
-            "authenticated child": (
-                "Authentication-Results: mx.test; "
-                "dkim=pass header.d=child.example.com\r\n\r\nBody"
-            ),
+            "missing claimed domain": ({"status": {"result": "pass"}}, None),
+            "no dmarc field at all": (None, "example.com"),
+            "not a dict": ("pass", "example.com"),
+            "missing status": ({}, "example.com"),
+            "status not a dict": ({"status": "pass"}, "example.com"),
+            "missing result": ({"status": {}}, "example.com"),
+            "fail": ({"status": {"result": "fail"}}, "example.com"),
+            "none policy": ({"status": {"result": "none"}}, "example.com"),
+            "temperror": ({"status": {"result": "temperror"}}, "example.com"),
+            "result not a string": ({"status": {"result": True}}, "example.com"),
         }
 
-        for label, raw in cases.items():
+        for label, (dmarc, domain) in cases.items():
             with self.subTest(label=label):
-                self.assertFalse(sender_domain_is_authenticated(raw, "example.com"))
+                self.assertFalse(sender_domain_is_authenticated(dmarc, domain))
 
 
 class FilteringPolicyStoreTests(unittest.TestCase):

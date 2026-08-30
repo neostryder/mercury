@@ -40,12 +40,12 @@ purpose; Cloudflare Workers is what I already had DNS on.
    deterministic blacklist (550), greylist (421), and whitelist (250).
    Exact-address matches take precedence over domain matches. The same
    selector cannot exist on more than one list. Before honoring a match, the
-   backend parses every `Authentication-Results` header in the raw RFC822
-   message and requires an SPF or DKIM pass aligned with the claimed `From:`
-   domain. A clear authenticated match is a final disposition and skips both
-   the prompt-injection classifier and semantic judge. Missing, failed,
-   malformed, ambiguous, or misaligned authentication falls through to step
-   5 as though no sender-list match existed.
+   backend requires ForwardEmail's own `dmarc` verdict (already included in
+   the webhook payload alongside `spf`/`dkim`/`arc`/`bimi`) to report a pass
+   for the claimed `From:` domain. A clear authenticated match is a final
+   disposition and skips both the prompt-injection classifier and semantic
+   judge. A missing, failed, or malformed verdict falls through to step 5 as
+   though no sender-list match existed.
 5. Without an authenticated sender-list match, the backend redacts any of
    the recipient's own addresses appearing in the message (see below), then
    scores the redacted content with the prompt-injection classifier provider.
@@ -171,23 +171,27 @@ At match time the exact address is checked before its domain. A malformed
 file containing a cross-list duplicate is rejected as ambiguous, causing
 the ingest path to fail open and send its ordinary pipeline-error alert.
 
-Sender authentication is parsed locally from the raw RFC822 message without
-network lookups or a new runtime dependency. SPF uses the reported
-`smtp.mailfrom` or `smtp.helo` identity, and DKIM uses `header.d`. Only
-`pass` is accepted. A result aligns when its authenticated domain exactly
-matches the claimed `From:` domain or is its DNS parent. The reverse is not
-assumed because a delegated child does not prove control of its parent, and
-full relaxed organizational-domain alignment would require current DNS or
-public-suffix data. Multiple `Authentication-Results` headers are inspected;
-one clear aligned pass is sufficient. The skip reason is prepended to the
-normal judge reasoning in the message event, making the fallback visible in
-the dashboard and daily digest.
+Sender authentication uses ForwardEmail's own `dmarc` webhook field
+(`backend/filtering.py`'s `sender_domain_is_authenticated()`) rather than
+parsing an `Authentication-Results` header out of the raw message. The raw
+message can carry a forged header claiming to be from some OTHER mail
+server's identity - ForwardEmail only strips assertions forged as its own
+identity, not foreign ones - so trusting raw headers directly would reopen
+the same spoofing gap this check exists to close. DMARC's own alignment
+check already answers "does SPF or DKIM align with the visible `From:`
+domain", evaluated by ForwardEmail itself against the same trust boundary
+every other webhook field comes from. Only a `dmarc.status.result` of
+exactly `"pass"` (case-insensitively) is accepted; anything else - missing,
+`fail`, `none` (no published policy), `temperror`, or a malformed field -
+fails closed. The skip reason is prepended to the normal judge reasoning in
+the message event, making the fallback visible in the dashboard and daily
+digest.
 
-`Authentication-Results` assertions are not self-authenticating. The mail
-provider at the SMTP trust boundary must strip forged assertions before the
-message reaches Mercury. A deployment whose raw webhook messages omit this
-header intentionally never takes the deterministic fast path until trusted
-authentication data becomes available.
+A domain with no published DMARC policy never takes the deterministic fast
+path in either direction - it always falls through to full content
+screening instead. This is deliberate: whether a message actually came from
+that domain is exactly the ambiguous case worth failing closed on before
+letting it skip content screening entirely.
 
 Semantic rules describe content or context conditions. The `550`, `421`, or
 `250` bucket is the disposition, and the three labeled blocks are supplied
@@ -393,5 +397,5 @@ never a source of commands. Authenticated deterministic sender decisions
 intentionally bypass both content scans. A whitelisted sender whose account
 or signing infrastructure is later compromised can still pass until the
 whitelist entry is removed; that remains the explicit reliability and cost
-tradeoff of a hard whitelist. A bare `From:` spoof without an aligned SPF or
-DKIM pass falls through to both content scans.
+tradeoff of a hard whitelist. A bare `From:` spoof without a DMARC pass
+reported by ForwardEmail falls through to both content scans.
