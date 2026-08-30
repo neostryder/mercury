@@ -23,7 +23,7 @@ class FilteringPolicyStoreTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_migrates_reviewed_flat_ledger(self):
+    def test_migrates_known_flat_ledger(self):
         self.path.write_text(json.dumps({"rules": [
             "Hard bounce everything from kickstarnow.com (550)",
             "Hard bounce everything from kickstartrack.com (550)",
@@ -52,10 +52,10 @@ class FilteringPolicyStoreTests(unittest.TestCase):
         self.assertNotIn("rules", json.loads(self.path.read_text(encoding="utf-8")))
 
     def test_retains_unexpected_legacy_text_as_warning(self):
-        self.path.write_text(json.dumps({"rules": ["A rule not in the reviewed migration"]}))
+        self.path.write_text(json.dumps({"rules": ["A rule outside the known migration"]}))
         self.assertEqual(
             self.store.load()["migration_warnings"],
-            ["A rule not in the reviewed migration"],
+            ["A rule outside the known migration"],
         )
 
     def test_exact_address_match_overrides_domain(self):

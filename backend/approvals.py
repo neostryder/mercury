@@ -6,7 +6,7 @@ A brief holds the full turn history (not just the latest instruction),
 because every turn is re-interpreted with that whole history rather than in
 isolation - Loremaster needs to see the earlier back-and-forth to reason
 about a follow-up the same way a person would. A brief starts open and
-either resolves (a rule and/or action got committed, or nothing needed to
+either resolves (filtering changes and/or an action got committed, or nothing needed to
 be) or stays open awaiting the recipient's answer to a clarifying question.
 It is never deleted outright once resolved: a later reply asking about it
 (e.g. "why did you do that") should still find it, so `message_index` maps

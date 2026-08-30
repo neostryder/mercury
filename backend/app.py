@@ -52,7 +52,7 @@ telegram_approvals = TelegramApprovals(
     discuss=lambda history, ctx, outcome, new_message: discuss_resolved_brief(
         history, ctx, outcome, new_message
     ),
-    finalize=lambda change, source="rule_proposal": _finalize_change(change, source),
+    finalize=lambda change, source="filtering_proposal": _finalize_change(change, source),
     execute_action=lambda action, ctx: dispatch_action(action, ctx),
     execute_message_decision=lambda decision, brief: execute_message_decision(decision, brief),
 )
@@ -251,7 +251,7 @@ should be handled. This is not a rigid form to fill out: read the whole
 conversation so far and use your own judgment about what's actually being
 asked, the same way a person would. Their message is a brief, not a
 template to transcribe - if it expresses one wish or several, decide
-whatever combination of a rule and an action actually accomplishes their
+whatever combination of filtering changes and an action actually accomplishes their
 intent, grounded in what's actually true about this pipeline (below), not
 just a rewording of their sentence.{dictation_note}
 
@@ -265,7 +265,7 @@ assuming a generic mail system:
   Mercury cannot "un-defer" or restore a message that was never stored.
   If asked to recover already-rejected mail, say so plainly via CAVEAT
   rather than proposing a MAILBOX action that cannot do anything - the
-  only real fix for the future is a RULE change, and already-rejected mail
+  only real fix for the future is a filtering change, and already-rejected mail
   will only arrive on its own if the sender's server is still retrying.
 - {folders_note}
 
@@ -295,7 +295,7 @@ before writing anything.
 - QUESTION: if what's being asked is genuinely unclear, or a real design
   choice depends on the recipient's answer, ask it directly instead of
   guessing - this is the normal way to handle a brief that isn't ready for
-  a rule or action yet, not a fallback for emergencies only. NONE once you
+  a filtering change or action yet, not a fallback for emergencies only. NONE once you
   actually have enough to propose something, or if there's nothing left to
   resolve at all.
 - SENDER_LIST: a deterministic disposition based only on sender identity,
@@ -327,9 +327,9 @@ before writing anything.
   carried out by a separate, scoped step with no further context, so it
   must be unambiguous on its own>" or "UNSUBSCRIBE: <sender domain and any
   nuance>" (the unsubscribe route's safety is evaluated separately before
-  anything is done, and it decides its own bounce rule afterward, so RULE
-  should be NONE for this kind). NONE if nothing should happen to existing
-  mail.
+  anything is done). Do not infer a sender-list preference from an
+  unsubscribe request alone; propose one only if the recipient separately
+  expressed it. NONE if nothing should happen to existing mail.
 - CAVEAT: a direct heads-up about anything the recipient should know before
   approving. Two independent things to check, either can apply:
   - Alongside a SEMANTIC_RULE: judge whether it actually adds distinguishing
@@ -361,15 +361,15 @@ async def discuss_resolved_brief(
     history: list[dict], message_context: str, outcome_summary: str, new_message: str
 ) -> str:
     """A resolved brief's own follow-up question, e.g. challenging whether a
-    committed rule actually did anything. Purely conversational - never
-    changes the rules ledger or takes an action itself; that requires a new
+    committed filtering change actually did anything. Purely conversational - never
+    changes the filtering policy or takes an action itself; that requires a new
     brief or the dashboard's own reverse-rule control."""
     prompt = f"""A brief you already resolved is being followed up on. Answer the
 recipient's question directly and honestly, using the full context below -
-if their question raises a real problem with what you did (the rule you
+if their question raises a real problem with what you did (the filtering change you
 added doesn't actually change anything, you missed something, or similar),
 say so plainly instead of being defensive. This is a conversation, not a
-new proposal: do not add or change anything in the rules ledger from this
+new proposal: do not add or change anything in the filtering policy from this
 reply, and do not carry out any action - if the recipient wants that,
 they'll say so explicitly, and it will start a new brief.
 
@@ -486,10 +486,9 @@ Report exactly what was done, or why no action was taken."""
 
 async def execute_unsubscribe_action(action: str, message_context: str) -> tuple[str, dict | None]:
     """Runs the unsubscribe attempt and reports its own outcome - this never
-    commits a bounce rule itself. Whether to add one is a separate question
-    asked back to the recipient afterward (see ask_bounce_decision in
-    telegram_approvals.py), since an unsubscribe request is not, by itself, a
-    request for a standing rule."""
+    commits a sender-list entry itself. Whether to add one is a separate
+    Approve/Discard proposal after the outcome, since an unsubscribe request
+    is not, by itself, a standing sender decision."""
     prompt = f"""The recipient has approved an unsubscribe request and it should be carried
 out now, using your browsing skill.
 
@@ -540,6 +539,13 @@ SUMMARY: <one or two sentences: what you found, and what you did or why you stop
     safe = bool(re.search(r"SAFE:\s*yes", content, re.IGNORECASE))
     domain_match = re.search(r"DOMAIN:\s*(\S+)", content)
     domain = domain_match.group(1).strip().strip('".,') if domain_match else None
+    if domain:
+        try:
+            domain = normalize_selector(domain)
+            if "@" in domain:
+                domain = domain.rsplit("@", 1)[1]
+        except ValueError:
+            domain = None
     result_match = re.search(r"RESULT:\s*(\w+)", content, re.IGNORECASE)
     result = result_match.group(1).upper() if result_match else ("SKIPPED_UNSAFE" if not safe else "UNKNOWN")
     summary_match = re.search(r"SUMMARY:\s*(.+)", content, re.DOTALL)
@@ -661,7 +667,19 @@ async def execute_message_decision(decision: str, brief: dict) -> tuple[str, dic
             and not custom_action.get("native")
             and delivery_result.startswith("delivered to ")
         ):
-            await execute_standing_custom_action(custom_action, brief["message_context"])
+            try:
+                await execute_standing_custom_action(custom_action, brief["message_context"])
+            except Exception as exc:
+                custom_failure = f"standing custom action failed: {type(exc).__name__}: {exc}"
+                event_log.log_event("actions", {
+                    "executed_at": _now(),
+                    "kind": "CUSTOM_ACTION",
+                    "details": custom_action["instruction"],
+                    "outcome_summary": custom_failure,
+                    "result": "FAILED",
+                    "domain": custom_action["selector"],
+                })
+                delivery_result += f"; {custom_failure}"
 
     event_log.log_event("actions", {
         "executed_at": _now(),
@@ -743,7 +761,7 @@ def _deterministic_verdict(match) -> tuple[dict, dict]:
         {
             "verdict": match.verdict,
             "disposition": match.disposition,
-            "category": "OTHER",
+            "category": "SENDER_LIST",
             "alert": "NONE",
             "reasoning": reasoning,
             "triggered_rule": None,
@@ -844,7 +862,7 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     m6 = re.search(r"RULE_MATCH:\s*(.+)", content, re.DOTALL)
     if m6:
         candidate = m6.group(1).strip().strip('"')
-        # Only trusted if it matches a rule actually on the ledger - the
+        # Only trusted if it matches a rule actually in the policy - the
         # model can otherwise paraphrase or invent text that would silently
         # fail (or worse, match the wrong entry) when used to reverse a rule.
         if candidate and candidate.upper() != "NONE" and candidate in all_rules:
@@ -967,7 +985,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         redacted_content = redact(raw_content)
 
         policy = policy_store.load()
-        sender_match = policy_store.match_sender(sender_address)
+        sender_match = policy_store.match_sender(sender_address, policy)
         if sender_match:
             injection, verdict = _deterministic_verdict(sender_match)
         else:
@@ -1011,7 +1029,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
 
         raw_message = payload.get("raw")
         delivery_result = None
-        custom_action = policy_store.match_custom_action(sender_address)
+        custom_action = policy_store.match_custom_action(sender_address, policy)
         if enforced_disposition == "250" and not SHADOW_MODE:
             target_folder = "INBOX"
             if custom_action and custom_action.get("native", {}).get("kind") == "folder":
@@ -1131,11 +1149,10 @@ async def reverse_rule_endpoint(request: Request, x_mercury_secret: str | None =
 @app.post("/rules/propose")
 async def propose_rule(request: Request, x_mercury_secret: str | None = Header(None)):
     """Called by the Thunderbird extension when a message is flagged with a
-    free-text handling instruction. The instruction is interpreted into a
-    proposed rule (and, if it also calls for something to be done to mail
-    that already exists, a proposed scoped action) and sent to Telegram for
-    approval - see telegram_approvals.py. Nothing is committed or acted on
-    until the recipient approves it there.
+    free-text handling instruction. The instruction is interpreted into
+    typed filtering changes and, when needed, a scoped action on existing
+    mail, then sent to Telegram for approval. Nothing is committed or acted
+    on until the recipient approves it there.
     """
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")

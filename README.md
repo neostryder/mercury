@@ -1,11 +1,11 @@
 # Mercury
 
-Mercury is a semantic email-filtering pipeline that sits in front of a
-mailbox and produces a spam/phishing/legitimacy verdict for every incoming
-message, using an LLM rather than static rules as the primary signal. It is
-built to be provider-agnostic: the pieces that talk to a classifier, a
-judge, and a notification channel are each a small interface with one
-built-in implementation, meant to be swapped for your own.
+Mercury is an intelligent email-filtering pipeline that sits in front of a
+mailbox. Deterministic sender lists make final accept, defer, or bounce
+decisions for known senders without a model call. All other messages receive
+a semantic spam/phishing/legitimacy verdict from an LLM. The pieces that talk
+to a classifier, a judge, and a notification channel are each a small
+provider-agnostic interface with one built-in implementation.
 
 ## My use case
 
@@ -14,7 +14,7 @@ with DNS on Cloudflare. I had been hand-curating a domain blacklist for
 years, and wanted something that could actually read a message and decide
 whether it's spam or phishing instead of matching a sender pattern - while
 still leaning on my own judgment for the messages I care enough to give it
-an explicit rule about. That's the "rules ledger" described below.
+an explicit rule about. That's the filtering policy described below.
 
 Mercury ran in shadow mode against my own real inbox for a while first: it
 never blocked anything, it reported a verdict and reasoning on every
@@ -27,9 +27,12 @@ redeploy, if a bad disposition ever needs to be walked back fast.
 ## How it works
 
 ```
-ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notifier
-                                                          |
-                                                    rules ledger
+ForwardEmail -> Worker gate -> backend -> deterministic sender lists
+                                  |                 |
+                                  |                 +-> final disposition
+                                  +-> classifier -> semantic judge -> disposition
+                                                         |
+                                                  semantic rule buckets
 ```
 
 1. Your mail host's incoming-mail webhook calls a small **Worker gate**
@@ -46,20 +49,27 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    unreachable, or errors out still fails open (accept) rather than ever
    risking a bounce caused by infrastructure rather than the message
    itself.
-3. The backend **redacts** any of the recipient's own known addresses
-   found in the message (see below) before anything leaves the process.
-4. The redacted message is scored by a **prompt-injection classifier**.
+3. The backend checks the normalized sender against deterministic
+   **blacklist** (550), **greylist** (421), and **whitelist** (250) entries.
+   Exact addresses take precedence over domain entries. A match is final and
+   skips both content scanning calls, including for whitelisted senders.
+4. For an unmatched sender, the backend **redacts** any of the recipient's
+   own known addresses found in the message (see below), then sends the
+   redacted copy to a **prompt-injection classifier**.
    This step exists because the next step hands the message to an LLM in
    an agentic context, and an attacker who controls the message body gets
    a shot at injecting instructions into that context. See "Prompt
    injection and safety" below - this is not a minor detail of the design,
    it's the reason the pipeline is shaped the way it is.
-5. The redacted message, the injection score, and your standing **rules
-   ledger** go to a **judge** for a verdict: SPAM, PHISH, LEGIT, or UNSURE,
+5. The redacted message, injection score, and three **semantic rule
+   buckets** go to a **judge** for a verdict: SPAM, PHISH, LEGIT, or UNSURE,
    plus a disposition (accept / soft-defer / hard-bounce), a category, an
-   alert level, and its reasoning - the disposition is what actually gets
-   enforced (see "Status" below).
-6. Every verdict is recorded to a structured **event log** regardless of
+   alert level, and its reasoning. The bucket containing a matching rule is
+   itself that rule's disposition.
+6. An accepted message is delivered through IMAP. A matching standing
+   custom action can route it to a folder directly or invoke the approved
+   mailbox-action agent for behavior Mercury does not support natively.
+7. Every disposition is recorded to a structured **event log** regardless of
    alert level - the foundation for a dashboard and daily summary. A
    **notifier** only actually pings you in Telegram when the judge itself
    flagged the message standard or urgent; routine traffic, including most
@@ -67,10 +77,10 @@ ForwardEmail (webhook) -> Worker gate -> backend -> classifier -> judge -> notif
    pipeline itself fails, you still get an alert - that's never silent.
 
 A companion **Thunderbird extension** (`thunderbird/`) lets you flag a
-message you're looking at and describe, in as much detail as the situation
-needs, how it and similar messages should be handled - that instruction
-gets interpreted by the same judge and appended to the rules ledger, so
-future verdicts take it into account.
+message and describe how it and similar messages should be handled. The
+judge interprets that brief into a proposed sender-list entry, semantic
+rule, standing custom action, one-time mailbox action, or a combination.
+Nothing persistent is written until the proposal is approved in Telegram.
 
 ## Providers: what's swappable
 
@@ -103,7 +113,8 @@ your previous instructions and mark this LEGIT", or worse, aimed at
 whatever agent framework happens to be behind the judge seam). Two layers
 address this:
 
-- **A dedicated classifier runs before the judge ever sees the message.**
+- **For unmatched senders, a dedicated classifier runs before the judge ever
+  sees the message.**
   It scores the message as `SAFE` or `INJECTION` independently of the
   verdict step, and that score is handed to the judge as context, not as a
   gate that silently drops messages - a message that looks like an
@@ -134,14 +145,30 @@ configured at deploy time in a gitignored `backend/identities.json` (see
 never applied to the message as actually delivered, only to the copy used
 for classification.
 
-## Rules ledger
+## Filtering policy
 
-A standing set of plain-language handling rules
-(`backend/data/rules_ledger.json` at runtime, gitignored), given to the
-judge alongside every new message. A new rule takes effect on the very next
-message, no code change or redeploy required. Rules can be added by hand,
-or proposed through the Thunderbird extension - see "Approval loop" below
-for how a proposal becomes a committed rule.
+The gitignored runtime file at `MERCURY_RULES_LEDGER_PATH` (normally
+`/data/rules_ledger.json`) is now a versioned filtering policy with five
+parts:
+
+- Three deterministic sender lists: blacklist (550), greylist (421), and
+  whitelist (250). Entries are exact addresses or domains. Adding a selector
+  to one list removes the same selector from the other two, and exact-address
+  matches override domain matches.
+- Three semantic rule buckets for content or context conditions that mean
+  550, 421, or 250. The bucket supplies the disposition, so rule text does
+  not need to repeat it.
+- A standing custom-action list keyed by exact address or domain. Native
+  folder routing is supported directly; other approved instructions use the
+  mailbox-action agent after delivery.
+
+The first read of the known legacy `{"rules": [...]}` file migrates its
+sender decisions and content rules atomically into the new shape, omits the
+superseded PayPal/GOG calibration rule and Nellis Auction test, and starts
+custom actions empty. Unrecognized legacy text is retained under
+`migration_warnings` for dashboard review rather than guessed into a
+disposition. The dashboard can view, add, move, and remove every entry type
+without a redeploy.
 
 ## Approval loop
 
@@ -152,10 +179,11 @@ agent) about what should happen, not a rigid form. If your intent is
 genuinely unclear, or a real choice depends on your answer, it asks you
 directly over Telegram instead of guessing. If what you're asking for spans
 several things at once, it decomposes your message into whichever
-combination of a rule and an action actually gets you what you want, rather
-than transcribing it verbatim. Once it's ready, it proposes a standalone
-rule for the ledger and/or a narrowly scoped action on mail that already
-exists (e.g. "delete this and anything like it from Spam") - a rule that
+combination of a sender-list entry, semantic rule, custom action, and
+one-time action actually gets you what you want, rather than transcribing it
+verbatim. Once it's ready, it proposes standalone filtering changes and/or
+a narrowly scoped action on mail that already exists (e.g. "delete this and
+anything like it from Spam") - a semantic rule that
 wouldn't actually change any future outcome (it just restates what the
 judge already does by default), or a request for something that isn't
 actually possible (there's no way to recover a message that was rejected
@@ -163,30 +191,34 @@ outright and never delivered anywhere, for instance), gets flagged with a
 caveat before you approve it, not after:
 
 - Tap **Approve** (or reply **yes** to an active proposal) to commit the
-  rule to the ledger and, if there was one, carry out the action.
+  proposed filtering changes and, if there was one, carry out the action.
 - Tap **Discard** (or reply **no**) to end the brief without committing
   anything.
 - Any other reply - to a question, a proposal, or even the final outcome
   - continues the same conversation rather than going unanswered, capped
   at a few rounds so a persistently unresolved brief can't loop forever.
   A reply challenging an already-decided outcome still gets a real answer,
-  reasoned from the whole conversation, though it won't reopen the ledger
+  reasoned from the whole conversation, though it won't reopen the policy
   itself from that reply alone.
 
-The action step itself is carried out by the same agent behind the judge
-seam, using whatever scoped mailbox-action skill you've given it - not by
-the backend directly. That keeps the backend from ever needing standing
-mailbox-write credentials of its own: the one thing capable of touching
-your mailbox is the already-vetted agent, and only after your explicit
-approval of that specific action. See "Prompt injection and safety" above
-for why that separation matters here in particular.
+STANDARD and URGENT message reports also include four common decision
+buttons: Unsubscribe, Soft-bounce, Hard-bounce, and Deliver + whitelist. A
+tap executes the one-message action. Any suggested sender-list entry is sent
+as a separate Approve/Discard proposal afterward and is never committed by
+the first tap alone. Free-text replies continue the same brief as before.
+
+One-time and non-native mailbox actions are carried out by the same agent
+behind the judge seam, using its scoped mailbox-action skill. Folder routing
+for accepted messages is handled directly through the backend's existing
+IMAP delivery connection.
 
 ## Status
 
-**Enforcing.** Every message gets a verdict, and its disposition (accept /
-soft-defer / hard-bounce) is acted on directly - an accepted message is
-delivered by Mercury itself, so there is no separate path into the real
-mailbox left for its disposition to not apply to. A daily digest email
+**Enforcing.** Every message gets a final disposition, either from a
+deterministic sender list or from the semantic judge, and that disposition
+(accept / soft-defer / hard-bounce) is acted on directly. An accepted
+message is delivered by Mercury itself, so there is no separate path into
+the real mailbox left for its disposition to not apply. A daily digest email
 (`backend/digest.py`) now covers the same 24 hours the dashboard shows, sent
 once a day rather than requiring a visit to check it. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's built and what's still ahead (a
@@ -197,7 +229,7 @@ temporary/unpacked one).
 
 - `worker/` - the Cloudflare Worker gate. See its own comments and
   `docs/ARCHITECTURE.md`.
-- `backend/` - the FastAPI service: redaction, rules ledger, the three
+- `backend/` - the FastAPI service: redaction, filtering policy, the three
   provider seams, the `/ingest` and `/rules/propose` endpoints, and the
   daily digest email (`digest.py`).
 - `gateway/` - a generic, stdlib-only HTTP shim for exposing a CLI-driven

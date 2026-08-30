@@ -379,4 +379,35 @@
   Also strengthened the brief prompt to decompose a multi-part request into
   whatever combination of a rule and an action actually satisfies it,
   rather than transcribing it close to verbatim.
-
+- Replaced the flat semantic rules ledger with one versioned, atomically
+  written filtering policy containing deterministic blacklist, greylist,
+  and whitelist sender entries; 550, 421, and 250 semantic rule buckets;
+  and standing custom actions. Exact sender addresses override domains, and
+  adding a selector to one deterministic list removes it from the other two.
+  Legacy policy migrates in place with the known sender and semantic entries,
+  omitting the superseded PayPal/GOG exception and Nellis Auction test.
+- Deterministic sender matches now provide the final disposition before
+  content processing and skip both the injection classifier and semantic
+  judge. Their message events contain an explicit skipped-list injection
+  label, verdict, category, and list-match reasoning. Whitelist matches also
+  skip content scanning by design. Accepted deterministic matches use a
+  `SENDER_LIST` Thunderbird category tag.
+- Split the semantic judge context into labeled 550, 421, and 250 rule
+  blocks, retaining exact `RULE_MATCH` reversal. Recalibrated the general
+  prompt toward LEGIT/250 for ordinary transactional mail and identifiable
+  business newsletters, reserving 421 for concrete ambiguity and 550 for
+  clearly malicious, lewd, or unsolicited spam content.
+- Added Unsubscribe, Soft-bounce, Hard-bounce, and Deliver + whitelist
+  buttons to STANDARD and URGENT Telegram reports. The one-message action
+  executes first; any matching sender-list entry is presented afterward as
+  a separate Approve/Discard proposal. A retained raw message supports
+  manual delivery after defer and is removed from approval state when the
+  decision runs or the brief resolves.
+- Added standing custom actions. Native folder routing changes the IMAP
+  APPEND target for accepted mail; non-native instructions run through the
+  scoped mailbox-action agent after successful delivery. The migrated list
+  starts empty.
+- Added authenticated dashboard management for all deterministic sender
+  lists, semantic rule buckets, and standing custom actions, including
+  visible warnings for any unrecognized text encountered during legacy
+  migration.

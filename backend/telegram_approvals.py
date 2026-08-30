@@ -11,7 +11,7 @@ channel that can receive messages, not just send them.
 Flow: propose_new() opens a brief with the flagged message and the
 recipient's instruction, and asks Loremaster to advance it - the result is
 either a QUESTION (sent as plain text, brief stays open awaiting an answer)
-or a proposed RULE and/or ACTION (sent with Approve/Discard buttons).
+or typed filtering changes and/or an ACTION (sent with Approve/Discard buttons).
 poll_forever() long-polls for button taps and replies. Every message Mercury
 sends for a brief is tracked back to it - not just the first one - so a
 reply to ANY message in that thread (a question, a proposal, an "approved,
@@ -108,6 +108,7 @@ class TelegramApprovals:
         changes = result["changes"]
         action = result["action"]
         caveat = result["caveat"]
+        intro = result.get("intro")
         if question:
             self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
             text = f"Question: {question}"
@@ -116,6 +117,8 @@ class TelegramApprovals:
         elif changes or action:
             self._store.update_brief(brief_id, changes=changes, action=action, caveat=caveat)
             text = self._proposal_text(changes, action, caveat)
+            if intro:
+                text = f"{intro}\n\n{text}"
             self._store.append_turn(brief_id, "loremaster", text)
             keyboard = {
                 "inline_keyboard": [[
@@ -339,7 +342,16 @@ class TelegramApprovals:
     async def _run_message_decision(self, brief_id: str, brief: dict, decision: str) -> None:
         if decision in ("unsubscribe", "deliver"):
             await self._send("Approved - working on it now...")
-        outcome, followup_change = await self._execute_message_decision(decision, brief)
+        try:
+            outcome, followup_change = await self._execute_message_decision(decision, brief)
+        except Exception as exc:
+            self._store.update_brief(brief_id, message_decision=None)
+            outcome = f"Decision failed: {type(exc).__name__}: {exc}. You can try again."
+            self._store.append_turn(brief_id, "loremaster", outcome)
+            message_id = await self._send(outcome)
+            if message_id is not None:
+                self._store.track_message(message_id, brief_id)
+            return
         self._store.forget_raw_message(brief_id)
         self._store.append_turn(brief_id, "loremaster", outcome)
         message_id = await self._send(outcome)
@@ -352,6 +364,10 @@ class TelegramApprovals:
                 "changes": [followup_change],
                 "action": None,
                 "caveat": None,
+                "intro": (
+                    f"Also add {followup_change['selector']} to the "
+                    f"{followup_change['list']} going forward?"
+                ),
             })
         else:
             self._store.resolve_brief(brief_id)
@@ -360,7 +376,7 @@ class TelegramApprovals:
         result_lines = []
         followup_change = None
         for change in brief.get("changes", []):
-            await self._finalize(change, "rule_proposal")
+            await self._finalize(change, "filtering_proposal")
             result_lines.append(f"Standing change added: {self._change_text(change)}")
         if brief.get("action"):
             # The action itself (a real agent call - browsing, mailbox work)
@@ -390,6 +406,10 @@ class TelegramApprovals:
                 "changes": [followup_change],
                 "action": None,
                 "caveat": None,
+                "intro": (
+                    f"Also add {followup_change['selector']} to the "
+                    f"{followup_change['list']} going forward?"
+                ),
             })
         else:
             self._store.resolve_brief(brief_id)

@@ -77,7 +77,7 @@ except ModuleNotFoundError:
 
 import app
 from approvals import ApprovalStore
-from filtering import FilteringPolicyStore
+from filtering import FilteringPolicyStore, empty_policy
 from telegram_approvals import TelegramApprovals
 
 
@@ -98,6 +98,7 @@ class AppTests(unittest.TestCase):
         self.original_store = app.policy_store
         self.original_classifier = app.classifier
         self.original_judge = app.judge
+        self.original_notifier = app.notifier
         self.original_delivery_enabled = app.mail_delivery.DELIVER_ACCEPTED_MAIL
         app.policy_store = self.store
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = False
@@ -106,6 +107,7 @@ class AppTests(unittest.TestCase):
         app.policy_store = self.original_store
         app.classifier = self.original_classifier
         app.judge = self.original_judge
+        app.notifier = self.original_notifier
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = self.original_delivery_enabled
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -139,7 +141,26 @@ class AppTests(unittest.TestCase):
         message = next(fields for table, fields in events if table == "messages")
         self.assertEqual(message["injection_label"], "SKIPPED_BLACKLIST")
         self.assertEqual(message["verdict"], "SPAM")
+        self.assertEqual(message["category"], "SENDER_LIST")
         self.assertIn("deterministic blacklist", message["reasoning"])
+
+    def test_ambiguous_policy_fails_open_and_alerts(self):
+        policy = empty_policy()
+        policy["sender_lists"]["blacklist"] = ["example.com"]
+        policy["sender_lists"]["whitelist"] = ["example.com"]
+        self.store.path.write_text(json.dumps(policy), encoding="utf-8")
+        app.notifier = SimpleNamespace(send=AsyncMock())
+
+        response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(response.status_code, 250)
+        body = (
+            response.content
+            if hasattr(response, "content")
+            else json.loads(response.body.decode("utf-8"))
+        )
+        self.assertFalse(body["ok"])
+        self.assertEqual(app.notifier.send.await_count, 1)
 
     def test_judge_prompt_uses_buckets_and_legitimate_mail_calibration(self):
         captured = []
@@ -278,7 +299,11 @@ class TelegramDecisionTests(unittest.TestCase):
         asyncio.run(self.telegram.send_trackable_report(
             "Mercury report",
             "From: news@example.com",
-            {"sender_address": "news@example.com", "sender_domain": "example.com"},
+            {
+                "sender_address": "news@example.com",
+                "sender_domain": "example.com",
+                "raw_message": "Subject: Test\r\n\r\nBody",
+            },
         ))
         keyboard = self.telegram._send.await_args.kwargs["keyboard"]
         labels = [button["text"] for row in keyboard["inline_keyboard"] for button in row]
@@ -295,6 +320,7 @@ class TelegramDecisionTests(unittest.TestCase):
         brief = self.store.get_brief(brief_id)
         self.assertEqual(brief["changes"][0]["list"], "greylist")
         self.assertEqual(brief["status"], "open")
+        self.assertNotIn("raw_message", brief["message_metadata"])
         self.assertEqual(self.finalize.await_count, 0)
 
         asyncio.run(self.telegram._handle_callback({

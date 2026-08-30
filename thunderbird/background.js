@@ -21,10 +21,12 @@ messenger.menus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// Mirrors backend/app.py's CATEGORIES list. The two lists have to be kept
-// in sync by hand since the extension and the backend ship from the same
-// repo but not as a shared module.
+// Mirrors backend/app.py's semantic categories and adds the deterministic
+// SENDER_LIST category. The two lists have to be kept in sync by hand since
+// the extension and the backend ship from the same repo but not as a shared
+// module.
 const CATEGORY_TAGS = {
+  SENDER_LIST: { key: "mercury-sender-list", name: "Mercury: Sender List", color: "#4DA3FF" },
   NEWSLETTER: { key: "mercury-newsletter", name: "Mercury: Newsletter", color: "#3B6FA0" },
   PROMOTIONAL: { key: "mercury-promotional", name: "Mercury: Promotional", color: "#D98C2B" },
   TRANSACTIONAL: { key: "mercury-transactional", name: "Mercury: Transactional", color: "#2E9E6D" },

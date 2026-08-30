@@ -80,10 +80,10 @@ def selector_domain(selector: str) -> str:
 
 
 def migrate_legacy_rules(rules: list[str]) -> dict:
-    """Migrate the reviewed flat ledger without inferring new policy.
+    """Migrate the known flat ledger without inferring new policy.
 
     The production ledger being replaced has eight known entries. Recognition
-    is deliberately tied to their reviewed domains and phrases. Anything
+    is deliberately tied to their known domains and phrases. Anything
     unexpected is retained as a warning for a human instead of being guessed
     into a disposition bucket where it could reject mail incorrectly.
     """
@@ -259,7 +259,9 @@ class FilteringPolicyStore:
     def snapshot(self) -> dict:
         return copy.deepcopy(self.load())
 
-    def match_sender(self, address: str | None) -> SenderListMatch | None:
+    def match_sender(
+        self, address: str | None, policy: dict | None = None
+    ) -> SenderListMatch | None:
         if not address:
             return None
         try:
@@ -269,7 +271,7 @@ class FilteringPolicyStore:
         if "@" not in normalized_address:
             return None
         domain = selector_domain(normalized_address)
-        policy = self.load()
+        policy = policy or self.load()
         for selector in (normalized_address, domain):
             for list_name in SENDER_LISTS:
                 if selector in policy["sender_lists"][list_name]:
@@ -369,7 +371,9 @@ class FilteringPolicyStore:
         self._save(policy)
         return True
 
-    def match_custom_action(self, address: str | None) -> dict | None:
+    def match_custom_action(
+        self, address: str | None, policy: dict | None = None
+    ) -> dict | None:
         if not address:
             return None
         try:
@@ -379,6 +383,7 @@ class FilteringPolicyStore:
         if "@" not in normalized_address:
             return None
         domain = selector_domain(normalized_address)
-        by_selector = {entry["selector"]: entry for entry in self.load()["custom_actions"]}
+        policy = policy or self.load()
+        by_selector = {entry["selector"]: entry for entry in policy["custom_actions"]}
         entry = by_selector.get(normalized_address) or by_selector.get(domain)
         return copy.deepcopy(entry) if entry else None

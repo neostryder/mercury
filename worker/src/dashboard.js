@@ -384,51 +384,56 @@ const SEMANTIC_LABELS = {
 let filteringPolicy = null;
 
 function policyEntry(primary, detail, kind, group, index) {
-  return `<div class="policy-entry">
-    <div><div>${esc(primary)}</div>${detail ? `<div class="policy-entry-detail">${esc(detail)}</div>` : ''}</div>
-    <button class="btn secondary" data-policy-remove="${esc(kind)}" data-policy-group="${esc(group)}" data-policy-index="${index}">Remove</button>
-  </div>`;
+  return '<div class="policy-entry">' +
+    '<div><div>' + esc(primary) + '</div>' +
+      (detail ? '<div class="policy-entry-detail">' + esc(detail) + '</div>' : '') +
+    '</div>' +
+    '<button class="btn secondary" data-policy-remove="' + esc(kind) +
+      '" data-policy-group="' + esc(group) + '" data-policy-index="' + index +
+      '">Remove</button>' +
+    '</div>';
 }
 
 function renderFilteringPolicy() {
   if (!filteringPolicy) return;
   const warnings = filteringPolicy.migration_warnings || [];
   document.getElementById('filteringWarnings').innerHTML = warnings.length
-    ? `<div class="policy-warning"><strong>Unmapped legacy rules need review.</strong><br>${warnings.map(esc).join('<br>')}</div>`
+    ? '<div class="policy-warning"><strong>Unmapped legacy rules need review.</strong><br>' +
+      warnings.map(esc).join('<br>') + '</div>'
     : '';
 
   const senderCards = Object.entries(SENDER_LIST_LABELS).map(([listName, label]) => {
     const entries = filteringPolicy.sender_lists[listName] || [];
-    return `<div class="policy-card">
-      <h3>${esc(label)}</h3>
-      <div>${entries.length
+    return '<div class="policy-card">' +
+      '<h3>' + esc(label) + '</h3>' +
+      '<div>' + (entries.length
         ? entries.map((selector, index) => policyEntry(selector, '', 'sender_list', listName, index)).join('')
-        : '<div class="muted">No entries.</div>'}</div>
-      <form class="policy-form" data-policy-form="sender_list" data-policy-group="${esc(listName)}">
-        <input name="selector" required placeholder="domain.example or person@example.com">
-        <button class="btn" type="submit">Add or move</button>
-      </form>
-    </div>`;
+        : '<div class="muted">No entries.</div>') + '</div>' +
+      '<form class="policy-form" data-policy-form="sender_list" data-policy-group="' + esc(listName) + '">' +
+        '<input name="selector" required placeholder="domain.example or person@example.com">' +
+        '<button class="btn" type="submit">Add or move</button>' +
+      '</form>' +
+    '</div>';
   }).join('');
 
   const semanticCards = Object.entries(SEMANTIC_LABELS).map(([disposition, label]) => {
     const entries = filteringPolicy.semantic_rules[disposition] || [];
-    return `<div class="policy-card">
-      <h3>${esc(label)}</h3>
-      <div>${entries.length
+    return '<div class="policy-card">' +
+      '<h3>' + esc(label) + '</h3>' +
+      '<div>' + (entries.length
         ? entries.map((rule, index) => policyEntry(rule, '', 'semantic_rule', disposition, index)).join('')
-        : '<div class="muted">No entries.</div>'}</div>
-      <form class="policy-form" data-policy-form="semantic_rule" data-policy-group="${esc(disposition)}">
-        <textarea name="rule" required placeholder="Content or context condition only"></textarea>
-        <button class="btn" type="submit">Add or move</button>
-      </form>
-    </div>`;
+        : '<div class="muted">No entries.</div>') + '</div>' +
+      '<form class="policy-form" data-policy-form="semantic_rule" data-policy-group="' + esc(disposition) + '">' +
+        '<textarea name="rule" required placeholder="Content or context condition only"></textarea>' +
+        '<button class="btn" type="submit">Add or move</button>' +
+      '</form>' +
+    '</div>';
   }).join('');
 
   const customEntries = filteringPolicy.custom_actions || [];
-  const customCard = `<div class="policy-card">
-    <h3>Standing custom actions</h3>
-    <div>${customEntries.length
+  const customCard = '<div class="policy-card">' +
+    '<h3>Standing custom actions</h3>' +
+    '<div>' + (customEntries.length
       ? customEntries.map((entry, index) => policyEntry(
           entry.selector,
           entry.instruction + (entry.native ? ' | folder: ' + entry.native.folder : ' | agent fallback'),
@@ -436,19 +441,19 @@ function renderFilteringPolicy() {
           'custom_actions',
           index,
         )).join('')
-      : '<div class="muted">No entries.</div>'}</div>
-    <form class="policy-form" data-policy-form="custom_action" data-policy-group="custom_actions">
-      <input name="selector" required placeholder="domain.example or person@example.com">
-      <textarea name="instruction" required placeholder="Standing action to apply after accepted delivery"></textarea>
-      <input name="native_folder" placeholder="Existing IMAP folder, or blank for agent fallback">
-      <button class="btn" type="submit">Add or replace</button>
-    </form>
-  </div>`;
+      : '<div class="muted">No entries.</div>') + '</div>' +
+    '<form class="policy-form" data-policy-form="custom_action" data-policy-group="custom_actions">' +
+      '<input name="selector" required placeholder="domain.example or person@example.com">' +
+      '<textarea name="instruction" required placeholder="Standing action to apply after accepted delivery"></textarea>' +
+      '<input name="native_folder" placeholder="Existing IMAP folder, or blank for agent fallback">' +
+      '<button class="btn" type="submit">Add or replace</button>' +
+    '</form>' +
+  '</div>';
 
-  document.getElementById('filteringPolicy').innerHTML = `
-    <div><div class="policy-group-title">Deterministic sender lists</div><div class="policy-grid">${senderCards}</div></div>
-    <div><div class="policy-group-title">Semantic rule buckets</div><div class="policy-grid">${semanticCards}</div></div>
-    <div><div class="policy-group-title">Post-delivery behavior</div><div class="policy-grid">${customCard}</div></div>`;
+  document.getElementById('filteringPolicy').innerHTML =
+    '<div><div class="policy-group-title">Deterministic sender lists</div><div class="policy-grid">' + senderCards + '</div></div>' +
+    '<div><div class="policy-group-title">Semantic rule buckets</div><div class="policy-grid">' + semanticCards + '</div></div>' +
+    '<div><div class="policy-group-title">Post-delivery behavior</div><div class="policy-grid">' + customCard + '</div></div>';
 }
 
 async function loadFilteringPolicy() {
