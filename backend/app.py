@@ -864,6 +864,88 @@ async def health():
     return {"status": "ok", "service": "mercury-backend"}
 
 
+@app.get("/filtering")
+async def get_filtering_policy(x_mercury_secret: str | None = Header(None)):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return policy_store.snapshot()
+
+
+@app.post("/filtering")
+async def change_filtering_policy(
+    request: Request, x_mercury_secret: str | None = Header(None)
+):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    payload = await request.json()
+    operation = payload.get("operation")
+    kind = payload.get("kind")
+    if operation not in ("put", "remove"):
+        raise HTTPException(status_code=400, detail="operation must be put or remove")
+
+    try:
+        if kind == "sender_list":
+            change = {
+                "kind": kind,
+                "list": payload["list"],
+                "selector": normalize_selector(payload["selector"]),
+            }
+            if operation == "put":
+                policy_store.put_sender(change["list"], change["selector"])
+                changed = True
+            else:
+                changed = policy_store.remove_sender(change["list"], change["selector"])
+        elif kind == "semantic_rule":
+            change = {
+                "kind": kind,
+                "disposition": str(payload["disposition"]),
+                "rule": payload["rule"].strip(),
+            }
+            if operation == "put":
+                changed = policy_store.add_semantic_rule(
+                    change["disposition"], change["rule"]
+                )
+            else:
+                changed = policy_store.remove_semantic_rule(
+                    change["disposition"], change["rule"]
+                )
+        elif kind == "custom_action":
+            change = {
+                "kind": kind,
+                "selector": normalize_selector(payload["selector"]),
+                "instruction": payload.get("instruction", "").strip(),
+            }
+            native_folder = payload.get("native_folder", "").strip()
+            if native_folder:
+                folders = await asyncio.to_thread(mail_delivery.list_folders)
+                if native_folder not in folders:
+                    raise ValueError("native folder is not present in the mailbox")
+                change["native_folder"] = native_folder
+            if operation == "put":
+                policy_store.put_custom_action(
+                    change["selector"], change["instruction"], native_folder or None
+                )
+                changed = True
+            else:
+                changed = policy_store.remove_custom_action(change["selector"])
+        else:
+            raise ValueError("unknown filtering entry kind")
+    except (KeyError, AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not changed and operation == "remove":
+        raise HTTPException(status_code=404, detail="filtering entry not found")
+    if changed:
+        event_log.log_event("rule_changes", {
+            "changed_at": _now(),
+            "action": "added" if operation == "put" else "removed",
+            "rule_text": _change_text(change),
+            "source": "dashboard",
+        })
+    return {"ok": True, "changed": changed, "policy": policy_store.snapshot()}
+
+
 @app.post("/ingest")
 async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
     if x_mercury_secret != SHARED_SECRET:
@@ -1027,13 +1109,10 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
 
 @app.post("/rules/reverse")
 async def reverse_rule_endpoint(request: Request, x_mercury_secret: str | None = Header(None)):
-    """Called by the Worker dashboard's hard-bounce detail view. The rules
-    ledger lives only on this backend's filesystem (see load_rules_ledger
-    above), not in D1, so reversing a rule removes it from
-    rules_ledger.json directly and logs the removal via event_log the same
-    way _finalize_rule logs an addition. Identified by the rule's own exact
-    text (the ledger has no separate id of its own) - the caller already has
-    it, from the message's saved triggered_rule.
+    """Called by the Worker dashboard's hard-bounce detail view. Semantic
+    policy lives only on the backend filesystem, not in D1, so reversal is a
+    backend operation. The caller identifies the rule by the exact text saved
+    in the message's triggered_rule field.
     """
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")

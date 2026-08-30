@@ -112,6 +112,13 @@ async function handleDashboard(pathname, search, env, request) {
   const actionItemCompleteMatch = pathname.match(/^\/dashboard\/api\/action-items\/(\d+)\/complete$/);
 
   try {
+    if (pathname === '/dashboard/api/filtering') {
+      if (request.method !== 'GET' && request.method !== 'POST') {
+        return new Response('method not allowed', { status: 405 });
+      }
+      return proxyFilteringPolicy(request, env);
+    }
+
     if (pathname === '/dashboard/api/trends') {
       const db = env.MERCURY_LOG;
       const [volumeRows, categoryRows] = await Promise.all([
@@ -376,6 +383,45 @@ async function reverseRule(rule, env) {
     ).bind(new Date().toISOString(), 'rule_reversed', rule).run();
   }
   return new Response(text, { status: resp.status, headers: { 'Content-Type': 'application/json' } });
+}
+
+// The filtering policy is stored on the backend filesystem, not in D1. The
+// dashboard is already protected by Basic Auth; this hop additionally uses
+// the backend's shared secret and never exposes it to browser JavaScript.
+async function proxyFilteringPolicy(request, env) {
+  const headers = { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET };
+  let body;
+  if (request.method === 'POST') {
+    const declaredLength = Number(request.headers.get('Content-Length') || 0);
+    if (declaredLength > 32768) {
+      return new Response('request too large', { status: 413 });
+    }
+    body = await request.text();
+    if (body.length > 32768) {
+      return new Response('request too large', { status: 413 });
+    }
+    headers['Content-Type'] = 'application/json';
+  }
+
+  try {
+    const response = await fetch(`${env.BACKEND_BASE_URL}/filtering`, {
+      method: request.method,
+      headers,
+      body,
+    });
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        'Content-Type': response.headers.get('Content-Type') || 'application/json',
+        'Strict-Transport-Security': HSTS,
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ ok: false, error: 'backend unreachable' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json', 'Strict-Transport-Security': HSTS },
+    });
+  }
 }
 
 async function proxySynchronously(backendUrl, bodyText, env) {

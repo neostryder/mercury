@@ -211,6 +211,43 @@ CAVEAT: NONE""")
         self.assertEqual(parsed["changes"][1]["disposition"], "421")
         self.assertEqual(parsed["changes"][2]["native_folder"], "Archive")
 
+    def test_filtering_management_endpoint_mutates_all_entry_types(self):
+        with patch.object(app.event_log, "log_event"):
+            asyncio.run(app.change_filtering_policy(FakeRequest({
+                "operation": "put",
+                "kind": "sender_list",
+                "list": "blacklist",
+                "selector": "example.com",
+            }), "test-secret"))
+            asyncio.run(app.change_filtering_policy(FakeRequest({
+                "operation": "put",
+                "kind": "sender_list",
+                "list": "whitelist",
+                "selector": "example.com",
+            }), "test-secret"))
+            asyncio.run(app.change_filtering_policy(FakeRequest({
+                "operation": "put",
+                "kind": "semantic_rule",
+                "disposition": "421",
+                "rule": "A genuinely ambiguous message condition",
+            }), "test-secret"))
+            with patch.object(app.mail_delivery, "list_folders", return_value=["INBOX", "Archive"]):
+                asyncio.run(app.change_filtering_policy(FakeRequest({
+                    "operation": "put",
+                    "kind": "custom_action",
+                    "selector": "example.com",
+                    "instruction": "File accepted mail in Archive",
+                    "native_folder": "Archive",
+                }), "test-secret"))
+
+        policy = asyncio.run(app.get_filtering_policy("test-secret"))
+        self.assertEqual(policy["sender_lists"]["blacklist"], [])
+        self.assertEqual(policy["sender_lists"]["whitelist"], ["example.com"])
+        self.assertEqual(
+            policy["semantic_rules"]["421"], ["A genuinely ambiguous message condition"]
+        )
+        self.assertEqual(policy["custom_actions"][0]["native"]["folder"], "Archive")
+
 
 class TelegramDecisionTests(unittest.TestCase):
     def setUp(self):

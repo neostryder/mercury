@@ -223,6 +223,21 @@ export const DASHBOARD_HTML = `<!doctype html>
   .action-item-row.done .action-item-summary { text-decoration: line-through; }
   .action-item-row input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; }
   .action-item-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .policy-groups { display: flex; flex-direction: column; gap: 18px; }
+  .policy-group-title { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 8px; }
+  .policy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+  .policy-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
+  .policy-card h3 { margin: 0 0 10px; font-size: 14px; }
+  .policy-entry { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); padding: 7px 0; font-size: 12px; word-break: break-word; }
+  .policy-entry:last-child { border-bottom: none; }
+  .policy-entry-detail { color: var(--muted); margin-top: 2px; }
+  .policy-form { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .policy-form input, .policy-form textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 12px; }
+  .policy-form textarea { min-height: 58px; resize: vertical; }
+  .policy-form .btn { align-self: flex-start; }
+  .btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+  .policy-warning { border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; }
+  .policy-status { min-height: 18px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
   @media (max-width: 640px) {
     main { padding: 16px; }
     header { padding: 16px; }
@@ -237,6 +252,13 @@ export const DASHBOARD_HTML = `<!doctype html>
 </header>
 <main>
   <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>Filtering policy</h2>
+    <div class="policy-status" id="filteringStatus"></div>
+    <div id="filteringWarnings"></div>
+    <div class="policy-groups" id="filteringPolicy"><div class="empty">Loading...</div></div>
+  </section>
 
   <section>
     <h2>Category breakdown (last 7 days)</h2>
@@ -348,6 +370,177 @@ async function loadSummary() {
         </div>\`).join('')
     : '<div class="empty">No data yet.</div>';
 }
+
+const SENDER_LIST_LABELS = {
+  blacklist: 'Blacklist (550)',
+  greylist: 'Greylist (421)',
+  whitelist: 'Whitelist (250)',
+};
+const SEMANTIC_LABELS = {
+  '550': 'Hard bounce rules (550)',
+  '421': 'Soft-defer rules (421)',
+  '250': 'Accept rules (250)',
+};
+let filteringPolicy = null;
+
+function policyEntry(primary, detail, kind, group, index) {
+  return `<div class="policy-entry">
+    <div><div>${esc(primary)}</div>${detail ? `<div class="policy-entry-detail">${esc(detail)}</div>` : ''}</div>
+    <button class="btn secondary" data-policy-remove="${esc(kind)}" data-policy-group="${esc(group)}" data-policy-index="${index}">Remove</button>
+  </div>`;
+}
+
+function renderFilteringPolicy() {
+  if (!filteringPolicy) return;
+  const warnings = filteringPolicy.migration_warnings || [];
+  document.getElementById('filteringWarnings').innerHTML = warnings.length
+    ? `<div class="policy-warning"><strong>Unmapped legacy rules need review.</strong><br>${warnings.map(esc).join('<br>')}</div>`
+    : '';
+
+  const senderCards = Object.entries(SENDER_LIST_LABELS).map(([listName, label]) => {
+    const entries = filteringPolicy.sender_lists[listName] || [];
+    return `<div class="policy-card">
+      <h3>${esc(label)}</h3>
+      <div>${entries.length
+        ? entries.map((selector, index) => policyEntry(selector, '', 'sender_list', listName, index)).join('')
+        : '<div class="muted">No entries.</div>'}</div>
+      <form class="policy-form" data-policy-form="sender_list" data-policy-group="${esc(listName)}">
+        <input name="selector" required placeholder="domain.example or person@example.com">
+        <button class="btn" type="submit">Add or move</button>
+      </form>
+    </div>`;
+  }).join('');
+
+  const semanticCards = Object.entries(SEMANTIC_LABELS).map(([disposition, label]) => {
+    const entries = filteringPolicy.semantic_rules[disposition] || [];
+    return `<div class="policy-card">
+      <h3>${esc(label)}</h3>
+      <div>${entries.length
+        ? entries.map((rule, index) => policyEntry(rule, '', 'semantic_rule', disposition, index)).join('')
+        : '<div class="muted">No entries.</div>'}</div>
+      <form class="policy-form" data-policy-form="semantic_rule" data-policy-group="${esc(disposition)}">
+        <textarea name="rule" required placeholder="Content or context condition only"></textarea>
+        <button class="btn" type="submit">Add or move</button>
+      </form>
+    </div>`;
+  }).join('');
+
+  const customEntries = filteringPolicy.custom_actions || [];
+  const customCard = `<div class="policy-card">
+    <h3>Standing custom actions</h3>
+    <div>${customEntries.length
+      ? customEntries.map((entry, index) => policyEntry(
+          entry.selector,
+          entry.instruction + (entry.native ? ' | folder: ' + entry.native.folder : ' | agent fallback'),
+          'custom_action',
+          'custom_actions',
+          index,
+        )).join('')
+      : '<div class="muted">No entries.</div>'}</div>
+    <form class="policy-form" data-policy-form="custom_action" data-policy-group="custom_actions">
+      <input name="selector" required placeholder="domain.example or person@example.com">
+      <textarea name="instruction" required placeholder="Standing action to apply after accepted delivery"></textarea>
+      <input name="native_folder" placeholder="Existing IMAP folder, or blank for agent fallback">
+      <button class="btn" type="submit">Add or replace</button>
+    </form>
+  </div>`;
+
+  document.getElementById('filteringPolicy').innerHTML = `
+    <div><div class="policy-group-title">Deterministic sender lists</div><div class="policy-grid">${senderCards}</div></div>
+    <div><div class="policy-group-title">Semantic rule buckets</div><div class="policy-grid">${semanticCards}</div></div>
+    <div><div class="policy-group-title">Post-delivery behavior</div><div class="policy-grid">${customCard}</div></div>`;
+}
+
+async function loadFilteringPolicy() {
+  const status = document.getElementById('filteringStatus');
+  try {
+    const res = await fetch('/dashboard/api/filtering');
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.detail || data.error || res.status);
+    filteringPolicy = data;
+    status.textContent = '';
+    renderFilteringPolicy();
+  } catch (err) {
+    status.textContent = 'Could not load filtering policy: ' + err;
+    document.getElementById('filteringPolicy').innerHTML = '';
+  }
+}
+
+async function mutateFilteringPolicy(payload) {
+  const status = document.getElementById('filteringStatus');
+  status.textContent = 'Saving...';
+  const res = await fetch('/dashboard/api/filtering', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = {};
+  }
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.detail || data.error || res.status);
+  }
+  filteringPolicy = data.policy;
+  renderFilteringPolicy();
+  status.textContent = data.changed === false ? 'No change was needed.' : 'Saved.';
+}
+
+document.getElementById('filteringPolicy').addEventListener('submit', async (event) => {
+  const form = event.target.closest('[data-policy-form]');
+  if (!form) return;
+  event.preventDefault();
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  const kind = form.dataset.policyForm;
+  const payload = { operation: 'put', kind };
+  if (kind === 'sender_list') {
+    payload.list = form.dataset.policyGroup;
+    payload.selector = values.get('selector');
+  } else if (kind === 'semantic_rule') {
+    payload.disposition = form.dataset.policyGroup;
+    payload.rule = values.get('rule');
+  } else {
+    payload.selector = values.get('selector');
+    payload.instruction = values.get('instruction');
+    payload.native_folder = values.get('native_folder');
+  }
+  button.disabled = true;
+  try {
+    await mutateFilteringPolicy(payload);
+  } catch (err) {
+    document.getElementById('filteringStatus').textContent = 'Save failed: ' + err;
+    button.disabled = false;
+  }
+});
+
+document.getElementById('filteringPolicy').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-policy-remove]');
+  if (!button || !filteringPolicy) return;
+  const kind = button.dataset.policyRemove;
+  const group = button.dataset.policyGroup;
+  const index = Number(button.dataset.policyIndex);
+  const payload = { operation: 'remove', kind };
+  if (kind === 'sender_list') {
+    payload.list = group;
+    payload.selector = filteringPolicy.sender_lists[group][index];
+  } else if (kind === 'semantic_rule') {
+    payload.disposition = group;
+    payload.rule = filteringPolicy.semantic_rules[group][index];
+  } else {
+    payload.selector = filteringPolicy.custom_actions[index].selector;
+  }
+  if (!window.confirm('Remove this filtering entry?')) return;
+  button.disabled = true;
+  try {
+    await mutateFilteringPolicy(payload);
+  } catch (err) {
+    document.getElementById('filteringStatus').textContent = 'Remove failed: ' + err;
+    button.disabled = false;
+  }
+});
 
 async function loadMessages(filter) {
   const url = '/dashboard/api/messages' + (filter ? '?disposition=' + filter : '');
@@ -540,6 +733,7 @@ document.getElementById('actionItemsPanel').addEventListener('change', async (e)
 });
 
 loadSummary();
+loadFilteringPolicy();
 loadMessages('');
 loadRules();
 loadActions();
