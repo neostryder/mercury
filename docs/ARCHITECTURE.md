@@ -39,14 +39,18 @@ purpose; Cloudflare Workers is what I already had DNS on.
 4. The backend extracts and normalizes the sender address, then checks the
    deterministic blacklist (550), greylist (421), and whitelist (250).
    Exact-address matches take precedence over domain matches. The same
-   selector cannot exist on more than one list. Any match is a final
-   disposition and skips both the prompt-injection classifier and semantic
-   judge.
-5. For an unmatched sender, the backend redacts any of the recipient's own
-   addresses appearing in the message (see below), then scores the redacted
-   content with the prompt-injection classifier provider. A message
-   classified as an injection attempt remains untrusted data for the rest
-   of the pipeline.
+   selector cannot exist on more than one list. Before honoring a match, the
+   backend parses every `Authentication-Results` header in the raw RFC822
+   message and requires an SPF or DKIM pass aligned with the claimed `From:`
+   domain. A clear authenticated match is a final disposition and skips both
+   the prompt-injection classifier and semantic judge. Missing, failed,
+   malformed, ambiguous, or misaligned authentication falls through to step
+   5 as though no sender-list match existed.
+5. Without an authenticated sender-list match, the backend redacts any of
+   the recipient's own addresses appearing in the message (see below), then
+   scores the redacted content with the prompt-injection classifier provider.
+   A message classified as an injection attempt remains untrusted data for
+   the rest of the pipeline.
 6. The redacted content, injection score, and three semantic rule buckets
    are given to the judge provider for a semantic verdict (SPAM / PHISH /
    LEGIT / UNSURE) plus a disposition, category, alert level, and reasoning.
@@ -101,8 +105,11 @@ on the Worker gate (`worker/src/index.js`), which already holds the D1
 binding, via `backend/event_log.py`. Logging is fire-and-forget: a failure
 there never affects delivery of the message it was logging. Deterministic
 matches use an explicit `SKIPPED_*` injection label plus list-match reasoning
-and the `SENDER_LIST` category instead of leaving judge fields blank. A hard-bounce recommendation also
-saves the message's full content and reasoning so it can be reviewed later.
+and the `SENDER_LIST` category instead of leaving judge fields blank. When an
+unauthenticated match is skipped, that reason is prepended to the normal
+classifier/judge reasoning so it remains visible in the dashboard and digest.
+A hard-bounce recommendation also saves the message's full content and
+reasoning so it can be reviewed later.
 
 ## Providers
 
@@ -163,6 +170,24 @@ add operation first removes the same selector from the other sender lists.
 At match time the exact address is checked before its domain. A malformed
 file containing a cross-list duplicate is rejected as ambiguous, causing
 the ingest path to fail open and send its ordinary pipeline-error alert.
+
+Sender authentication is parsed locally from the raw RFC822 message without
+network lookups or a new runtime dependency. SPF uses the reported
+`smtp.mailfrom` or `smtp.helo` identity, and DKIM uses `header.d`. Only
+`pass` is accepted. A result aligns when its authenticated domain exactly
+matches the claimed `From:` domain or is its DNS parent. The reverse is not
+assumed because a delegated child does not prove control of its parent, and
+full relaxed organizational-domain alignment would require current DNS or
+public-suffix data. Multiple `Authentication-Results` headers are inspected;
+one clear aligned pass is sufficient. The skip reason is prepended to the
+normal judge reasoning in the message event, making the fallback visible in
+the dashboard and daily digest.
+
+`Authentication-Results` assertions are not self-authenticating. The mail
+provider at the SMTP trust boundary must strip forged assertions before the
+message reaches Mercury. A deployment whose raw webhook messages omit this
+header intentionally never takes the deterministic fast path until trusted
+authentication data becomes available.
 
 Semantic rules describe content or context conditions. The `550`, `421`, or
 `250` bucket is the disposition, and the three labeled blocks are supplied
@@ -358,13 +383,15 @@ The judge step is an LLM (potentially an agentic one) reading content that
 came from an untrusted, attacker-controlled sender. That is the textbook
 setup for a prompt-injection attempt: a message crafted to look like
 instructions to whatever is reading it, rather than content to be judged.
-For senders without a deterministic list match, the classifier step exists
-specifically to surface that risk before the judge sees the message. The
-judge's own prompt is written to treat the message body as data, never as instructions,
-regardless of what the classifier found. Any agent given broader access to
-a mailbox (for search, for the Thunderbird flagging flow, or anything
-else) should carry the same discipline: mail content is never a source of
-commands. Deterministic sender decisions intentionally bypass both content
-scans. In particular, a compromised or spoofed whitelisted sender can pass
-until the whitelist entry is removed; that is the explicit reliability and
-cost tradeoff of a hard whitelist.
+For senders without an authenticated deterministic list match, the classifier
+step exists specifically to surface that risk before the judge sees the
+message. The judge's own prompt is written to treat the message body as data,
+never as instructions, regardless of what the classifier found. Any agent
+given broader access to a mailbox (for search, for the Thunderbird flagging
+flow, or anything else) should carry the same discipline: mail content is
+never a source of commands. Authenticated deterministic sender decisions
+intentionally bypass both content scans. A whitelisted sender whose account
+or signing infrastructure is later compromised can still pass until the
+whitelist entry is removed; that remains the explicit reliability and cost
+tradeoff of a hard whitelist. A bare `From:` spoof without an aligned SPF or
+DKIM pass falls through to both content scans.

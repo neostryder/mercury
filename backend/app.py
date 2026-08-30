@@ -14,7 +14,11 @@ import digest
 import event_log
 import mail_delivery
 from approvals import ApprovalStore
-from filtering import FilteringPolicyStore, normalize_selector
+from filtering import (
+    FilteringPolicyStore,
+    normalize_selector,
+    sender_domain_is_authenticated,
+)
 from providers.classifier import get_classifier
 from providers.judge import get_judge
 from providers.notifier import get_notifier
@@ -983,16 +987,26 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         sender_domain = sender_address.rsplit("@", 1)[1] if sender_address else _domain_of(from_display)
         raw_content = f"From: {from_display}\nSubject: {subject}\n\n{text_body}"
         redacted_content = redact(raw_content)
+        raw_message = payload.get("raw")
 
         policy = policy_store.load()
         sender_match = policy_store.match_sender(sender_address, policy)
-        if sender_match:
+        authentication_skip = None
+        if sender_match and not sender_domain_is_authenticated(raw_message, sender_domain):
+            authentication_skip = (
+                f"Skipped unauthenticated deterministic {sender_match.list_name} match "
+                f"for {sender_match.selector}: the raw message had no clear SPF or DKIM "
+                f"pass aligned with claimed From domain {sender_domain}."
+            )
+        if sender_match and not authentication_skip:
             injection, verdict = _deterministic_verdict(sender_match)
         else:
             injection = await classifier.check(redacted_content[:4000])
             verdict = await judge_email(
                 redacted_content[:6000], injection, policy["semantic_rules"]
             )
+            if authentication_skip:
+                verdict["reasoning"] = f"{authentication_skip} {verdict['reasoning']}"
 
         enforced_disposition = "250" if SHADOW_MODE else verdict["disposition"]
         mode_note = (
@@ -1027,7 +1041,6 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             "triggered_rule": verdict["triggered_rule"],
         })
 
-        raw_message = payload.get("raw")
         delivery_result = None
         custom_action = policy_store.match_custom_action(sender_address, policy)
         if enforced_disposition == "250" and not SHADOW_MODE:

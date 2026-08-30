@@ -1,10 +1,10 @@
 """Persisted filtering policy for deterministic and semantic decisions.
 
-The policy intentionally stays in one small JSON file. Sender lists provide
-the deterministic fast path, semantic buckets are passed to the judge, and a
-standing custom action can be associated with a sender address or domain.
-Writes replace the file atomically so a process interruption cannot leave a
-partially written policy behind.
+The policy intentionally stays in one small JSON file. Authenticated sender
+lists provide the deterministic fast path, semantic buckets are passed to the
+judge, and a standing custom action can be associated with a sender address
+or domain. Writes replace the file atomically so a process interruption
+cannot leave a partially written policy behind.
 """
 
 from __future__ import annotations
@@ -13,8 +13,11 @@ import copy
 import json
 import os
 import re
+import shlex
 import tempfile
 from dataclasses import dataclass
+from email import policy as email_policy
+from email.parser import BytesParser, Parser
 from pathlib import Path
 
 
@@ -53,6 +56,149 @@ class SenderListMatch:
     selector: str
     disposition: str
     verdict: str
+
+
+def _authentication_result_clauses(value: str) -> list[str]:
+    """Split one Authentication-Results value outside comments/quotes."""
+    parts: list[str] = []
+    current: list[str] = []
+    comment_depth = 0
+    quoted = False
+    escaped = False
+
+    for character in value:
+        if escaped:
+            if not comment_depth:
+                current.append(character)
+            escaped = False
+            continue
+        if comment_depth:
+            if character == "\\":
+                escaped = True
+            elif character == "(":
+                comment_depth += 1
+            elif character == ")":
+                comment_depth -= 1
+            continue
+        if quoted:
+            current.append(character)
+            if character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+            continue
+        if character == '"':
+            quoted = True
+            current.append(character)
+        elif character == "(":
+            comment_depth = 1
+        elif character == ";":
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+
+    if comment_depth or quoted or escaped:
+        return []
+    parts.append("".join(current).strip())
+    if len(parts) < 2 or not parts[0]:
+        return []
+    return [part for part in parts[1:] if part]
+
+
+def _authentication_identity(clause: str) -> tuple[str, str] | None:
+    """Return the sole identity asserted by a clear SPF/DKIM pass clause."""
+    try:
+        lexer = shlex.shlex(clause, posix=True, punctuation_chars="=")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return None
+
+    if len(tokens) < 3 or tokens[1] != "=" or tokens[2].lower() != "pass":
+        return None
+    method = tokens[0].split("/", 1)[0].lower()
+    identity_properties = {
+        "dkim": {"header.d"},
+        "spf": {"smtp.mailfrom", "smtp.helo"},
+    }.get(method)
+    if not identity_properties:
+        return None
+
+    identities: list[str] = []
+    index = 3
+    while index + 2 < len(tokens):
+        if tokens[index + 1] == "=":
+            if tokens[index].lower() in identity_properties:
+                identities.append(tokens[index + 2])
+            index += 3
+        else:
+            index += 1
+    if len(identities) != 1:
+        return None
+    return method, identities[0]
+
+
+def _authentication_domain(identity: str) -> str | None:
+    candidate = identity.strip().strip("<>").rstrip(".")
+    if "@" in candidate:
+        candidate = candidate.rsplit("@", 1)[1]
+    try:
+        candidate = candidate.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+    return candidate if _DOMAIN_RE.fullmatch(candidate) else None
+
+
+def _domain_authenticates_claimed(authenticated: str, claimed: str) -> bool:
+    # A parent-domain signature clearly authorizes a claimed subdomain. The
+    # reverse is not assumed: a delegated child does not prove control of its
+    # parent, and relaxed organizational-domain alignment needs DNS/PSL data.
+    return claimed == authenticated or claimed.endswith(f".{authenticated}")
+
+
+def sender_domain_is_authenticated(
+    raw_message: str | bytes | None, claimed_domain: str | None
+) -> bool:
+    """Find a clear, aligned SPF or DKIM pass in Authentication-Results.
+
+    The upstream mail boundary is responsible for stripping forged result
+    headers. This helper interprets only the RFC822 message it is given and
+    fails closed on missing, malformed, or ambiguous authentication data.
+    """
+    if not raw_message or not claimed_domain:
+        return False
+    claimed = _authentication_domain(claimed_domain)
+    if not claimed:
+        return False
+    try:
+        if isinstance(raw_message, bytes):
+            message = BytesParser(policy=email_policy.default).parsebytes(
+                raw_message, headersonly=True
+            )
+        elif isinstance(raw_message, str):
+            message = Parser(policy=email_policy.default).parsestr(
+                raw_message, headersonly=True
+            )
+        else:
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    for header in message.get_all("Authentication-Results", []):
+        try:
+            clauses = _authentication_result_clauses(str(header))
+        except (TypeError, ValueError):
+            continue
+        for clause in clauses:
+            result = _authentication_identity(clause)
+            if not result:
+                continue
+            authenticated = _authentication_domain(result[1])
+            if authenticated and _domain_authenticates_claimed(authenticated, claimed):
+                return True
+    return False
 
 
 def empty_policy() -> dict:

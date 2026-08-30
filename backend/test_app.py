@@ -111,7 +111,13 @@ class AppTests(unittest.TestCase):
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = self.original_delivery_enabled
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _payload(self, address="news@example.com"):
+    def _payload(self, address="news@example.com", authenticated=True):
+        domain = address.rsplit("@", 1)[1]
+        authentication = (
+            f"Authentication-Results: mx.test; dkim=pass header.d={domain}\r\n"
+            if authenticated
+            else ""
+        )
         return {
             "from": {
                 "text": f"Example News <{address}>",
@@ -119,7 +125,10 @@ class AppTests(unittest.TestCase):
             },
             "subject": "A routine update",
             "text": "Your order has shipped.",
-            "raw": "From: Example News <news@example.com>\r\nSubject: A routine update\r\n\r\nBody",
+            "raw": (
+                f"{authentication}From: Example News <{address}>\r\n"
+                "Subject: A routine update\r\n\r\nBody"
+            ),
         }
 
     def test_deterministic_sender_match_skips_classifier_and_judge(self):
@@ -143,6 +152,47 @@ class AppTests(unittest.TestCase):
         self.assertEqual(message["verdict"], "SPAM")
         self.assertEqual(message["category"], "SENDER_LIST")
         self.assertIn("deterministic blacklist", message["reasoning"])
+
+    def test_unauthenticated_sender_match_uses_normal_path_for_every_list(self):
+        for list_name in ("blacklist", "greylist", "whitelist"):
+            with self.subTest(list_name=list_name):
+                self.store.put_sender(list_name, "example.com")
+                app.classifier = SimpleNamespace(
+                    check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
+                )
+                app.judge = SimpleNamespace(ask=AsyncMock(return_value="""VERDICT: LEGIT
+DISPOSITION: 250
+CATEGORY: TRANSACTIONAL
+ALERT: NONE
+REASONING: Normal content judgment accepted the message.
+RULE_MATCH: NONE"""))
+                events = []
+
+                with patch.object(
+                    app.event_log,
+                    "log_event",
+                    side_effect=lambda table, fields: events.append((table, fields)),
+                ):
+                    response = asyncio.run(app.ingest(
+                        FakeRequest(self._payload(authenticated=False)), "test-secret"
+                    ))
+
+                self.assertEqual(response.status_code, 250)
+                self.assertEqual(app.classifier.check.await_count, 1)
+                self.assertEqual(app.judge.ask.await_count, 1)
+                message = next(
+                    fields for table, fields in events if table == "messages"
+                )
+                self.assertEqual(message["injection_label"], "SAFE")
+                self.assertEqual(message["category"], "TRANSACTIONAL")
+                self.assertIn(
+                    f"Skipped unauthenticated deterministic {list_name} match",
+                    message["reasoning"],
+                )
+                self.assertIn(
+                    "no clear SPF or DKIM pass aligned with claimed From domain",
+                    message["reasoning"],
+                )
 
     def test_ambiguous_policy_fails_open_and_alerts(self):
         policy = empty_policy()

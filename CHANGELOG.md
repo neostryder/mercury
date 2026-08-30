@@ -412,3 +412,12 @@
   sender lists, semantic rule buckets, and standing custom actions,
   including visible warnings for any unrecognized text encountered during
   legacy migration.
+- [Visible] Deterministic blacklist, greylist, and whitelist matches now
+  require a clear SPF or DKIM pass from the raw message's
+  `Authentication-Results` headers aligned with the claimed `From:` domain.
+  Missing, failed, malformed, ambiguous, or misaligned authentication sends
+  the message through the normal classifier and semantic judge, and the
+  message event records why the unauthenticated match was skipped.
+- [Internal] Added a dependency-free RFC822 authentication-results parser
+  with multi-header, folded-header, comment, exact-domain, parent-domain,
+  and fail-closed regression coverage.
