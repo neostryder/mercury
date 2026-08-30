@@ -212,6 +212,22 @@ def _esc(value: object) -> str:
     return html.escape(str(value) if value is not None else "")
 
 
+def _fmt_time(value: str | None) -> str:
+    """Human-readable Phoenix-local time. Caller is responsible for escaping
+    the result, same as any other value passed through _esc()."""
+    parsed = _parse_ts(value)
+    if not parsed:
+        return str(value) if value is not None else ""
+    return parsed.astimezone(PHOENIX_TZ).strftime("%b %-d, %-I:%M %p")
+
+
+def _truncate(value: object, limit: int) -> str:
+    text = str(value) if value is not None else ""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
 def _stat_card(label: str, value: object) -> str:
     return f"""<td style="padding:16px 20px;background:#f7f8fa;border-radius:8px;text-align:center;">
 <div style="font-size:26px;font-weight:700;color:#1a2733;">{_esc(value)}</div>
@@ -239,9 +255,9 @@ def _ledger_table(ledger: list[dict]) -> str:
         return '<p style="font-size:14px;color:#6b7684;">Nothing non-trivial in the last 24 hours.</p>'
     rows = "".join(
         "<tr>"
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(item.get("at"))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(_fmt_time(item.get("at")))}</td>'
         f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;font-weight:600;vertical-align:top;white-space:nowrap;">{_esc(item.get("kind"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;">{_esc(item.get("detail"))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:260px;">{_esc(_truncate(item.get("detail"), 200))}</td>'
         "</tr>"
         for item in ledger
     )
@@ -260,11 +276,11 @@ def _action_required_table(items: list[dict]) -> str:
         return '<p style="font-size:14px;color:#6b7684;">Nothing currently needs a look.</p>'
     rows = "".join(
         "<tr>"
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(m.get("received_at"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;font-weight:600;">{_esc(m.get("alert_level"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;">{_esc(m.get("from_display"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;">{_esc(m.get("subject"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;">{_esc(m.get("reasoning"))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(_fmt_time(m.get("received_at")))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;font-weight:600;white-space:nowrap;">{_esc(m.get("alert_level"))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:160px;">{_esc(_truncate(m.get("from_display"), 40))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:220px;">{_esc(_truncate(m.get("subject"), 60))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:280px;font-size:13px;color:#4b5563;">{_esc(_truncate(m.get("reasoning"), 180))}</td>'
         "</tr>"
         for m in items
     )

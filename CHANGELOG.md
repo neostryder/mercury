@@ -351,4 +351,16 @@
   so they're a normal part of the same conversation. Pipeline-failure
   alerts are unaffected - those aren't about a specific email and stay on
   the plain one-way `Notifier` path.
+- [Visible] Fixed the Thunderbird flag popup showing a literal "Proposed:
+  null" when a flagging instruction produced only an action (for example an
+  unsubscribe-plus-hard-bounce request) with no standing rule attached. The
+  status line now omits the rule line entirely when there is none, and
+  reads "Proposed: <action>" instead of "Also proposed: <action>" in that
+  case.
+- [Visible] Fixed the daily digest email showing raw ISO timestamps (with
+  microseconds and a UTC offset) in the "Needs a look" and ledger tables,
+  and let a single verbose piece of judge reasoning stretch a table row
+  across many lines. Timestamps now render as short Phoenix-local times,
+  and the reasoning, subject, and sender columns are length-capped; full
+  detail is still available on the dashboard.
 
