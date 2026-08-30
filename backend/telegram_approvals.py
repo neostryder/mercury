@@ -92,6 +92,13 @@ class TelegramApprovals:
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
 
+    async def send_brief_message(self, brief_id: str, text: str) -> None:
+        """Send backend-authored action progress into an existing brief."""
+        self._store.append_turn(brief_id, "loremaster", text)
+        message_id = await self._send(text)
+        if message_id is not None:
+            self._store.track_message(message_id, brief_id)
+
     async def propose_new(
         self, instruction: str, message_context: str, via_dictation: bool = False
     ) -> tuple[str, str | None, str | None]:
@@ -350,7 +357,9 @@ class TelegramApprovals:
         if decision in ("unsubscribe", "deliver"):
             await self._send("Approved - working on it now...")
         try:
-            outcome, followup_change = await self._execute_message_decision(decision, brief)
+            outcome, followup_change = await self._execute_message_decision(
+                decision, brief, brief_id
+            )
         except Exception as exc:
             self._store.update_brief(brief_id, message_decision=None)
             outcome = f"Decision failed: {type(exc).__name__}: {exc}. You can try again."
@@ -392,7 +401,7 @@ class TelegramApprovals:
             # than the answerCallbackQuery toast, which is easy to miss.
             await self._send("Approved - working on it now...")
             outcome, followup = await self._execute_action(
-                brief["action"], brief["message_context"]
+                brief["action"], brief["message_context"], brief_id
             )
             result_lines.append(outcome)
             if followup and followup.get("kind") == "bounce_decision":

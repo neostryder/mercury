@@ -77,6 +77,7 @@ except ModuleNotFoundError:
 
 import app
 from approvals import ApprovalStore
+from credential_prompts import CredentialPromptStore
 from filtering import FilteringPolicyStore, empty_policy
 from telegram_approvals import TelegramApprovals
 
@@ -87,6 +88,25 @@ class FakeRequest:
 
     async def json(self):
         return self.payload
+
+
+class FakeBodyRequest:
+    def __init__(self, body: bytes, declared_length: int | None = None):
+        self.body = body
+        self.headers = {}
+        if declared_length is not None:
+            self.headers["content-length"] = str(declared_length)
+
+    async def stream(self):
+        yield self.body
+
+
+class MutableClock:
+    def __init__(self):
+        self.value = 1000.0
+
+    def __call__(self):
+        return self.value
 
 
 class AppTests(unittest.TestCase):
@@ -345,6 +365,217 @@ CAVEAT: NONE""")
             policy["semantic_rules"]["421"], ["A genuinely ambiguous message condition"]
         )
         self.assertEqual(policy["custom_actions"][0]["native"]["folder"], "Archive")
+
+
+class CredentialPromptEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = MutableClock()
+        self.store = CredentialPromptStore(clock=self.clock)
+        self.original_store = app.credential_prompts._store
+        app.credential_prompts._store = self.store
+
+    def tearDown(self):
+        app.credential_prompts._store = self.original_store
+
+    def _request(self, username="aaron", password="one-time-password"):
+        return FakeBodyRequest(json.dumps({
+            "username": username,
+            "password": password,
+        }).encode("utf-8"))
+
+    def test_valid_token_get_and_submit(self):
+        token = self.store.create("fanatical.com")
+
+        status = asyncio.run(app.get_credential_prompt(token))
+        self.assertEqual(status, {
+            "valid": True,
+            "domain": "fanatical.com",
+            "expires_in_seconds": 600,
+        })
+        self.assertEqual(
+            asyncio.run(app.submit_credential_prompt(token, self._request())),
+            {"ok": True},
+        )
+
+    def test_unknown_and_expired_tokens_are_invalid(self):
+        self.assertEqual(
+            asyncio.run(app.get_credential_prompt("unknown")), {"valid": False}
+        )
+        self.assertEqual(
+            asyncio.run(app.submit_credential_prompt("unknown", self._request())),
+            {"ok": False, "error": "expired or already used"},
+        )
+
+        token = self.store.create("fanatical.com")
+        self.clock.value += 601
+        self.assertEqual(
+            asyncio.run(app.get_credential_prompt(token)), {"valid": False}
+        )
+        self.assertEqual(
+            asyncio.run(app.submit_credential_prompt(token, self._request())),
+            {"ok": False, "error": "expired or already used"},
+        )
+
+    def test_already_used_token_rejects_a_second_post(self):
+        token = self.store.create("fanatical.com")
+
+        self.assertEqual(
+            asyncio.run(app.submit_credential_prompt(token, self._request())),
+            {"ok": True},
+        )
+        self.assertEqual(
+            asyncio.run(app.submit_credential_prompt(token, self._request(password="again"))),
+            {"ok": False, "error": "expired or already used"},
+        )
+        self.assertEqual(
+            asyncio.run(app.get_credential_prompt(token)), {"valid": False}
+        )
+
+    def test_oversized_body_is_rejected(self):
+        token = self.store.create("fanatical.com")
+        request = FakeBodyRequest(b"x" * 4097)
+
+        with self.assertRaises(app.HTTPException) as raised:
+            asyncio.run(app.submit_credential_prompt(token, request))
+
+        self.assertEqual(raised.exception.status_code, 413)
+        self.assertIsNotNone(self.store.get_status(token))
+
+
+class UnsubscribeCredentialFlowTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-unsubscribe-credential-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.approvals_path = self.temp_dir / "approvals.json"
+        self.store = ApprovalStore(self.approvals_path)
+        self.original_judge = app.judge
+        self.original_telegram = app.telegram_approvals
+
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=AsyncMock(),
+            finalize=AsyncMock(),
+            execute_action=app.dispatch_action,
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(1001, 1020))
+        app.telegram_approvals = self.telegram
+
+    def tearDown(self):
+        app.judge = self.original_judge
+        app.telegram_approvals = self.original_telegram
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_unsubscribe_brief(self) -> str:
+        brief_id = self.store.create_brief(
+            "From: Fanatical <news@fanatical.com>\n\nUnsubscribe link"
+        )
+        self.store.update_brief(
+            brief_id,
+            action="UNSUBSCRIBE: fanatical.com",
+            status="open",
+        )
+        return brief_id
+
+    def test_needs_signin_timeout_is_reported_without_bounce_followup(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: fanatical.com
+RESULT: NEEDS_SIGNIN
+SUMMARY: The verified preference page requires an account sign-in."""))
+        wait_for = AsyncMock(return_value=None)
+        events = []
+        brief_id = self._create_unsubscribe_brief()
+
+        with (
+            patch.object(app.credential_prompts, "create", return_value="one-time-token"),
+            patch.object(app.credential_prompts, "wait_for", new=wait_for),
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        self.assertEqual(app.judge.ask.await_count, 1)
+        wait_for.assert_awaited_once_with("one-time-token", timeout_seconds=600)
+        self.assertEqual(events[0][1]["result"], "NEEDS_SIGNIN_TIMED_OUT")
+        self.assertEqual(self.store.get_brief(brief_id)["status"], "resolved")
+        self.assertEqual(self.store.get_brief(brief_id)["changes"], [])
+        history_text = self.approvals_path.read_text(encoding="utf-8")
+        self.assertIn("mercury.rpgm.tools/credential/one-time-token", history_text)
+        self.assertIn("Didn't hear back in time", history_text)
+
+    def test_submitted_credential_is_used_once_and_never_persisted_or_logged(self):
+        fake_username = "credential-user@example.com"
+        fake_password = "FAKE-ONE-TIME-PASSWORD-9f6e"
+        app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[
+            """SAFE: yes
+DOMAIN: fanatical.com
+RESULT: NEEDS_SIGNIN
+SUMMARY: The verified preference page requires an account sign-in.""",
+            f"""SAFE: yes
+DOMAIN: fanatical.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Signed in as {fake_username} using {fake_password} and completed the unsubscribe.""",
+        ]))
+        wait_for = AsyncMock(return_value=(fake_username, fake_password))
+        events = []
+        brief_id = self._create_unsubscribe_brief()
+
+        with (
+            patch.object(app.credential_prompts, "create", return_value="one-time-token"),
+            patch.object(app.credential_prompts, "wait_for", new=wait_for),
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        self.assertEqual(app.judge.ask.await_count, 2)
+        second_prompt = app.judge.ask.await_args_list[1].args[0]
+        self.assertIn(fake_username, second_prompt)
+        self.assertIn(fake_password, second_prompt)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][1]["result"], "UNSUBSCRIBED")
+
+        serialized_events = json.dumps(events)
+        persisted_brief = self.approvals_path.read_text(encoding="utf-8")
+        self.assertNotIn(fake_password, serialized_events)
+        self.assertNotIn(fake_password, persisted_brief)
+        self.assertNotIn(fake_username, serialized_events)
+        self.assertNotIn(fake_username, persisted_brief)
+        self.assertIn("[redacted credential]", persisted_brief)
+
+    def test_unsafe_needs_signin_response_never_creates_a_prompt(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: no
+DOMAIN: unrelated-login.example
+RESULT: NEEDS_SIGNIN
+SUMMARY: The redirect requests a password on an unrelated domain."""))
+        events = []
+
+        with (
+            patch.object(
+                app.credential_prompts,
+                "create",
+                side_effect=AssertionError("unsafe response must not create a prompt"),
+            ),
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            outcome, followup = asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from example.com", "From: news@example.com"
+            ))
+
+        self.assertIn("SKIPPED_UNSAFE", outcome)
+        self.assertEqual(events[0][1]["result"], "SKIPPED_UNSAFE")
+        self.assertEqual(followup["recommendation"], "hard")
 
 
 class TelegramDecisionTests(unittest.TestCase):

@@ -287,8 +287,10 @@ An `ACTION`, when present, is one of:
   to interpret further.
 - `UNSUBSCRIBE: <details>` - see "Executing an approved unsubscribe" below.
   An unsubscribe request is not itself a standing sender decision. A
-  blacklist follow-up is proposed separately after the result and requires
-  its own approval.
+  blacklist follow-up is proposed separately after the final result and
+  requires its own approval. An intermediate `NEEDS_SIGNIN` result opens the
+  one-time credential path described below and never proposes a bounce by
+  itself.
 
 Sent to Telegram (`backend/telegram_approvals.py`), independent of whichever
 `Notifier` provider is configured for one-way alerts, since this needs a
@@ -374,11 +376,11 @@ under the previously approved stored instruction.
 An approved `UNSUBSCRIBE` action is also handed to the judge provider, using
 its browsing skill, but with an evaluation step first: it is prompted to
 find the flagged message's unsubscribe mechanism (a `List-Unsubscribe`
-header, or a link in the body) and judge whether the route is safe -
-unsafe if the link's domain has no clear relationship to the sender or a
-known mailing-list provider acting for it, if the page asks for credentials
-or payment details, or if anything about it looks like a phishing attempt
-rather than a standard opt-out; uncertain is treated as unsafe.
+header, or a link in the body) and verify the link's domain before visiting
+it. The domain, and every redirect domain, must have a clear relationship to
+the sender or be a known mailing-list provider acting for it. An unrelated
+domain, payment request, non-login credential request, phishing indicator,
+or uncertain relationship is unsafe and is never visited.
 
 If safe: tracking query parameters are stripped from the URL before
 visiting it, and only a single confirm click or form submit is attempted -
@@ -387,13 +389,47 @@ improvising further.
 If unsafe: the link is never visited at all, and the result is
 `SKIPPED_UNSAFE`.
 
+A normal account login wall is a separate result. If and only if its domain
+passes the same sender-relationship check, the judge stops without entering
+anything and returns `SAFE: yes` with `RESULT: NEEDS_SIGNIN`. A login wall on
+an unrelated, suspicious, or lookalike domain remains `SAFE: no` with
+`RESULT: SKIPPED_UNSAFE`, so it can never trigger a credential request.
+
+For `NEEDS_SIGNIN`, the backend creates a 256-bit random token in
+`backend/credential_prompts.py` and posts a link to
+`https://mercury.rpgm.tools/credential/{token}` into the same brief. The
+message is added to the brief history and its Telegram message ID is indexed,
+so a reply continues the normal conversation. The Worker serves a
+self-contained username/password form and proxies it to the backend's
+`/credential-prompt/{token}` endpoints. The token itself is the authorization
+for these two endpoints; the dashboard shared secret is not exposed to the
+phone. Both Worker and backend reject bodies over 4 KB.
+
+The pending entry is memory-only and expires 10 minutes after creation. It is
+never part of `ApprovalStore` or any file. A successful POST is single-use,
+and the waiting unsubscribe task removes the submitted username and password
+from the entry immediately after its one retrieval. Expired entries are also
+discarded opportunistically. A restart intentionally loses an in-flight
+entry.
+
+If no submission arrives in time, the brief reports
+`NEEDS_SIGNIN_TIMED_OUT`, writes that credential-free outcome to the event
+log, and does not propose a bounce. After a successful submission, a second
+judge call receives the credential only for this one approved login on the
+verified domain. It must not repeat either value and remains limited to a
+normal unsubscribe confirmation. Any MFA or 2FA challenge stops immediately
+as `FAILED` with a manual-completion summary. The backend records only this
+resolved second result and scrubs a submitted value from the summary even if
+the judge repeats it contrary to instructions. This capability is not wired
+into `MAILBOX` or standing `CUSTOM_ACTION` execution.
+
 The backend parses a structured `SAFE / DOMAIN / RESULT / SUMMARY` reply
 (not free text, for the same reason the typed proposal fields are parsed
-rather than inferred) and reports `UNSUBSCRIBED`, `FAILED`, or
-`SKIPPED_UNSAFE` plus the summary. No sender entry is committed at this
-point. A blacklist entry is then presented as a normal Approve/Discard
-proposal, so the unsubscribe result never decides standing disposition on
-the recipient's behalf.
+rather than inferred) and accepts `UNSUBSCRIBED`, `FAILED`,
+`SKIPPED_UNSAFE`, or the intermediate `NEEDS_SIGNIN` result. No sender entry
+is committed at this point. After a final result, a blacklist entry is
+presented as a normal Approve/Discard proposal, so the unsubscribe result
+never decides standing disposition on the recipient's behalf.
 
 ## Prompt injection: why it shapes this design
 

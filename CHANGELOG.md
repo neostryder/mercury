@@ -444,3 +444,15 @@
   the wrong value (or the custom action's own text) whenever both fields
   were present in the same response. Field patterns are now anchored to an
   actual line start.
+- [Visible] Approved unsubscribes can now pause with `NEEDS_SIGNIN` when a
+  verified sender-related preferences page requires an account login.
+  Mercury posts a 10-minute, single-use form link into the same Telegram
+  brief so the credential is entered on Mercury's own TLS-protected domain,
+  never in bot chat. Unanswered prompts end without a bounce suggestion, and
+  any MFA or 2FA challenge stops with a clear manual-completion result.
+- [Internal] Added a memory-only, single-use credential prompt store, public
+  token-authorized backend GET/POST endpoints with 4 KB request limits, and
+  matching Cloudflare Worker form routes with HSTS and no-store headers.
+  The unsubscribe executor supplies the submitted value to one scoped judge
+  retry, immediately removes it from pending memory, and prevents it from
+  reaching event logs or persisted brief history.

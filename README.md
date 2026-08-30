@@ -217,6 +217,17 @@ tap executes the one-message action. Any suggested sender-list entry is sent
 as a separate Approve/Discard proposal afterward and is never committed by
 the first tap alone. Free-text replies continue the same brief as before.
 
+An approved unsubscribe can return `NEEDS_SIGNIN` only when the judge has
+already verified that the login wall belongs to the sender or a known
+mailing-list provider acting for it. Mercury then posts a 10-minute,
+single-use link into the same Telegram brief. The username and password are
+entered on a self-contained form at `mercury.rpgm.tools`, never in Telegram,
+and are held only in backend memory until that one login attempt retrieves
+them. They are not written to the brief, event log, or any credential store.
+An unrelated or suspicious login domain remains `SKIPPED_UNSAFE` and never
+gets a credential form. An unanswered link ends normally without suggesting
+a bounce, and any MFA or 2FA challenge stops with a manual-completion report.
+
 One-time and non-native mailbox actions are carried out by the same agent
 behind the judge seam, using its scoped mailbox-action skill. Folder routing
 for accepted messages is handled directly through the backend's existing

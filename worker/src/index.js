@@ -9,6 +9,7 @@
 import { DASHBOARD_HTML, lastNDays, renderStackedBarSVG, CHART_COLORS } from './dashboard.js';
 
 const INGEST_TIMEOUT_MS = 20000;
+const MAX_CREDENTIAL_BODY_BYTES = 4096;
 const KNOWN_DISPOSITIONS = [250, 421, 550];
 
 // Per-table column allowlists for the /log endpoint - hardcoded rather than
@@ -42,6 +43,17 @@ export default {
       const unauthorized = checkDashboardAuth(request, env);
       if (unauthorized) return unauthorized;
       return handleDashboard(pathname, search, env, request);
+    }
+
+    const credentialMatch = pathname.match(/^\/credential\/([A-Za-z0-9_-]+)$/);
+    if (credentialMatch) {
+      if (request.method !== 'GET' && request.method !== 'POST') {
+        return new Response('method not allowed', {
+          status: 405,
+          headers: { 'Strict-Transport-Security': HSTS },
+        });
+      }
+      return handleCredentialPrompt(request, credentialMatch[1], env);
     }
 
     if (request.method !== 'POST') {
@@ -95,6 +107,178 @@ function checkDashboardAuth(request, env) {
 }
 
 const HSTS = 'max-age=31536000; includeSubDomains';
+
+const CREDENTIAL_PAGE_HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'Referrer-Policy': 'no-referrer',
+  'Strict-Transport-Security': HSTS,
+  'X-Content-Type-Options': 'nosniff',
+};
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function credentialPage(title, content, status = 200) {
+  return new Response(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #172033; }
+    label { display: block; margin-top: 1rem; }
+    input { box-sizing: border-box; display: block; width: 100%; padding: .7rem; margin-top: .3rem; }
+    button { margin-top: 1.25rem; padding: .7rem 1rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    ${content}
+  </main>
+</body>
+</html>`, { status, headers: CREDENTIAL_PAGE_HEADERS });
+}
+
+async function readTextWithLimit(message, maxBytes) {
+  const declared = message.headers.get('Content-Length');
+  if (declared !== null) {
+    const declaredLength = Number(declared);
+    if (!Number.isFinite(declaredLength) || declaredLength < 0 || declaredLength > maxBytes) {
+      return null;
+    }
+  }
+
+  if (!message.body) return '';
+  const reader = message.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+async function readBackendJson(response) {
+  const text = await readTextWithLimit(response, MAX_CREDENTIAL_BODY_BYTES);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function handleCredentialPrompt(request, token, env) {
+  const backendUrl = `${env.BACKEND_BASE_URL}/credential-prompt/${encodeURIComponent(token)}`;
+
+  if (request.method === 'GET') {
+    let response;
+    let result;
+    try {
+      response = await fetch(backendUrl, { method: 'GET' });
+      result = await readBackendJson(response);
+    } catch (err) {
+      return credentialPage(
+        'Sign-in link unavailable',
+        '<p>This link could not be checked right now. Reply in the Telegram conversation to try again.</p>',
+        502,
+      );
+    }
+
+    if (!response.ok || !result?.valid) {
+      return credentialPage(
+        'Sign-in link unavailable',
+        '<p>This link has expired or was already used - reply in the Telegram conversation to ask for a new one.</p>',
+      );
+    }
+
+    const domain = escapeHtml(result.domain);
+    const seconds = Number(result.expires_in_seconds);
+    const minutes = Math.max(1, Math.ceil((Number.isFinite(seconds) ? seconds : 0) / 60));
+    const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+    return credentialPage('Finish unsubscribe sign-in', `
+      <p>Enter the account credential for <strong>${domain}</strong>. It will be used only for this unsubscribe attempt.</p>
+      <p>This link remains valid for about ${minutes} ${minuteLabel}.</p>
+      <form method="post" action="/credential/${escapeHtml(token)}" autocomplete="off">
+        <label>Username
+          <input name="username" type="text" required autocomplete="off">
+        </label>
+        <label>Password
+          <input name="password" type="password" required autocomplete="off">
+        </label>
+        <button type="submit">Submit</button>
+      </form>`);
+  }
+
+  let formText = await readTextWithLimit(request, MAX_CREDENTIAL_BODY_BYTES);
+  if (formText === null) {
+    return credentialPage('Submission failed', '<p>The submitted form was too large.</p>', 413);
+  }
+  let form = new URLSearchParams(formText);
+  let username = form.get('username');
+  let password = form.get('password');
+  if (username === null || password === null) {
+    return credentialPage('Submission failed', '<p>The username and password fields are required.</p>', 400);
+  }
+
+  let backendBody = JSON.stringify({ username, password });
+  if (new TextEncoder().encode(backendBody).byteLength > MAX_CREDENTIAL_BODY_BYTES) {
+    return credentialPage('Submission failed', '<p>The submitted form was too large.</p>', 413);
+  }
+
+  let response;
+  let result;
+  try {
+    response = await fetch(backendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: backendBody,
+    });
+    result = await readBackendJson(response);
+  } catch (err) {
+    return credentialPage(
+      'Submission failed',
+      '<p>The backend could not be reached. Reply in the Telegram conversation to try again.</p>',
+      502,
+    );
+  } finally {
+    formText = null;
+    form = null;
+    username = null;
+    password = null;
+    backendBody = null;
+  }
+
+  if (!response.ok || !result?.ok) {
+    return credentialPage(
+      'Submission failed',
+      '<p>This link has expired or was already used - reply in the Telegram conversation to ask for a new one.</p>',
+      400,
+    );
+  }
+  return credentialPage(
+    'Submitted',
+    '<p>Submitted - check Telegram for what happened next.</p>',
+  );
+}
 
 async function handleDashboard(pathname, search, env, request) {
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
