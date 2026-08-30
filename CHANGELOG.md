@@ -363,4 +363,20 @@
   across many lines. Timestamps now render as short Phoenix-local times,
   and the reasoning, subject, and sender columns are length-capped; full
   detail is still available on the dashboard.
+- [Visible] Fixed a brief proposing an action that could never actually
+  happen: asked to "un-defer" mail that had been given a 421 disposition,
+  Mercury proposed a `MAILBOX` action against a "Deferred mail" folder that
+  doesn't exist, because a 421 or 550 disposition rejects the message at
+  SMTP time and it was never delivered anywhere - there is no folder to act
+  on. `advance_brief()` (`backend/app.py`) is now grounded with the
+  mailbox's real IMAP folder list (`mail_delivery.list_folders()`) and with
+  the fact that a 421/550 disposition means the message was never stored,
+  so it never invents a folder and knows to explain via `CAVEAT` instead of
+  proposing an action that can't do anything. `CAVEAT` itself is broadened
+  to cover this case (not just a rule that doesn't add anything), and a
+  caveat with no rule or action attached now reaches Telegram as its own
+  message instead of being silently replaced with "nothing to add or do."
+  Also strengthened the brief prompt to decompose a multi-part request into
+  whatever combination of a rule and an action actually satisfies it,
+  rather than transcribing it close to verbatim.
 

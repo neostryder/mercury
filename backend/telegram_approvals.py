@@ -109,6 +109,15 @@ class TelegramApprovals:
             message_id = await self._send(
                 text + "\n\nTap a button, or reply to THIS message with feedback.", keyboard=keyboard
             )
+        elif caveat:
+            # Nothing proposable, but there's something worth explaining (e.g.
+            # part of the request isn't achievable at all) - say so plainly
+            # rather than the generic "nothing to add or do", which would
+            # silently drop the explanation.
+            text = f"⚠️ {caveat}"
+            self._store.append_turn(brief_id, "loremaster", text)
+            self._store.resolve_brief(brief_id)
+            message_id = await self._send(text)
         else:
             text = "Got it - nothing to add or do."
             self._store.append_turn(brief_id, "loremaster", text)

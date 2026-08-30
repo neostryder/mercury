@@ -18,6 +18,7 @@ audit in the chat history that led to this file existing.
 import email
 import imaplib
 import os
+import re
 
 DELIVER_ACCEPTED_MAIL = os.environ.get("MERCURY_DELIVER_ACCEPTED_MAIL", "false").lower() == "true"
 IMAP_HOST = os.environ.get("MERCURY_MAILBOX_IMAP_HOST", "imap.forwardemail.net")
@@ -34,6 +35,36 @@ def _add_headers(raw_message: str, headers: dict[str, str]) -> bytes:
     naive re-parse/re-emit of a message with attachments could."""
     prefix = "".join(f"{name}: {value}\r\n" for name, value in headers.items())
     return (prefix + raw_message).encode("utf-8", errors="replace")
+
+
+def list_folders() -> list[str]:
+    """Real IMAP folder names in the mailbox, best-effort. Used to ground the
+    brief judge's proposals so it never invents a folder that doesn't exist
+    (e.g. a "Deferred mail" folder for a 421 disposition, which was never
+    delivered anywhere in the first place - see advance_brief()'s prompt).
+    Returns an empty list on any failure rather than raising; a missing
+    folder list just means the judge proceeds without that grounding."""
+    if not IMAP_USER or not IMAP_PASSWORD:
+        return []
+    try:
+        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        try:
+            conn.login(IMAP_USER, IMAP_PASSWORD)
+            typ, data = conn.list()
+            if typ != "OK":
+                return []
+            folders = []
+            for entry in data:
+                if not entry:
+                    continue
+                text = entry.decode("utf-8", errors="replace") if isinstance(entry, bytes) else str(entry)
+                match = re.search(r'"([^"]*)"\s*$', text)
+                folders.append(match.group(1) if match else text.split()[-1])
+            return folders
+        finally:
+            conn.logout()
+    except Exception:
+        return []
 
 
 def deliver_accepted_message(raw_message: str, verdict: str, category: str, disposition: str) -> str:

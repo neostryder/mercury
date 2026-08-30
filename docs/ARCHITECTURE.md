@@ -136,9 +136,19 @@ there actually becomes a committed rule.
 a flagged instruction as a rigid form to fill in. It opens a **brief** - an
 open-ended collaboration with the judge provider (Loremaster) about a
 flagged message, re-interpreted as a whole conversation rather than parsed
-atomically. Each turn, `advance_brief()` (`backend/app.py`) is handed the
-full history plus the latest message and decides among four independent
-things, only one of which forces a stop:
+atomically: a message expressing several wishes at once is decomposed into
+whatever combination of a rule and an action actually accomplishes the
+intent, not transcribed verbatim. Each turn, `advance_brief()`
+(`backend/app.py`) is grounded with two pipeline facts before deciding -
+the mailbox's real IMAP folder list (`mail_delivery.list_folders()`), so it
+never invents a folder that doesn't exist, and the fact that a 421
+(soft-defer) or 550 (hard-bounce) disposition means the message was never
+delivered anywhere at all (Mercury keeps no usable copy of a 421; a
+hard-bounce's content is retained only for review, not redelivery) - so
+"un-defer" or "restore" requests about already-rejected mail can never
+become a real `MAILBOX` action, only a `RULE` change plus an honest
+`CAVEAT` about what can't be recovered. It then decides among four
+independent things, only one of which forces a stop:
 
 - `QUESTION` - genuinely unclear intent, or a real design choice that
   depends on the recipient's answer, is asked directly rather than guessed
@@ -149,12 +159,17 @@ things, only one of which forces a stop:
   the ledger with no access to this conversation once added. `NONE` for a
   one-time request about existing mail with no lasting preference implied.
 - `ACTION` - one of two kinds, described below, or `NONE`.
-- `CAVEAT` - only alongside a `RULE`: whether the rule actually adds
+- `CAVEAT` - a direct heads-up, independent of whether a `RULE` or `ACTION`
+  was proposed. Two things it checks: whether a proposed rule actually adds
   distinguishing criteria beyond what the baseline verdict step (SPAM,
   PHISH, LEGIT, UNSURE, and the disposition that follows from it) would
-  already do on its own. A rule that just restates "obviously bad mail
-  should be blocked" is likely to never be the deciding factor, and the
-  recipient sees that heads-up before approving, not after.
+  already do on its own - a rule that just restates "obviously bad mail
+  should be blocked" is likely to never be the deciding factor - and
+  whether part of what was asked isn't actually achievable given the
+  pipeline facts above. Either way the recipient sees the heads-up before
+  approving, not after. A caveat with no rule and no action still reaches
+  Telegram as its own message rather than being silently dropped as
+  "nothing to add or do."
 
 An `ACTION`, when present, is one of:
 

@@ -150,12 +150,17 @@ your instruction isn't forced into a rule whether you meant one or not.
 It opens a **brief** - an open-ended back-and-forth with the judge (your
 agent) about what should happen, not a rigid form. If your intent is
 genuinely unclear, or a real choice depends on your answer, it asks you
-directly over Telegram instead of guessing. Once it's ready, it proposes a
-standalone rule for the ledger and/or a narrowly scoped action on mail that
-already exists (e.g. "delete this and anything like it from Spam") - a rule
-that wouldn't actually change any future outcome (it just restates what the
-judge already does by default) gets flagged with a caveat before you
-approve it, not after:
+directly over Telegram instead of guessing. If what you're asking for spans
+several things at once, it decomposes your message into whichever
+combination of a rule and an action actually gets you what you want, rather
+than transcribing it verbatim. Once it's ready, it proposes a standalone
+rule for the ledger and/or a narrowly scoped action on mail that already
+exists (e.g. "delete this and anything like it from Spam") - a rule that
+wouldn't actually change any future outcome (it just restates what the
+judge already does by default), or a request for something that isn't
+actually possible (there's no way to recover a message that was rejected
+outright and never delivered anywhere, for instance), gets flagged with a
+caveat before you approve it, not after:
 
 - Tap **Approve** (or reply **yes** to an active proposal) to commit the
   rule to the ledger and, if there was one, carry out the action.
