@@ -111,7 +111,7 @@ class TelegramApprovals:
         intro = result.get("intro")
         if question:
             self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
-            text = f"Question: {question}"
+            text = f"❓ {question}"
             self._store.append_turn(brief_id, "loremaster", text)
             message_id = await self._send(text)
         elif changes or action:
@@ -122,8 +122,8 @@ class TelegramApprovals:
             self._store.append_turn(brief_id, "loremaster", text)
             keyboard = {
                 "inline_keyboard": [[
-                    {"text": "Approve", "callback_data": f"approve:{brief_id}"},
-                    {"text": "Discard", "callback_data": f"discard:{brief_id}"},
+                    {"text": "✅ Approve", "callback_data": f"approve:{brief_id}"},
+                    {"text": "❌ Discard", "callback_data": f"discard:{brief_id}"},
                 ]]
             }
             message_id = await self._send(
@@ -134,7 +134,7 @@ class TelegramApprovals:
             # part of the request isn't achievable at all) - say so plainly
             # rather than the generic "nothing to add or do", which would
             # silently drop the explanation.
-            text = f"Caveat: {caveat}"
+            text = f"⚠️ {caveat}"
             self._store.append_turn(brief_id, "loremaster", text)
             self._store.resolve_brief(brief_id)
             message_id = await self._send(text)
@@ -169,7 +169,7 @@ class TelegramApprovals:
         if changes and action:
             lines.append(f"Action: {action}")
         if caveat:
-            lines.append(f"\nCaveat: {caveat}")
+            lines.append(f"\n⚠️ {caveat}")
         return "\n".join(lines)
 
     async def _send(self, text: str, keyboard: dict | None = None) -> int | None:
