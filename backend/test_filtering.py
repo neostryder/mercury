@@ -94,6 +94,13 @@ class FilteringPolicyStoreTests(unittest.TestCase):
         )
         self.assertTrue(self.store.remove_semantic_rule("421", "Genuinely ambiguous content"))
 
+    def test_moving_semantic_rule_removes_old_bucket_copy(self):
+        self.store.add_semantic_rule("421", "One condition")
+        self.assertTrue(self.store.add_semantic_rule("250", "One condition"))
+        policy = self.store.load()
+        self.assertEqual(policy["semantic_rules"]["421"], [])
+        self.assertEqual(policy["semantic_rules"]["250"], ["One condition"])
+
     def test_custom_action_uses_most_specific_selector(self):
         self.store.put_custom_action("example.com", "File in Archive", "Archive")
         self.store.put_custom_action("person@example.com", "File in Receipts", "Receipts")

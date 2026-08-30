@@ -67,7 +67,13 @@ def list_folders() -> list[str]:
         return []
 
 
-def deliver_accepted_message(raw_message: str, verdict: str, category: str, disposition: str) -> str:
+def deliver_accepted_message(
+    raw_message: str,
+    verdict: str,
+    category: str,
+    disposition: str,
+    target_folder: str = "INBOX",
+) -> str:
     """Synchronous (imaplib has no async API) - call via asyncio.to_thread.
     Returns a short status string for logging; raises nothing outward, since
     a delivery failure here must not be treated as a pipeline error that
@@ -76,6 +82,8 @@ def deliver_accepted_message(raw_message: str, verdict: str, category: str, disp
         return "skipped (MERCURY_DELIVER_ACCEPTED_MAIL is off)"
     if not IMAP_USER or not IMAP_PASSWORD:
         return "skipped (no mailbox IMAP credentials configured)"
+    if not target_folder or any(character in target_folder for character in "\r\n\x00"):
+        return "failed: invalid target folder"
 
     message_bytes = _add_headers(raw_message, {
         "X-Mercury-Verdict": verdict,
@@ -86,10 +94,10 @@ def deliver_accepted_message(raw_message: str, verdict: str, category: str, disp
         conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         try:
             conn.login(IMAP_USER, IMAP_PASSWORD)
-            typ, data = conn.append("INBOX", None, None, message_bytes)
+            typ, data = conn.append(target_folder, None, None, message_bytes)
             if typ != "OK":
                 return f"failed: APPEND returned {typ} {data}"
-            return "delivered"
+            return f"delivered to {target_folder}"
         finally:
             conn.logout()
     except Exception as exc:

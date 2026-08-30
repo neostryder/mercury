@@ -187,11 +187,18 @@ class FilteringPolicyStore:
                 owners[selector] = list_name
                 policy["sender_lists"][list_name].append(selector)
 
+        semantic_owners: dict[str, str] = {}
         for disposition in SEMANTIC_DISPOSITIONS:
             rules = semantic_rules.get(disposition)
             if not isinstance(rules, list) or not all(isinstance(rule, str) for rule in rules):
                 raise PolicyConfigError(f"semantic_rules.{disposition} must be a list of strings")
-            policy["semantic_rules"][disposition] = [rule.strip() for rule in rules if rule.strip()]
+            for rule in (rule.strip() for rule in rules if rule.strip()):
+                if rule in semantic_owners:
+                    raise PolicyConfigError(
+                        f"semantic rule appears in both {semantic_owners[rule]} and {disposition}"
+                    )
+                semantic_owners[rule] = disposition
+                policy["semantic_rules"][disposition].append(rule)
 
         action_selectors: set[str] = set()
         for entry in custom_actions:
@@ -311,6 +318,9 @@ class FilteringPolicyStore:
         policy = self.load()
         if normalized in policy["semantic_rules"][disposition]:
             return False
+        for candidate in SEMANTIC_DISPOSITIONS:
+            if normalized in policy["semantic_rules"][candidate]:
+                policy["semantic_rules"][candidate].remove(normalized)
         policy["semantic_rules"][disposition].append(normalized)
         self._save(policy)
         return True

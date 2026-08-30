@@ -35,23 +35,34 @@ class ApprovalStore:
             return {"briefs": {}, "message_index": {}}
         data.setdefault("briefs", {})
         data.setdefault("message_index", {})
+        for brief in data["briefs"].values():
+            brief.setdefault("message_metadata", {})
+            brief.setdefault("changes", [])
+            brief.setdefault("message_decision", None)
         return data
 
     def _save(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, indent=2))
 
-    def create_brief(self, message_context: str, via_dictation: bool = False) -> str:
+    def create_brief(
+        self,
+        message_context: str,
+        via_dictation: bool = False,
+        message_metadata: dict | None = None,
+    ) -> str:
         brief_id = secrets.token_hex(4)
         data = self._load()
         data["briefs"][brief_id] = {
             "status": "open",
             "message_context": message_context,
             "via_dictation": via_dictation,
+            "message_metadata": message_metadata or {},
             "history": [],
-            "rule": None,
+            "changes": [],
             "action": None,
             "caveat": None,
+            "message_decision": None,
             "rounds": 0,
         }
         self._save(data)
@@ -75,7 +86,21 @@ class ApprovalStore:
         self._save(data)
 
     def resolve_brief(self, brief_id: str) -> None:
-        self.update_brief(brief_id, status="resolved")
+        data = self._load()
+        brief = data["briefs"].get(brief_id)
+        if brief is None:
+            return
+        brief["status"] = "resolved"
+        brief.get("message_metadata", {}).pop("raw_message", None)
+        self._save(data)
+
+    def forget_raw_message(self, brief_id: str) -> None:
+        data = self._load()
+        brief = data["briefs"].get(brief_id)
+        if brief is None:
+            return
+        brief.get("message_metadata", {}).pop("raw_message", None)
+        self._save(data)
 
     def track_message(self, message_id: int, brief_id: str) -> None:
         data = self._load()
