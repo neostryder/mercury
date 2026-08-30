@@ -279,6 +279,35 @@ CAVEAT: NONE""")
         self.assertEqual(parsed["changes"][0]["list"], "blacklist")
         self.assertEqual(parsed["changes"][1]["disposition"], "421")
         self.assertEqual(parsed["changes"][2]["native_folder"], "Archive")
+        self.assertIsNone(parsed["reply"])
+
+    def test_brief_parser_reads_a_reply_alongside_a_proposal(self):
+        parsed = app._parse_brief_response("""QUESTION: NONE
+REPLY: You're right, that was never done - fixing it now:
+SENDER_LIST: NONE
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: UNSUBSCRIBE: fanatical.example
+CAVEAT: NONE""")
+
+        self.assertEqual(
+            parsed["reply"], "You're right, that was never done - fixing it now:"
+        )
+        self.assertEqual(parsed["action"], "UNSUBSCRIBE: fanatical.example")
+        self.assertEqual(parsed["changes"], [])
+
+    def test_action_field_is_not_confused_with_custom_action(self):
+        parsed = app._parse_brief_response("""QUESTION: NONE
+REPLY: NONE
+SENDER_LIST: NONE
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: news@example.com | File this message in Archive | FOLDER:Archive
+ACTION: UNSUBSCRIBE: fanatical.example
+CAVEAT: NONE""")
+
+        self.assertEqual(parsed["changes"][0]["kind"], "custom_action")
+        self.assertEqual(parsed["changes"][0]["instruction"], "File this message in Archive")
+        self.assertEqual(parsed["action"], "UNSUBSCRIBE: fanatical.example")
 
     def test_filtering_management_endpoint_mutates_all_entry_types(self):
         with patch.object(app.event_log, "log_event"):
@@ -332,7 +361,6 @@ class TelegramDecisionTests(unittest.TestCase):
         self.telegram = TelegramApprovals(
             self.store,
             advance=AsyncMock(),
-            discuss=AsyncMock(),
             finalize=self.finalize,
             execute_action=AsyncMock(),
             execute_message_decision=self.execute_decision,

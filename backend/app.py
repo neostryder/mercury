@@ -53,9 +53,6 @@ telegram_approvals = TelegramApprovals(
     advance=lambda history, ctx, new_message, via_dictation=False: advance_brief(
         history, ctx, new_message, via_dictation
     ),
-    discuss=lambda history, ctx, outcome, new_message: discuss_resolved_brief(
-        history, ctx, outcome, new_message
-    ),
     finalize=lambda change, source="filtering_proposal": _finalize_change(change, source),
     execute_action=lambda action, ctx: dispatch_action(action, ctx),
     execute_message_decision=lambda decision, brief: execute_message_decision(decision, brief),
@@ -152,13 +149,20 @@ def _parse_brief_response(content: str) -> dict:
     def _extract(field: str, later_fields: list[str]) -> str | None:
         if later_fields:
             stop = "|".join(later_fields)
-            pattern = rf"{field}:\s*(.+?)(?:\n(?:{stop}):|\Z)"
+            pattern = rf"^{field}:\s*(.+?)(?:\n(?:{stop}):|\Z)"
         else:
-            pattern = rf"{field}:\s*(.+)"
-        m = re.search(pattern, content, re.DOTALL)
+            pattern = rf"^{field}:\s*(.+)"
+        # ^ is anchored to a real line start (MULTILINE) so ACTION: can never
+        # match inside CUSTOM_ACTION: - a plain substring search would treat
+        # "CUSTOM_ACTION:" as containing "ACTION:" and silently capture the
+        # wrong field whenever both are present in the same response.
+        m = re.search(pattern, content, re.DOTALL | re.MULTILINE)
         value = m.group(1).strip().strip('"') if m else None
         return None if value and value.upper().startswith("NONE") else value
 
+    reply = _extract(
+        "REPLY", ["SENDER_LIST", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
+    )
     sender_list = _extract(
         "SENDER_LIST", ["SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
     )
@@ -202,8 +206,9 @@ def _parse_brief_response(content: str) -> dict:
     return {
         "question": _extract(
             "QUESTION",
-            ["SENDER_LIST", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"],
+            ["REPLY", "SENDER_LIST", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"],
         ),
+        "reply": reply,
         "changes": changes,
         "action": _extract("ACTION", ["CAVEAT"]),
         "caveat": _extract("CAVEAT", []),
@@ -289,11 +294,23 @@ Latest message from the recipient:
 {new_message}
 ---
 
-Decide how to respond. You have six independent things to decide below.
-QUESTION is mutually exclusive with proposing anything: if you ask a
-question, leave SENDER_LIST, SEMANTIC_RULE, CUSTOM_ACTION, and ACTION all
-NONE this turn, since the answer might change them. Every standing change
-you return is only a proposal. Mercury will show it for explicit approval
+This conversation may already show an earlier round that reached an outcome
+(a proposal approved or discarded, an action carried out, or a turn where
+nothing needed to change). That outcome is not the end of the brief and
+this reply is not an afterthought to brush off - if it asks what actually
+happened, answer honestly, including admitting a misread from an earlier
+round. If it turns out something the recipient actually wanted was never
+proposed, was discarded, or still is not done, propose or re-propose it now
+via SENDER_LIST/SEMANTIC_RULE/CUSTOM_ACTION/ACTION exactly as you would for
+a brand-new brief - a prior round having concluded is never a reason to
+tell the recipient to go re-flag the message instead of just acting on what
+they are asking for right now.
+
+Decide how to respond. You have seven independent things to decide below.
+QUESTION is mutually exclusive with everything else: if you ask a question,
+leave REPLY, SENDER_LIST, SEMANTIC_RULE, CUSTOM_ACTION, and ACTION all NONE
+this turn, since the answer might change them. Every standing change you
+return is only a proposal. Mercury will show it for explicit approval
 before writing anything.
 
 - QUESTION: if what's being asked is genuinely unclear, or a real design
@@ -302,6 +319,14 @@ before writing anything.
   a filtering change or action yet, not a fallback for emergencies only. NONE once you
   actually have enough to propose something, or if there's nothing left to
   resolve at all.
+- REPLY: a direct, honest answer when the recipient asked or said something
+  that needs a real response and nothing else below already covers it - e.g.
+  confirming whether an action from an earlier round was actually carried
+  out, or acknowledging a misread. Can stand alone, or introduce a fresh
+  SENDER_LIST/SEMANTIC_RULE/CUSTOM_ACTION/ACTION proposal below it (e.g. "You're
+  right, that was never done - fixing it now:"). NONE when there is nothing
+  worth saying beyond what a proposal or CAVEAT already conveys, or this is
+  the first message in the brief.
 - SENDER_LIST: a deterministic disposition based only on sender identity,
   formatted "BLACKLIST | <domain-or-exact-address>", "GREYLIST | ...", or
   "WHITELIST | ...". Use BLACKLIST for 550, GREYLIST for 421, and WHITELIST
@@ -352,6 +377,7 @@ before writing anything.
 
 Respond in exactly this format, nothing else:
 QUESTION: <your question, or NONE>
+REPLY: <a direct answer per above, or NONE>
 SENDER_LIST: <BLACKLIST|GREYLIST|WHITELIST> | <domain-or-address>, or NONE
 SEMANTIC_RULE: <250|421|550> | <standalone condition>, or NONE
 CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
@@ -359,46 +385,6 @@ ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>
 CAVEAT: <a direct heads-up per above, or NONE>"""
     content = await judge.ask(prompt)
     return _parse_brief_response(content)
-
-
-async def discuss_resolved_brief(
-    history: list[dict], message_context: str, outcome_summary: str, new_message: str
-) -> str:
-    """A resolved brief's own follow-up question, e.g. challenging whether a
-    committed filtering change actually did anything. Purely conversational - never
-    changes the filtering policy or takes an action itself; that requires a new
-    brief or the dashboard's own reverse-rule control."""
-    prompt = f"""A brief you already resolved is being followed up on. Answer the
-recipient's question directly and honestly, using the full context below -
-if their question raises a real problem with what you did (the filtering change you
-added doesn't actually change anything, you missed something, or similar),
-say so plainly instead of being defensive. This is a conversation, not a
-new proposal: do not add or change anything in the filtering policy from this
-reply, and do not carry out any action - if the recipient wants that,
-they'll say so explicitly, and it will start a new brief.
-
-The flagged message(s) (context only, redacted):
----
-{message_context}
----
-
-Conversation so far:
----
-{_format_history(history)}
----
-
-What was ultimately decided:
----
-{outcome_summary}
----
-
-Recipient's follow-up:
----
-{new_message}
----
-
-Respond with your answer directly - plain text, no special format."""
-    return await judge.ask(prompt)
 
 
 async def dispatch_action(action: str, message_context: str) -> tuple[str, dict | None]:

@@ -245,14 +245,19 @@ delivered anywhere at all (Mercury keeps no usable copy of a 421; a
 hard-bounce's content is retained only for review, not redelivery) - so
 "un-defer" or "restore" requests about already-rejected mail can never
 become a real `MAILBOX` action, only a future filtering change plus an
-honest `CAVEAT` about what can't be recovered. It then decides among six
+honest `CAVEAT` about what can't be recovered. It then decides among seven
 independent fields, only one of which forces a stop:
 
 - `QUESTION` - genuinely unclear intent, or a real design choice that
   depends on the recipient's answer, is asked directly rather than guessed
   at. This is the ordinary way to handle a brief that isn't ready for a
   filtering change or action yet, not a rare fallback - a question is
-  mutually exclusive with proposing anything that same turn.
+  mutually exclusive with everything else that same turn, `REPLY` included.
+- `REPLY` - a direct, honest answer when the recipient asked or said
+  something that needs a real response and no other field already covers
+  it (e.g. confirming whether an earlier action actually happened, or
+  admitting a misread). Can stand alone, or introduce a fresh proposal
+  below it.
 - `SENDER_LIST` - a deterministic blacklist, greylist, or whitelist proposal
   with a domain or exact address. The judge defaults to an organization's
   own domain and uses an exact address for a shared/public provider where
@@ -302,13 +307,22 @@ one-on-one chat, so a thumbs-up there is never actually received:
 - Any other reply - to a question, to a proposal, to the "approved,
   working on it" notice, or to the final outcome - continues the same
   brief: every message Mercury sends is tracked back to its brief, not just
-  the first one, capped at a few rounds so a persistently unresolved brief
-  can't loop forever.
-- A reply to an already-resolved brief (challenging or asking about a
-  decision already made) is answered from the full history by
-  `discuss_resolved_brief()` - purely conversational, since it never
-  reopens the policy or takes an action itself; that requires a new brief
-  or the dashboard's own reverse-rule control.
+  the first one. There is no round limit that force-abandons an unresolved
+  brief; a genuinely unclear one just keeps getting asked about.
+- A reply to an already-resolved brief is re-run through the exact same
+  `advance_brief()` used for the first message and every open-brief reply,
+  never a separate conversational-only path - a resolved brief is only the
+  last round's outcome, not a lock. It can answer a question about what
+  happened (a new `REPLY` field in the response format, alongside the
+  existing `QUESTION`/`SENDER_LIST`/`SEMANTIC_RULE`/`CUSTOM_ACTION`/`ACTION`/
+  `CAVEAT` ones), and it can just as well propose a correction or a
+  brand-new change or action when the reply calls for one - e.g. "do it"
+  after being told an earlier request was never actually carried out
+  proposes the action right then, rather than requiring the message be
+  re-flagged from Thunderbird to start over. Approving or discarding a
+  proposal always clears the brief's stored `changes`/`action`/`caveat`
+  alongside resolving it, so a later unrelated "yes" can never land on a
+  proposal that already committed or was discarded.
 
 Briefs are persisted (`backend/approvals.py`, `pending_approvals.json`) -
 full turn history and a message-id-to-brief index, not just the latest

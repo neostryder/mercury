@@ -202,12 +202,14 @@ caveat before you approve it, not after:
   proposed filtering changes and, if there was one, carry out the action.
 - Tap **Discard** (or reply **no**) to end the brief without committing
   anything.
-- Any other reply - to a question, a proposal, or even the final outcome
-  - continues the same conversation rather than going unanswered, capped
-  at a few rounds so a persistently unresolved brief can't loop forever.
-  A reply challenging an already-decided outcome still gets a real answer,
-  reasoned from the whole conversation, though it won't reopen the policy
-  itself from that reply alone.
+- Any other reply - to a question, a proposal, or even the final outcome -
+  continues the same conversation rather than going unanswered, with no
+  round limit forcing it closed. A brief reaching an outcome is never a
+  dead end: a later reply is re-read against the whole conversation, and if
+  it turns out something you actually wanted was never proposed, was
+  discarded, or still isn't done, it proposes or re-proposes it right then
+  - you never have to re-flag the message from scratch to get Mercury to
+  actually act on what you asked for.
 
 STANDARD and URGENT message reports also include four common decision
 buttons: Unsubscribe, Soft-bounce, Hard-bounce, and Deliver + whitelist. A

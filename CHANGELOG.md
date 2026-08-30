@@ -424,3 +424,23 @@
   server other than ForwardEmail itself (ForwardEmail only strips forgeries
   of its own identity), which would have reopened the exact spoofing gap
   this check exists to close.
+- [Visible] Fixed a resolved brief being a dead end: any reply after a
+  brief settled - even one asking whether an earlier request actually got
+  carried out - used to get a purely conversational answer that could never
+  itself change anything, no matter how explicit the recipient's follow-up
+  was. A brief no longer distinguishes "still open" from "already resolved"
+  for the purpose of what a reply can do - every reply is re-read against
+  the full conversation, and a corrected understanding now proposes the
+  actual change or action right then rather than requiring the message be
+  re-flagged from scratch. A new `REPLY` field lets a turn answer a direct
+  question (e.g. "no, that was never done") without having to invent a
+  filtering change or action just to say something. Also removed the fixed
+  round limit that used to auto-discard a brief that had gone back and
+  forth for a while - an unresolved brief now stays reachable for as long
+  as it takes, rather than getting silently abandoned mid-conversation.
+- [Internal] Fixed `_parse_brief_response`'s field regexes matching a field
+  name anywhere in the text rather than only at the start of a line, which
+  meant `ACTION:` could match inside `CUSTOM_ACTION:` and silently return
+  the wrong value (or the custom action's own text) whenever both fields
+  were present in the same response. Field patterns are now anchored to an
+  actual line start.

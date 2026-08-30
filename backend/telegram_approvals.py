@@ -10,16 +10,21 @@ channel that can receive messages, not just send them.
 
 Flow: propose_new() opens a brief with the flagged message and the
 recipient's instruction, and asks Loremaster to advance it - the result is
-either a QUESTION (sent as plain text, brief stays open awaiting an answer)
-or typed filtering changes and/or an ACTION (sent with Approve/Discard buttons).
+either a QUESTION (sent as plain text, brief stays open awaiting an answer),
+typed filtering changes and/or an ACTION (sent with Approve/Discard buttons),
+or a plain REPLY when nothing needs to change but something needs saying.
 poll_forever() long-polls for button taps and replies. Every message Mercury
 sends for a brief is tracked back to it - not just the first one - so a
 reply to ANY message in that thread (a question, a proposal, an "approved,
 working on it", the final outcome) continues the same conversation rather
 than going unanswered. Approval or discard resolves the brief (it is never
-deleted), so a later reply challenging the outcome still gets answered, via
-Loremaster's own judgment over the full history rather than silently
-dropped.
+deleted, and "resolved" is not a dead end), so a later reply - even one
+that arrives long after the brief settled - is re-read with Loremaster's
+own judgment over the full history: it can answer a question about what
+happened, and it can just as well propose a correction or a brand-new
+change or action if that's what the reply actually calls for. Nothing
+resolves this into silence; the only way a brief stops being reachable is
+the recipient being satisfied with where it landed.
 
 Reactions (thumbs-up) were tried first but Telegram's Bot API only delivers
 message_reaction updates when the bot is an administrator in the chat - a
@@ -38,7 +43,6 @@ import httpx
 import event_log
 from approvals import ApprovalStore
 
-MAX_ROUNDS = 8
 API_BASE = "https://api.telegram.org/bot{token}"
 TELEGRAM_TEXT_LIMIT = 4000
 
@@ -47,12 +51,11 @@ logger = logging.getLogger(__name__)
 
 class TelegramApprovals:
     def __init__(
-        self, store: ApprovalStore, advance, discuss, finalize, execute_action,
+        self, store: ApprovalStore, advance, finalize, execute_action,
         execute_message_decision,
     ):
         self._store = store
         self._advance = advance
-        self._discuss = discuss
         self._finalize = finalize
         self._execute_action = execute_action
         self._execute_message_decision = execute_message_decision
@@ -103,19 +106,29 @@ class TelegramApprovals:
 
     async def _apply_brief_result(self, brief_id: str, result: dict) -> None:
         """Send Loremaster's turn and update brief state - shared by the
-        first message in a brief and every reply after it."""
+        first message in a brief and every reply after it, including a reply
+        to an already-resolved brief. Status only ever means "what the last
+        round settled on" - open while a question or proposal awaits an
+        answer, resolved once something's been decided or explained - never
+        a lock on whether the brief can still be worked. Clearing changes/
+        action/caveat on every resolution (not just via resolve_brief, which
+        also drops any now-unneeded raw message copy) matters here more than
+        it used to: a later reply's own "yes"/"no" shorthand must never land
+        on a stale proposal from a round that already resolved one way or
+        the other."""
         question = result["question"]
+        reply = result.get("reply")
         changes = result["changes"]
         action = result["action"]
         caveat = result["caveat"]
-        intro = result.get("intro")
+        intro = result.get("intro") or reply
         if question:
-            self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
+            self._store.update_brief(brief_id, status="open", changes=[], action=None, caveat=None)
             text = f"❓ {question}"
             self._store.append_turn(brief_id, "loremaster", text)
             message_id = await self._send(text)
         elif changes or action:
-            self._store.update_brief(brief_id, changes=changes, action=action, caveat=caveat)
+            self._store.update_brief(brief_id, status="open", changes=changes, action=action, caveat=caveat)
             text = self._proposal_text(changes, action, caveat)
             if intro:
                 text = f"{intro}\n\n{text}"
@@ -129,19 +142,24 @@ class TelegramApprovals:
             message_id = await self._send(
                 text + "\n\nTap a button, or reply to THIS message with feedback.", keyboard=keyboard
             )
-        elif caveat:
-            # Nothing proposable, but there's something worth explaining (e.g.
-            # part of the request isn't achievable at all) - say so plainly
-            # rather than the generic "nothing to add or do", which would
-            # silently drop the explanation.
-            text = f"⚠️ {caveat}"
+        elif caveat or reply:
+            # Nothing proposable, but there's something worth saying - either
+            # a direct answer to what the recipient just asked (e.g. whether
+            # an earlier action actually happened), a heads-up that part of
+            # the request isn't achievable, or both. Saying nothing here is
+            # exactly the failure mode this exists to close: the recipient
+            # asking a plain question and getting a generic "nothing to add
+            # or do" instead of a real answer.
+            text = "\n\n".join(part for part in (reply, f"⚠️ {caveat}" if caveat else None) if part)
             self._store.append_turn(brief_id, "loremaster", text)
             self._store.resolve_brief(brief_id)
+            self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
             message_id = await self._send(text)
         else:
             text = "Got it - nothing to add or do."
             self._store.append_turn(brief_id, "loremaster", text)
             self._store.resolve_brief(brief_id)
+            self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
             message_id = await self._send(text)
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
@@ -265,42 +283,31 @@ class TelegramApprovals:
         if not brief:
             return
 
-        if brief["status"] == "resolved":
-            await self._continue_resolved_brief(brief_id, brief, reply_text)
-            return
-
+        # A pending proposal's own yes/no shorthand only applies while it's
+        # still actually pending - once resolved, "yes"/"no" is just another
+        # reply to reinterpret (e.g. "yes" answering an unrelated question),
+        # not a stale re-trigger of a proposal already committed or discarded.
         lowered = reply_text.lower()
-        if (brief.get("changes") or brief.get("action")) and lowered in ("yes", "y", "approve", "approved"):
-            await self._approve(brief_id, brief)
-            return
-        if (brief.get("changes") or brief.get("action")) and lowered in ("no", "n", "reject", "rejected", "discard"):
-            await self._discard(brief_id, brief)
-            return
-        await self._continue_open_brief(brief_id, brief, reply_text)
+        if brief["status"] == "open" and (brief.get("changes") or brief.get("action")):
+            if lowered in ("yes", "y", "approve", "approved"):
+                await self._approve(brief_id, brief)
+                return
+            if lowered in ("no", "n", "reject", "rejected", "discard"):
+                await self._discard(brief_id, brief)
+                return
+        await self._continue_brief(brief_id, brief, reply_text)
 
-    async def _continue_open_brief(self, brief_id: str, brief: dict, reply_text: str) -> None:
-        rounds = brief.get("rounds", 0) + 1
-        if rounds > MAX_ROUNDS:
-            self._store.resolve_brief(brief_id)
-            await self._send("This brief has gone on a while - discarded for now. Flag the message again to restart it.")
-            return
+    async def _continue_brief(self, brief_id: str, brief: dict, reply_text: str) -> None:
+        """Re-interprets the whole brief - whether it's still open or was
+        already resolved - in light of a new reply. A brief is never a dead
+        end: this never force-abandons an unresolved one on a round count,
+        and a "resolved" one is just the last outcome, not a lock - the
+        recipient not being satisfied with it is exactly the case this
+        needs to keep handling for real, not just talk through."""
         self._store.append_turn(brief_id, "user", reply_text)
-        self._store.update_brief(brief_id, rounds=rounds)
+        self._store.update_brief(brief_id, rounds=brief.get("rounds", 0) + 1)
         result = await self._advance(brief["history"], brief["message_context"], reply_text, brief.get("via_dictation", False))
         await self._apply_brief_result(brief_id, result)
-
-    async def _continue_resolved_brief(self, brief_id: str, brief: dict, reply_text: str) -> None:
-        outcome = (
-            self._proposal_text(brief.get("changes", []), brief.get("action"), None)
-            if (brief.get("changes") or brief.get("action"))
-            else "Nothing was added or done."
-        )
-        self._store.append_turn(brief_id, "user", reply_text)
-        answer = await self._discuss(brief["history"], brief["message_context"], outcome, reply_text)
-        self._store.append_turn(brief_id, "loremaster", answer)
-        message_id = await self._send(answer)
-        if message_id is not None:
-            self._store.track_message(message_id, brief_id)
 
     async def _handle_callback(self, callback: dict) -> None:
         data = callback.get("data", "")
@@ -371,6 +378,7 @@ class TelegramApprovals:
             })
         else:
             self._store.resolve_brief(brief_id)
+            self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
 
     async def _approve(self, brief_id: str, brief: dict) -> None:
         result_lines = []
@@ -413,9 +421,11 @@ class TelegramApprovals:
             })
         else:
             self._store.resolve_brief(brief_id)
+            self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
 
     async def _discard(self, brief_id: str, brief: dict) -> None:
         self._store.resolve_brief(brief_id)
+        self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
         discarded = "; ".join(
             self._change_text(change) for change in brief.get("changes", [])
         ) or brief.get("action")
