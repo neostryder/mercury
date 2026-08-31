@@ -266,7 +266,7 @@ independent fields, only one of which forces a stop:
   standalone but does not repeat the disposition supplied by its bucket.
 - `CUSTOM_ACTION` - a per-sender standing instruction plus an optional real
   IMAP folder for native routing.
-- `ACTION` - one of two kinds, described below, or `NONE`.
+- `ACTION` - one of three kinds, described below, or `NONE`.
 - `CAVEAT` - a direct heads-up, independent of the proposal fields. Two
   things it checks: whether a proposed semantic rule actually adds
   distinguishing criteria beyond what the baseline verdict step (SPAM,
@@ -291,6 +291,12 @@ An `ACTION`, when present, is one of:
   requires its own approval. An intermediate `NEEDS_SIGNIN` result opens the
   one-time credential path described below and never proposes a bounce by
   itself.
+- `GANDALF: <note>` - hands the note and flagged message context to the
+  separate Gandalf/Loremaster system as a plain-text email at
+  `gandalf@rpgm.tools`. The relay uses SMTP over SSL with
+  `MERCURY_MAILBOX_SMTP_HOST` and `MERCURY_MAILBOX_SMTP_PORT`, and authenticates
+  with the mailbox's existing `MERCURY_MAILBOX_IMAP_USER` and
+  `MERCURY_MAILBOX_IMAP_PASSWORD` credentials.
 
 Sent to Telegram (`backend/telegram_approvals.py`), independent of whichever
 `Notifier` provider is configured for one-way alerts, since this needs a

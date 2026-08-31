@@ -464,3 +464,11 @@
   configurable window (`LOG_RETENTION_DAYS`, defaulting to 365 days), and
   completed action items past the same window. An open action item is never
   purged by age alone.
+- [Visible] Added a `GANDALF` brief action for handing a flagged message to
+  Gandalf/Loremaster for separate competitor, canon, research, or planning
+  work. Once approved, Mercury emails the summarized instruction and flagged
+  context to `gandalf@rpgm.tools` and reports whether the handoff was sent.
+- [Internal] Added `backend/gandalf_relay.py`, an SMTP-over-SSL relay that
+  reuses the mailbox's existing IMAP username and password. Its SMTP endpoint
+  is configured by `MERCURY_MAILBOX_SMTP_HOST` (default
+  `smtp.forwardemail.net`) and `MERCURY_MAILBOX_SMTP_PORT` (default `465`).

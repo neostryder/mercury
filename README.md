@@ -233,6 +233,12 @@ behind the judge seam, using its scoped mailbox-action skill. Folder routing
 for accepted messages is handled directly through the backend's existing
 IMAP delivery connection.
 
+A brief can also propose a `GANDALF` action when the flagged message belongs
+with Gandalf/Loremaster for separate competitor, canon, research, or planning
+work instead of an inbox operation. After approval, Mercury emails the
+recipient's summarized instruction and the flagged message context to
+`gandalf@rpgm.tools`.
+
 ## Status
 
 **Enforcing.** Every message gets a final disposition, either from an

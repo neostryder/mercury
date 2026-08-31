@@ -329,6 +329,80 @@ CAVEAT: NONE""")
         self.assertEqual(parsed["changes"][0]["instruction"], "File this message in Archive")
         self.assertEqual(parsed["action"], "UNSUBSCRIBE: fanatical.example")
 
+    def test_brief_parser_recognizes_gandalf_action(self):
+        parsed = app._parse_brief_response("""QUESTION: NONE
+REPLY: NONE
+SENDER_LIST: NONE
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: GANDALF: Log this as a competitor idea and research it
+CAVEAT: NONE""")
+
+        self.assertEqual(
+            parsed["action"],
+            "GANDALF: Log this as a competitor idea and research it",
+        )
+        self.assertEqual(parsed["changes"], [])
+
+    def test_dispatch_action_routes_gandalf_without_followup(self):
+        execute = AsyncMock(return_value="Sent to Gandalf.")
+        with patch.object(app, "execute_gandalf_handoff", new=execute):
+            outcome, followup = asyncio.run(app.dispatch_action(
+                "GANDALF: Research Acme as a competitor", "Flagged message"
+            ))
+
+        self.assertEqual(outcome, "Sent to Gandalf.")
+        self.assertIsNone(followup)
+        execute.assert_awaited_once_with(
+            "Research Acme as a competitor", "Flagged message"
+        )
+
+    def test_execute_gandalf_handoff_sends_and_logs_success(self):
+        events = []
+        with (
+            patch.object(app.gandalf_relay, "send_to_gandalf", return_value=True) as send,
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            outcome = asyncio.run(app.execute_gandalf_handoff(
+                "Research Acme as a competitor", "From: news@acme.example\n\nMessage body"
+            ))
+
+        self.assertEqual(outcome, "Sent to Gandalf.")
+        subject, body = send.call_args.args
+        self.assertEqual(subject, "Mercury handoff: Research Acme as a competitor")
+        self.assertIn("Research Acme as a competitor", body)
+        self.assertIn("From: news@acme.example\n\nMessage body", body)
+        self.assertEqual(events[0][0], "actions")
+        self.assertEqual(events[0][1]["kind"], "GANDALF_HANDOFF")
+        self.assertEqual(events[0][1]["result"], "SENT")
+        self.assertEqual(events[0][1]["outcome_summary"], outcome)
+        self.assertIsNone(events[0][1]["domain"])
+
+    def test_execute_gandalf_handoff_logs_failed_send(self):
+        events = []
+        with (
+            patch.object(app.gandalf_relay, "send_to_gandalf", return_value=False),
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            outcome = asyncio.run(app.execute_gandalf_handoff(
+                "Research Acme as a competitor", "Flagged message"
+            ))
+
+        self.assertEqual(outcome, "Could not reach Gandalf - reply to try again.")
+        self.assertEqual(events[0][0], "actions")
+        self.assertEqual(events[0][1]["kind"], "GANDALF_HANDOFF")
+        self.assertEqual(events[0][1]["result"], "FAILED")
+        self.assertEqual(events[0][1]["outcome_summary"], outcome)
+        self.assertIsNone(events[0][1]["domain"])
+
     def test_filtering_management_endpoint_mutates_all_entry_types(self):
         with patch.object(app.event_log, "log_event"):
             asyncio.run(app.change_filtering_policy(FakeRequest({

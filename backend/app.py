@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 import credential_prompts
 import digest
 import event_log
+import gandalf_relay
 import mail_delivery
 from approvals import ApprovalStore
 from filtering import (
@@ -362,8 +363,18 @@ before writing anything.
   carried out by a separate, scoped step with no further context, so it
   must be unambiguous on its own>" or "UNSUBSCRIBE: <sender domain and any
   nuance>" (the unsubscribe route's safety is evaluated separately before
-  anything is done). Do not infer a sender-list preference from an
-  unsubscribe request alone; propose one only if the recipient separately
+  anything is done), or "GANDALF: <one-line note of what to tell Gandalf,
+  in your own words summarizing the recipient's instruction>". Use GANDALF
+  when the recipient is asking to hand the flagged message to a different
+  system, persona, or person for its own separate evaluation or action,
+  rather than asking for something Mercury can do through mailbox delivery,
+  folder routing, unsubscribe, or a standing sender rule. Explicit cues
+  include Gandalf, Loremaster, or asking to "log this", "research this", or
+  "look into this" as a competitor, canon, or planning item rather than a
+  request about the recipient's own inbox. If it is genuinely ambiguous
+  whether the request is a mailbox action or a Gandalf handoff, prefer NONE
+  and let the recipient clarify. Do not infer a sender-list preference from
+  an unsubscribe request alone; propose one only if the recipient separately
   expressed it. NONE if nothing should happen to existing mail.
 - CAVEAT: a direct heads-up about anything the recipient should know before
   approving. Two independent things to check, either can apply:
@@ -387,7 +398,7 @@ REPLY: <a direct answer per above, or NONE>
 SENDER_LIST: <BLACKLIST|GREYLIST|WHITELIST> | <domain-or-address>, or NONE
 SEMANTIC_RULE: <250|421|550> | <standalone condition>, or NONE
 CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
-ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | NONE>
+ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | GANDALF: ... | NONE>
 CAVEAT: <a direct heads-up per above, or NONE>"""
     content = await judge.ask(prompt)
     return _parse_brief_response(content)
@@ -400,9 +411,40 @@ async def dispatch_action(
         return await execute_unsubscribe_action(
             action.split(":", 1)[1].strip(), message_context, brief_id
         )
+    if action.upper().startswith("GANDALF:"):
+        outcome = await execute_gandalf_handoff(
+            action.split(":", 1)[1].strip(), message_context
+        )
+        return outcome, None
     details = action.split(":", 1)[1].strip() if action.upper().startswith("MAILBOX:") else action
     outcome = await execute_mailbox_action(details, message_context)
     return outcome, None
+
+
+async def execute_gandalf_handoff(note: str, message_context: str) -> str:
+    subject = f"Mercury handoff: {note}"
+    body = f"""Mercury handoff note:
+{note}
+
+Flagged message context:
+---
+{message_context}
+---"""
+    sent = await asyncio.to_thread(gandalf_relay.send_to_gandalf, subject, body)
+    outcome = (
+        "Sent to Gandalf."
+        if sent
+        else "Could not reach Gandalf - reply to try again."
+    )
+    event_log.log_event("actions", {
+        "executed_at": _now(),
+        "kind": "GANDALF_HANDOFF",
+        "details": note,
+        "outcome_summary": outcome,
+        "result": "SENT" if sent else "FAILED",
+        "domain": None,
+    })
+    return outcome
 
 
 async def execute_mailbox_action(action: str, message_context: str) -> str:
