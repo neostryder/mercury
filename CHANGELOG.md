@@ -456,3 +456,11 @@
   The unsubscribe executor supplies the submitted value to one scoped judge
   retry, immediately removes it from pending memory, and prevents it from
   reaching event logs or persisted brief history.
+- [Visible] The dashboard's messages, hard-bounces, rule-change, and actions
+  tables now have pagination: a 20/50/100 page-size selector plus Prev/Next,
+  instead of a single fixed-size page with no way to see older rows.
+- [Visible] The event log now purges automatically. A daily Worker cron
+  deletes messages, actions, rule-change, and admin-log rows older than a
+  configurable window (`LOG_RETENTION_DAYS`, defaulting to 365 days), and
+  completed action items past the same window. An open action item is never
+  purged by age alone.

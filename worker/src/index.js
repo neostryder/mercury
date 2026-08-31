@@ -11,6 +11,30 @@ import { DASHBOARD_HTML, lastNDays, renderStackedBarSVG, CHART_COLORS } from './
 const INGEST_TIMEOUT_MS = 20000;
 const MAX_CREDENTIAL_BODY_BYTES = 4096;
 const KNOWN_DISPOSITIONS = [250, 421, 550];
+const PAGE_SIZES = [20, 50, 100];
+const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_RETENTION_DAYS = 365;
+
+// Shared limit/offset parsing for the paginated dashboard table endpoints.
+// limit is restricted to PAGE_SIZES rather than accepting any number, since
+// it is interpolated into the SQL text below (D1's bind params cover values,
+// not the LIMIT/OFFSET clause shape) - an allowlist keeps that safe without
+// needing a bind param for it.
+function pageParams(params) {
+  const requestedLimit = Number(params.get('limit'));
+  const limit = PAGE_SIZES.includes(requestedLimit) ? requestedLimit : DEFAULT_PAGE_SIZE;
+  const requestedOffset = Number(params.get('offset'));
+  const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+  return { limit, offset };
+}
+
+// Fetches one extra row beyond `limit` to learn whether a next page exists,
+// rather than a separate COUNT(*) query - half the D1 reads for the same
+// answer, at the cost of discarding one row client-side.
+function paginate(rows, limit) {
+  const hasMore = rows.length > limit;
+  return { rows: hasMore ? rows.slice(0, limit) : rows, hasMore };
+}
 
 // Per-table column allowlists for the /log endpoint - hardcoded rather than
 // accepting arbitrary column names from the request, since those get
@@ -81,7 +105,33 @@ export default {
 
     return proxySynchronously(backendUrl, bodyText, env);
   },
+
+  // Daily retention sweep (see [[triggers]].crons in wrangler.toml). Deletes
+  // rows past LOG_RETENTION_DAYS from every time-stamped log table. An open
+  // action_items row is never purged by age alone - it is still a pending
+  // to-do regardless of how old it is, so only completed ones fall under
+  // retention here.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(purgeExpiredLogs(env));
+  },
 };
+
+async function purgeExpiredLogs(env) {
+  const days = Number(env.LOG_RETENTION_DAYS) || DEFAULT_RETENTION_DAYS;
+  const cutoffModifier = `-${days} day`;
+  const db = env.MERCURY_LOG;
+  const results = await db.batch([
+    db.prepare("DELETE FROM messages WHERE received_at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM rule_changes WHERE changed_at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM actions WHERE executed_at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM admin_log WHERE at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM action_items WHERE completed_at IS NOT NULL AND completed_at < datetime('now', ?)").bind(cutoffModifier),
+  ]);
+  const totalDeleted = results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+  await db.prepare(
+    'INSERT INTO admin_log (at, event, detail) VALUES (?, ?, ?)'
+  ).bind(new Date().toISOString(), 'log_retention_sweep', `days=${days} deleted=${totalDeleted}`).run();
+}
 
 // Low-friction single-user gate: standard HTTP Basic Auth, which the browser
 // prompts for once and then remembers for the rest of the session - no
@@ -360,10 +410,11 @@ async function handleDashboard(pathname, search, env, request) {
     }
 
     if (pathname === '/dashboard/api/hard-bounces') {
+      const { limit, offset } = pageParams(params);
       const result = await env.MERCURY_LOG.prepare(
-        "SELECT id, received_at, from_display, from_domain, subject, category, verdict, triggered_rule FROM messages WHERE enforced_disposition = '550' ORDER BY id DESC LIMIT 200"
-      ).all();
-      return json(result.results ?? []);
+        "SELECT id, received_at, from_display, from_domain, subject, category, verdict, triggered_rule FROM messages WHERE enforced_disposition = '550' ORDER BY id DESC LIMIT ? OFFSET ?"
+      ).bind(limit + 1, offset).all();
+      return json(paginate(result.results ?? [], limit));
     }
 
     if (hardBounceDetailMatch) {
@@ -438,21 +489,24 @@ async function handleDashboard(pathname, search, env, request) {
 
     if (pathname === '/dashboard/api/messages') {
       const disposition = params.get('disposition');
+      const { limit, offset } = pageParams(params);
       const stmt = disposition
-        ? env.MERCURY_LOG.prepare('SELECT * FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT 100').bind(disposition)
-        : env.MERCURY_LOG.prepare('SELECT * FROM messages ORDER BY id DESC LIMIT 100');
+        ? env.MERCURY_LOG.prepare('SELECT * FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT ? OFFSET ?').bind(disposition, limit + 1, offset)
+        : env.MERCURY_LOG.prepare('SELECT * FROM messages ORDER BY id DESC LIMIT ? OFFSET ?').bind(limit + 1, offset);
       const result = await stmt.all();
-      return json(result.results ?? []);
+      return json(paginate(result.results ?? [], limit));
     }
 
     if (pathname === '/dashboard/api/rules') {
-      const result = await env.MERCURY_LOG.prepare('SELECT * FROM rule_changes ORDER BY id DESC LIMIT 50').all();
-      return json(result.results ?? []);
+      const { limit, offset } = pageParams(params);
+      const result = await env.MERCURY_LOG.prepare('SELECT * FROM rule_changes ORDER BY id DESC LIMIT ? OFFSET ?').bind(limit + 1, offset).all();
+      return json(paginate(result.results ?? [], limit));
     }
 
     if (pathname === '/dashboard/api/actions') {
-      const result = await env.MERCURY_LOG.prepare('SELECT * FROM actions ORDER BY id DESC LIMIT 50').all();
-      return json(result.results ?? []);
+      const { limit, offset } = pageParams(params);
+      const result = await env.MERCURY_LOG.prepare('SELECT * FROM actions ORDER BY id DESC LIMIT ? OFFSET ?').bind(limit + 1, offset).all();
+      return json(paginate(result.results ?? [], limit));
     }
   } catch (err) {
     return json({ ok: false, error: String(err) });

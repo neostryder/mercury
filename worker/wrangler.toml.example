@@ -12,6 +12,7 @@ compatibility_date = "2026-08-01"
 
 [vars]
 BACKEND_BASE_URL = "https://your-backend-host.example.com"
+LOG_RETENTION_DAYS = "365"
 
 [[routes]]
 pattern = "mercury.example.com"
@@ -23,3 +24,9 @@ custom_domain = true
 binding = "MERCURY_LOG"
 database_name = "mercury-log"
 database_id = "00000000-0000-0000-0000-000000000000"
+
+# Daily retention sweep (see scheduled() in src/index.js) - purges rows
+# older than LOG_RETENTION_DAYS from the event log tables. 10:00 UTC is
+# 03:00 Phoenix (fixed UTC-7); pick an off-hours time for your own mailbox.
+[triggers]
+crons = ["0 10 * * *"]

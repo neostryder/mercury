@@ -94,6 +94,22 @@ function renderStackedBarSVG(days, series, byDay, { width = 760, height = 220 } 
   return `<svg viewBox="0 0 ${width} ${height + 20}" xmlns="http://www.w3.org/2000/svg">${gridLines}${bars}${xLabels}${legend}</svg>`;
 }
 
+// Pagination controls shared by the messages/bounces/rules/actions tables -
+// a page-size select plus Prev/Next, wired up client-side in the page's own
+// <script> below via the matching data-pager="<name>" attribute.
+function pagerHtml(name) {
+  return `<div class="pager" data-pager="${name}">
+    <span>Show</span>
+    <select data-pager-limit>
+      <option value="20">20</option>
+      <option value="50" selected>50</option>
+      <option value="100">100</option>
+    </select>
+    <button type="button" data-pager-prev disabled>Prev</button>
+    <button type="button" data-pager-next disabled>Next</button>
+  </div>`;
+}
+
 export { CHART_COLORS, lastNDays, renderStackedBarSVG };
 
 export const DASHBOARD_HTML = `<!doctype html>
@@ -202,6 +218,16 @@ export const DASHBOARD_HTML = `<!doctype html>
   .bar-row .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
   .bar-row .bar-count { width: 36px; text-align: right; }
   .empty { padding: 32px; text-align: center; color: var(--muted); }
+  .pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .pager select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px;
+  }
+  .pager button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .pager button:disabled { opacity: .4; cursor: default; }
   .scroll-x { overflow-x: auto; }
   .subject-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
@@ -292,6 +318,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <tbody><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
+    ${pagerHtml('bounces')}
   </section>
 
   <section>
@@ -310,6 +337,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <tbody><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
+    ${pagerHtml('messages')}
   </section>
 
   <section>
@@ -320,6 +348,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <tbody><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
+    ${pagerHtml('rules')}
   </section>
 
   <section>
@@ -330,6 +359,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <tbody><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
+    ${pagerHtml('actions')}
   </section>
 </main>
 
@@ -547,10 +577,59 @@ document.getElementById('filteringPolicy').addEventListener('click', async (even
   }
 });
 
+// One { limit, offset } state per paginated table, plus the messages
+// table's own extra disposition filter (set by the tab click handler
+// below, applied on every reload including Prev/Next/page-size changes).
+const pagers = {
+  messages: { limit: 50, offset: 0 },
+  bounces: { limit: 50, offset: 0 },
+  rules: { limit: 50, offset: 0 },
+  actions: { limit: 50, offset: 0 },
+};
+let messagesFilter = '';
+
+function pagerQuery(name) {
+  const p = pagers[name];
+  return 'limit=' + p.limit + '&offset=' + p.offset;
+}
+
+function updatePagerControls(name, hasMore) {
+  const el = document.querySelector(\`[data-pager="\${name}"]\`);
+  if (!el) return;
+  el.querySelector('[data-pager-prev]').disabled = pagers[name].offset === 0;
+  el.querySelector('[data-pager-next]').disabled = !hasMore;
+}
+
+function reloadPager(name) {
+  if (name === 'messages') loadMessages(messagesFilter);
+  else if (name === 'bounces') loadHardBounces();
+  else if (name === 'rules') loadRules();
+  else if (name === 'actions') loadActions();
+}
+
+document.querySelectorAll('[data-pager]').forEach((el) => {
+  const name = el.dataset.pager;
+  el.querySelector('[data-pager-limit]').addEventListener('change', (e) => {
+    pagers[name].limit = Number(e.target.value);
+    pagers[name].offset = 0;
+    reloadPager(name);
+  });
+  el.querySelector('[data-pager-prev]').addEventListener('click', () => {
+    pagers[name].offset = Math.max(0, pagers[name].offset - pagers[name].limit);
+    reloadPager(name);
+  });
+  el.querySelector('[data-pager-next]').addEventListener('click', () => {
+    pagers[name].offset += pagers[name].limit;
+    reloadPager(name);
+  });
+});
+
 async function loadMessages(filter) {
-  const url = '/dashboard/api/messages' + (filter ? '?disposition=' + filter : '');
+  messagesFilter = filter || '';
+  const url = '/dashboard/api/messages?' + pagerQuery('messages') +
+    (messagesFilter ? '&disposition=' + messagesFilter : '');
   const res = await fetch(url);
-  const rows = await res.json();
+  const { rows, hasMore } = await res.json();
   const tbody = document.querySelector('#messagesTable tbody');
   tbody.innerHTML = rows.length ? rows.map(r => \`
     <tr class="disp-\${esc(r.enforced_disposition)}">
@@ -562,11 +641,12 @@ async function loadMessages(filter) {
       <td><span class="pill disp-\${esc(r.enforced_disposition)}">\${esc(r.enforced_disposition)}</span></td>
       <td>\${r.alert_level && r.alert_level !== 'NONE' ? \`<span class="pill alert-\${esc(r.alert_level)}">\${esc(r.alert_level)}</span>\` : '<span class="muted">-</span>'}</td>
     </tr>\`).join('') : '<tr><td colspan="7" class="empty">Nothing here yet.</td></tr>';
+  updatePagerControls('messages', hasMore);
 }
 
 async function loadRules() {
-  const res = await fetch('/dashboard/api/rules');
-  const rows = await res.json();
+  const res = await fetch('/dashboard/api/rules?' + pagerQuery('rules'));
+  const { rows, hasMore } = await res.json();
   document.querySelector('#rulesTable tbody').innerHTML = rows.length ? rows.map(r => \`
     <tr>
       <td>\${esc(fmtTime(r.changed_at))}</td>
@@ -574,11 +654,12 @@ async function loadRules() {
       <td>\${esc(r.rule_text)}</td>
       <td class="muted">\${esc(r.source)}</td>
     </tr>\`).join('') : '<tr><td colspan="4" class="empty">No rule changes yet.</td></tr>';
+  updatePagerControls('rules', hasMore);
 }
 
 async function loadActions() {
-  const res = await fetch('/dashboard/api/actions');
-  const rows = await res.json();
+  const res = await fetch('/dashboard/api/actions?' + pagerQuery('actions'));
+  const { rows, hasMore } = await res.json();
   document.querySelector('#actionsTable tbody').innerHTML = rows.length ? rows.map(r => \`
     <tr>
       <td>\${esc(fmtTime(r.executed_at))}</td>
@@ -587,6 +668,7 @@ async function loadActions() {
       <td>\${esc(r.result) || '<span class="muted">-</span>'}</td>
       <td class="subject-cell" title="\${esc(r.outcome_summary)}">\${esc(r.outcome_summary)}</td>
     </tr>\`).join('') : '<tr><td colspan="5" class="empty">No actions yet.</td></tr>';
+  updatePagerControls('actions', hasMore);
 }
 
 document.getElementById('tabs').addEventListener('click', (e) => {
@@ -594,6 +676,7 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   if (!btn) return;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  pagers.messages.offset = 0;
   loadMessages(btn.dataset.filter);
 });
 
@@ -607,8 +690,8 @@ async function loadTrends() {
 const bounceDetailCache = {};
 
 async function loadHardBounces() {
-  const res = await fetch('/dashboard/api/hard-bounces');
-  const rows = await res.json();
+  const res = await fetch('/dashboard/api/hard-bounces?' + pagerQuery('bounces'));
+  const { rows, hasMore } = await res.json();
   const tbody = document.querySelector('#bouncesTable tbody');
   tbody.innerHTML = rows.length ? rows.map(r => \`
     <tr class="bounce-row" data-id="\${r.id}">
@@ -621,6 +704,7 @@ async function loadHardBounces() {
     </tr>
     <tr class="bounce-detail" data-detail-for="\${r.id}" style="display:none;"><td colspan="6"></td></tr>\`).join('')
     : '<tr><td colspan="6" class="empty">No hard bounces yet.</td></tr>';
+  updatePagerControls('bounces', hasMore);
 }
 
 async function toggleBounceDetail(row) {
