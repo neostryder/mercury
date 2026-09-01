@@ -478,6 +478,21 @@ CAVEAT: NONE""")
                 }), "test-secret"))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_propose_rule_with_no_attached_message_sends_a_general_instruction_marker(self):
+        fake_telegram = SimpleNamespace(
+            propose_new=AsyncMock(return_value=("brief-1", "blacklist pattern: test", None))
+        )
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(app.propose_rule(
+                FakeRequest({"instruction": "bounce this pattern", "messages": []}),
+                "test-secret",
+            ))
+
+        self.assertTrue(response["ok"])
+        instruction_arg, message_context_arg, _ = fake_telegram.propose_new.call_args[0]
+        self.assertEqual(instruction_arg, "bounce this pattern")
+        self.assertIn("no message attached", message_context_arg)
+
 
 class CredentialPromptEndpointTests(unittest.TestCase):
     def setUp(self):

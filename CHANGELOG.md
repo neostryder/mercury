@@ -26,6 +26,12 @@
   sending. All four go through the same instruction box, submission, and
   Telegram approval flow as typing one by hand (v0.3.6).
 
+- [Visible] [Thunderbird] The flagging popup's flagged-message text gained
+  an (x) to remove it from the request, for an instruction that is a
+  standing policy change rather than about that particular email. Unsubscribe
+  and Bounce Domain are disabled once removed, since both need a real
+  sender; Bounce Pattern and Custom keep working (v0.3.7).
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.

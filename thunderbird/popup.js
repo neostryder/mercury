@@ -1,4 +1,5 @@
 let currentMessages = [];
+let messageDetached = false;
 
 function senderDomain() {
   const author = (currentMessages[0] && currentMessages[0].author) || "";
@@ -73,13 +74,27 @@ async function init() {
     }
 
     const subjectEl = document.getElementById("subject");
+    const subjectTextEl = document.getElementById("subjectText");
     if (currentMessages.length === 1) {
-      subjectEl.textContent = currentMessages[0].subject || "(no subject)";
+      subjectTextEl.textContent = currentMessages[0].subject || "(no subject)";
     } else {
-      subjectEl.textContent = `${currentMessages.length} messages selected: ${currentMessages
+      subjectTextEl.textContent = `${currentMessages.length} messages selected: ${currentMessages
         .map((m) => m.subject || "(no subject)")
         .join("; ")}`;
     }
+
+    document.getElementById("removeMessage").addEventListener("click", () => {
+      messageDetached = true;
+      subjectEl.classList.add("detached");
+      subjectTextEl.textContent =
+        "No message attached - this will be sent as a general instruction, not about a specific email.";
+      document.getElementById("removeMessage").style.display = "none";
+      ["unsubscribe", "bounce-domain"].forEach((kind) => {
+        const button = document.querySelector(`[data-quick-action="${kind}"]`);
+        button.disabled = true;
+        button.title = "Needs an attached message to know the sender";
+      });
+    });
 
     submitButton.addEventListener("click", () => onSubmit(submitButton, statusEl));
 
@@ -116,7 +131,7 @@ async function onSubmit(submitButton, statusEl) {
       return;
     }
 
-    const messages = await Promise.all(
+    const messages = messageDetached ? [] : await Promise.all(
       currentMessages.map(async (m) => {
         const full = await messenger.messages.getFull(m.id);
         return {

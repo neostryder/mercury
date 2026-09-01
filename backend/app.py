@@ -1443,7 +1443,11 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             body = message.get("text", "")
             header = f"Message {i} of {min(len(messages), max_messages)}" if len(messages) > 1 else "Message"
             blocks.append(f"{header}\nFrom: {from_display}\nSubject: {subject}\n\n{body}"[:2000])
-        message_context = redact("\n\n---\n\n".join(blocks)[:8000])
+        message_context = (
+            redact("\n\n---\n\n".join(blocks)[:8000])
+            if blocks
+            else "(no message attached - this is a general instruction, not about any specific message)"
+        )
         redacted_instruction = redact(instruction)
         _, rule, action = await telegram_approvals.propose_new(redacted_instruction, message_context, via_dictation)
         return {"ok": True, "status": "pending", "rule": rule, "action": action}

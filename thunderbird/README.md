@@ -73,6 +73,15 @@ an instruction with no starting point at all. All four still go through the
 same instruction box and the same approval flow - they're a starting point,
 not a separate submission path.
 
+The **&times;** next to the flagged-message text removes it from the request
+entirely, for an instruction that isn't about any particular email (a
+standing policy change like a blacklist pattern). Once removed it can't be
+re-attached from the same popup - close and reopen it against a message if
+you need that context back. Unsubscribe and Bounce Domain need a real
+sender and are disabled once the message is removed; Bounce Pattern and
+Custom still work, and Bounce Pattern still shows the removed message's
+domain as a starting example even though it won't be sent.
+
 Two special requests get their own handling beyond a plain rule:
 
 - **Deleting existing mail** ("delete similar messages already in my Spam

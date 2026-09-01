@@ -257,7 +257,12 @@ open-ended collaboration with the judge provider (Loremaster) about a
 flagged message, re-interpreted as a whole conversation rather than parsed
 atomically: a message expressing several wishes at once is decomposed into
 whatever combination of filtering changes and an action actually
-accomplishes the intent, not transcribed verbatim. Each turn, `advance_brief()`
+accomplishes the intent, not transcribed verbatim. The Thunderbird popup can
+also submit an empty `messages` list (its own remove-message control) for an
+instruction that isn't about any particular email - `propose_rule()`
+substitutes a plain marker string in place of message content in that case,
+so the judge reasons about it as a standing policy request rather than
+treating a blank message block as something to interpret. Each turn, `advance_brief()`
 (`backend/app.py`) is grounded with two pipeline facts before deciding -
 the mailbox's real IMAP folder list (`mail_delivery.list_folders()`), so it
 never invents a folder that doesn't exist, and the fact that a 421
