@@ -933,9 +933,10 @@ async def _reverse_rule(rule: str, source: str = "dashboard_reversal") -> bool:
         for disposition, rules in policy["semantic_rules"].items()
         if rule in rules
     ]
-    removed = bool(matching_dispositions) and policy_store.remove_semantic_rule(
-        matching_dispositions[0], rule
-    )
+    if matching_dispositions:
+        removed = policy_store.remove_semantic_rule(matching_dispositions[0], rule)
+    else:
+        removed = rule in policy["blacklist_patterns"] and policy_store.remove_blacklist_pattern(rule)
     if removed:
         event_log.log_event("rule_changes", {
             "changed_at": _now(),
@@ -955,10 +956,17 @@ CATEGORIES = [
 
 def _deterministic_verdict(match) -> tuple[dict, dict]:
     list_label = match.list_name.upper()
-    reasoning = (
-        f"Matched sender {match.selector} on the deterministic "
-        f"{match.list_name}; semantic and injection judging were skipped."
-    )
+    if match.matched_pattern:
+        reasoning = (
+            f"Matched sender {match.selector} on the deterministic "
+            f"{match.list_name} pattern '{match.matched_pattern}'; semantic "
+            f"and injection judging were skipped."
+        )
+    else:
+        reasoning = (
+            f"Matched sender {match.selector} on the deterministic "
+            f"{match.list_name}; semantic and injection judging were skipped."
+        )
     return (
         {"label": f"SKIPPED_{list_label}", "score": 0.0},
         {
@@ -967,7 +975,7 @@ def _deterministic_verdict(match) -> tuple[dict, dict]:
             "category": "SENDER_LIST",
             "alert": "NONE",
             "reasoning": reasoning,
-            "triggered_rule": None,
+            "triggered_rule": match.matched_pattern,
         },
     )
 

@@ -170,6 +170,35 @@ class AppTests(unittest.TestCase):
         self.assertEqual(message["category"], "SENDER_LIST")
         self.assertIn("deterministic blacklist", message["reasoning"])
 
+    def test_blacklist_pattern_match_surfaces_the_pattern_as_the_triggered_rule(self):
+        self.store.add_blacklist_pattern(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$")
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(side_effect=AssertionError("classifier must be skipped"))
+        )
+        app.judge = SimpleNamespace(
+            ask=AsyncMock(side_effect=AssertionError("judge must be skipped"))
+        )
+        events = []
+
+        with patch.object(app.event_log, "log_event", side_effect=lambda table, fields: events.append((table, fields))):
+            response = asyncio.run(app.ingest(
+                FakeRequest(self._payload(address="spam@473245firmwarespro.com")), "test-secret"
+            ))
+
+        self.assertEqual(response.status_code, 550)
+        message = next(fields for table, fields in events if table == "messages")
+        self.assertEqual(message["triggered_rule"], r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$")
+        self.assertIn("blacklist pattern", message["reasoning"])
+        self.assertIn(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$", message["reasoning"])
+
+    def test_reversing_a_blacklist_pattern_removes_it(self):
+        self.store.add_blacklist_pattern(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$")
+
+        removed = asyncio.run(app._reverse_rule(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$"))
+
+        self.assertTrue(removed)
+        self.assertEqual(self.store.load()["blacklist_patterns"], [])
+
     def test_unauthenticated_sender_match_uses_normal_path_for_every_list(self):
         for list_name in ("blacklist", "greylist", "whitelist"):
             with self.subTest(list_name=list_name):

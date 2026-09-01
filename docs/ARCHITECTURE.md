@@ -191,6 +191,12 @@ matches use the blacklist disposition (550) exclusively - unlike exact
 selectors, a pattern cannot be added to the greylist or whitelist, since a
 false-positive bounce is recoverable by the sender while a false-positive
 pattern match against the whitelist would hand a spammer full bypass trust.
+A pattern match's reasoning names the pattern that fired, not just the
+disposition, and the matched pattern text is saved as the message's
+`triggered_rule` - the same dashboard "Reverse this rule" button that undoes
+a bad semantic rule also removes a blacklist pattern this way, so a pattern
+broad enough to catch a real sender is one click to walk back from the
+bounced message's own detail view.
 
 Sender authentication uses ForwardEmail's own `dmarc` webhook field
 (`backend/filtering.py`'s `sender_domain_is_authenticated()`) rather than
@@ -218,7 +224,10 @@ Semantic rules describe content or context conditions. The `550`, `421`, or
 `250` bucket is the disposition, and the three labeled blocks are supplied
 to `judge_email()` before its general calibration instructions. The judge's
 `RULE_MATCH` response must still equal a stored rule exactly before it is
-trusted for dashboard reversal.
+trusted for dashboard reversal. `_reverse_rule()` (`backend/app.py`) checks
+a submitted `triggered_rule` against the semantic-rule buckets first and
+falls back to `blacklist_patterns` when it isn't a semantic rule, so the
+same reversal endpoint serves both.
 
 Custom actions contain a selector, free-text instruction, and an optional
 native folder action. One entry is stored per selector, and exact-address

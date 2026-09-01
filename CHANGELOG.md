@@ -32,6 +32,12 @@
   and Bounce Domain are disabled once removed, since both need a real
   sender; Bounce Pattern and Custom keep working (v0.3.7).
 
+- [Visible] [Dashboard] A message bounced by a blacklist pattern now names
+  the pattern in its reasoning and saves it as the message's triggered
+  rule, so the existing "Reverse this rule" button on a hard-bounce's
+  detail view removes the pattern too, the same way it already removes a
+  bad semantic rule.
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.
