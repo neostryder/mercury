@@ -128,6 +128,13 @@ def selector_domain(selector: str) -> str:
     return selector.rsplit("@", 1)[-1]
 
 
+def _domain_covers(entry: str, domain: str) -> bool:
+    """Whether a domain selector `entry` covers `domain` - either the same
+    domain, or `domain` is a subdomain of it. Never called with an exact
+    address as `entry`; an address selector only ever matches itself."""
+    return domain == entry or domain.endswith("." + entry)
+
+
 def migrate_legacy_rules(rules: list[str]) -> dict:
     """Migrate the known flat ledger without inferring new policy.
 
@@ -343,15 +350,36 @@ class FilteringPolicyStore:
             return None
         domain = selector_domain(normalized_address)
         policy = policy or self.load()
-        for selector in (normalized_address, domain):
-            for list_name in SENDER_LISTS:
-                if selector in policy["sender_lists"][list_name]:
-                    return SenderListMatch(
-                        list_name=list_name,
-                        selector=selector,
-                        disposition=LIST_DISPOSITIONS[list_name],
-                        verdict=LIST_VERDICTS[list_name],
-                    )
+
+        for list_name in SENDER_LISTS:
+            if normalized_address in policy["sender_lists"][list_name]:
+                return SenderListMatch(
+                    list_name=list_name,
+                    selector=normalized_address,
+                    disposition=LIST_DISPOSITIONS[list_name],
+                    verdict=LIST_VERDICTS[list_name],
+                )
+
+        # A domain entry also covers its subdomains. When entries in
+        # different lists both cover this sender's domain (e.g. a
+        # blacklisted subdomain under a whitelisted parent domain), the
+        # longest - most specific - covering entry wins.
+        best: tuple[int, str, str] | None = None
+        for list_name in SENDER_LISTS:
+            for entry in policy["sender_lists"][list_name]:
+                if "@" in entry:
+                    continue
+                if _domain_covers(entry, domain) and (best is None or len(entry) > best[0]):
+                    best = (len(entry), list_name, entry)
+        if best is not None:
+            _, list_name, entry = best
+            return SenderListMatch(
+                list_name=list_name,
+                selector=entry,
+                disposition=LIST_DISPOSITIONS[list_name],
+                verdict=LIST_VERDICTS[list_name],
+            )
+
         for pattern in policy["blacklist_patterns"]:
             try:
                 compiled = compile_blacklist_pattern(pattern)
@@ -488,5 +516,15 @@ class FilteringPolicyStore:
         domain = selector_domain(normalized_address)
         policy = policy or self.load()
         by_selector = {entry["selector"]: entry for entry in policy["custom_actions"]}
-        entry = by_selector.get(normalized_address) or by_selector.get(domain)
-        return copy.deepcopy(entry) if entry else None
+
+        exact = by_selector.get(normalized_address)
+        if exact is not None:
+            return copy.deepcopy(exact)
+
+        best: tuple[int, dict] | None = None
+        for selector, entry in by_selector.items():
+            if "@" in selector:
+                continue
+            if _domain_covers(selector, domain) and (best is None or len(selector) > best[0]):
+                best = (len(selector), entry)
+        return copy.deepcopy(best[1]) if best is not None else None

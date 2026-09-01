@@ -140,6 +140,44 @@ class FilteringPolicyStoreTests(unittest.TestCase):
         self.assertEqual(exact["native"]["folder"], "Receipts")
         self.assertEqual(other["native"]["folder"], "Archive")
 
+    def test_domain_entry_covers_its_subdomains(self):
+        self.store.put_sender("whitelist", "paypal.com")
+
+        direct = self.store.match_sender("service@paypal.com")
+        subdomain = self.store.match_sender("billing@notifications.paypal.com")
+        nested_subdomain = self.store.match_sender("a@b.notifications.paypal.com")
+        unrelated = self.store.match_sender("service@notpaypal.com")
+
+        self.assertEqual((direct.list_name, direct.selector), ("whitelist", "paypal.com"))
+        self.assertEqual((subdomain.list_name, subdomain.selector), ("whitelist", "paypal.com"))
+        self.assertEqual((nested_subdomain.list_name, nested_subdomain.selector), ("whitelist", "paypal.com"))
+        self.assertIsNone(unrelated)
+
+    def test_more_specific_subdomain_entry_wins_across_lists(self):
+        self.store.put_sender("whitelist", "paypal.com")
+        self.store.put_sender("blacklist", "notifications.paypal.com")
+
+        blacklisted = self.store.match_sender("a@billing.notifications.paypal.com")
+        whitelisted = self.store.match_sender("a@other.paypal.com")
+
+        self.assertEqual(blacklisted.list_name, "blacklist")
+        self.assertEqual(whitelisted.list_name, "whitelist")
+
+    def test_exact_address_still_overrides_a_covering_domain_entry(self):
+        self.store.put_sender("blacklist", "paypal.com")
+        self.store.put_sender("whitelist", "billing@paypal.com")
+
+        match = self.store.match_sender("billing@paypal.com")
+
+        self.assertEqual(match.list_name, "whitelist")
+
+    def test_custom_action_domain_entry_covers_its_subdomains(self):
+        self.store.put_custom_action("paypal.com", "File in Receipts", "Receipts")
+
+        match = self.store.match_custom_action("service@billing.paypal.com")
+
+        self.assertEqual(match["native"]["folder"], "Receipts")
+
     def test_blacklist_pattern_matches_rotating_spam_domains(self):
         self.assertTrue(self.store.add_blacklist_pattern(r"^\d{6}[a-z]+\.com$"))
 

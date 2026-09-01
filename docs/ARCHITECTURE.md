@@ -172,9 +172,19 @@ step is needed on deploy.
 
 Sender selectors are normalized lowercase domains or exact addresses. An
 add operation first removes the same selector from the other sender lists.
-At match time the exact address is checked before its domain. A malformed
-file containing a cross-list duplicate is rejected as ambiguous, causing
-the ingest path to fail open and send its ordinary pipeline-error alert.
+At match time the exact address is checked before its domain, and a domain
+entry also covers its own subdomains - `paypal.com` matches a sender at
+`billing.paypal.com` too, at any depth (`match_sender()`/`_domain_covers()`
+in `backend/filtering.py`). When entries in different lists both cover a
+sender's domain (a narrower blacklisted subdomain under a broader
+whitelisted parent, for instance), the longer - more specific - entry wins,
+the same way an exact address already outranks any domain entry. Address
+selectors never cascade this way; they only ever match themselves. A
+malformed file containing a cross-list duplicate is rejected as ambiguous,
+causing the ingest path to fail open and send its ordinary pipeline-error
+alert. `match_custom_action()` resolves ties the same way, for the same
+reason - a standing custom action keyed to a domain should reach its
+subdomains too.
 
 `blacklist_patterns` holds regexes for the same rotating-domain spam
 campaigns the exact-match blacklist otherwise needs one entry per domain
@@ -296,7 +306,11 @@ independent fields, only one of which forces a stop:
 - `SENDER_LIST` - a deterministic blacklist, greylist, or whitelist proposal
   with a domain or exact address. The judge defaults to an organization's
   own domain and uses an exact address for a shared/public provider where
-  one account says nothing about the domain.
+  one account says nothing about the domain. Several domains or addresses
+  for the same disposition in one turn are comma-separated in this one
+  field rather than picked from - `_parse_brief_response()` turns each into
+  its own separate `sender_list` change, so a request naming two domains
+  ends up as two policy entries, not one collapsed or dropped.
 - `BLACKLIST_PATTERN` - a hard-bounce (550) regex for a sender-domain shape
   shared across multiple senders (a rotating spam campaign), matched
   full-string against the domain only. The judge is told to use
@@ -381,12 +395,19 @@ orphan a reply to an older message in the thread.
 
 ## Telegram decisions for questionable messages
 
-Every STANDARD or URGENT verdict report has four inline buttons:
-Unsubscribe, Soft-bounce, Hard-bounce, and Deliver + whitelist. The report
+Every STANDARD or URGENT verdict report has five inline buttons: Unsubscribe,
+Soft-bounce, Hard-bounce, Deliver + whitelist, and Do nothing. The report
 brief temporarily retains the original raw message so a later Deliver tap
 can append a message that was initially deferred. The raw copy is removed
 from persisted approval state as soon as a decision runs or the brief
 resolves.
+
+The fourth button reads "Whitelist" instead of "Deliver + whitelist" when
+the report's own `already_delivered` metadata is already true (the message's
+enforced disposition was 250) - re-delivering was never going to do anything
+in that case, so the label says only what the tap will actually do.
+`execute_message_decision`'s guard against a duplicate append still runs
+underneath regardless of the label, in case that metadata is ever stale.
 
 The SMTP webhook response has already completed by the time Telegram sends a
 callback. A Soft-bounce or Hard-bounce tap therefore cannot rewrite the
@@ -399,7 +420,9 @@ the retained raw message immediately unless it was already delivered, then
 proposes a whitelist entry. The duplicate-delivery guard is important for a
 STANDARD or URGENT report whose original disposition was already 250.
 Unsubscribe uses the existing safe unsubscribe executor and then proposes a
-blacklist entry.
+blacklist entry. Do nothing records that no action was taken and resolves
+the brief without proposing any standing change - for a report that turned
+out not to need any of the other four.
 
 The first decision tap approves only the one-message action. Every standing
 sender change is shown afterward as an ordinary Approve/Discard proposal.

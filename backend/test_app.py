@@ -330,6 +330,29 @@ CAVEAT: NONE""")
         self.assertEqual(parsed["changes"][2]["native_folder"], "Archive")
         self.assertIsNone(parsed["reply"])
 
+    def test_brief_parser_splits_multiple_domains_on_one_sender_list_line(self):
+        parsed = app._parse_brief_response("""QUESTION: NONE
+SENDER_LIST: WHITELIST | paypal.com, gog.com
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: NONE
+CAVEAT: NONE""")
+
+        self.assertEqual(len(parsed["changes"]), 2)
+        self.assertEqual(
+            [(c["kind"], c["list"], c["selector"]) for c in parsed["changes"]],
+            [("sender_list", "whitelist", "paypal.com"), ("sender_list", "whitelist", "gog.com")],
+        )
+
+    def test_brief_parser_rejects_a_trailing_comma_in_sender_list(self):
+        with self.assertRaises(ValueError):
+            app._parse_brief_response("""QUESTION: NONE
+SENDER_LIST: WHITELIST | paypal.com,
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: NONE
+CAVEAT: NONE""")
+
     def test_brief_parser_reads_a_reply_alongside_a_proposal(self):
         parsed = app._parse_brief_response("""QUESTION: NONE
 REPLY: You're right, that was never done - fixing it now:
@@ -771,7 +794,7 @@ class TelegramDecisionTests(unittest.TestCase):
         keyboard = self.telegram._send.await_args.kwargs["keyboard"]
         labels = [button["text"] for row in keyboard["inline_keyboard"] for button in row]
         self.assertEqual(labels, [
-            "Unsubscribe", "Soft-bounce", "Hard-bounce", "Deliver + whitelist",
+            "Unsubscribe", "Soft-bounce", "Hard-bounce", "Deliver + whitelist", "Do nothing",
         ])
 
         brief_id = self.store.brief_for_message(101)
@@ -792,6 +815,44 @@ class TelegramDecisionTests(unittest.TestCase):
         }))
         self.assertEqual(self.finalize.await_count, 1)
         self.assertEqual(self.store.get_brief(brief_id)["status"], "resolved")
+
+    def test_deliver_button_is_relabeled_whitelist_when_already_delivered(self):
+        asyncio.run(self.telegram.send_trackable_report(
+            "Mercury report",
+            "From: news@example.com",
+            {
+                "sender_address": "news@example.com",
+                "sender_domain": "example.com",
+                "already_delivered": True,
+            },
+        ))
+        keyboard = self.telegram._send.await_args.kwargs["keyboard"]
+        labels = [button["text"] for row in keyboard["inline_keyboard"] for button in row]
+        self.assertEqual(labels, [
+            "Unsubscribe", "Soft-bounce", "Hard-bounce", "Whitelist", "Do nothing",
+        ])
+
+    def test_do_nothing_button_resolves_with_no_changes_and_no_followup(self):
+        self.execute_decision.return_value = ("No action taken.", None)
+        asyncio.run(self.telegram.send_trackable_report(
+            "Mercury report",
+            "From: news@example.com",
+            {"sender_address": "news@example.com", "sender_domain": "example.com"},
+        ))
+        brief_id = self.store.brief_for_message(101)
+
+        asyncio.run(self.telegram._handle_callback({
+            "id": "callback-1",
+            "data": f"decision:dismiss:{brief_id}",
+        }))
+
+        call_args = self.execute_decision.await_args.args
+        self.assertEqual(call_args[0], "dismiss")
+        self.assertEqual(call_args[2], brief_id)
+        brief = self.store.get_brief(brief_id)
+        self.assertEqual(brief["changes"], [])
+        self.assertIsNone(brief["action"])
+        self.assertEqual(self.finalize.await_count, 0)
 
 
 if __name__ == "__main__":

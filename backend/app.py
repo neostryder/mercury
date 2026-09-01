@@ -188,11 +188,16 @@ def _parse_brief_response(content: str) -> dict:
         parts = [part.strip() for part in sender_list.split("|", 1)]
         if len(parts) != 2 or parts[0].lower() not in ("blacklist", "greylist", "whitelist"):
             raise ValueError("invalid SENDER_LIST response")
-        changes.append({
-            "kind": "sender_list",
-            "list": parts[0].lower(),
-            "selector": normalize_selector(parts[1]),
-        })
+        list_name = parts[0].lower()
+        selectors = [s.strip() for s in parts[1].split(",")]
+        if not selectors or any(not s for s in selectors):
+            raise ValueError("invalid SENDER_LIST response")
+        for selector_text in selectors:
+            changes.append({
+                "kind": "sender_list",
+                "list": list_name,
+                "selector": normalize_selector(selector_text),
+            })
 
     if blacklist_pattern:
         try:
@@ -355,8 +360,15 @@ approval before writing anything.
   sending domain. Use an exact address when its domain is a large shared or
   public provider, such as a consumer webmail service, where one user's
   behavior says nothing about the domain. Reason about that normally rather
-  than relying on a hardcoded provider list. NONE if sender identity alone
-  should not decide disposition.
+  than relying on a hardcoded provider list. A domain entry also covers its
+  own subdomains, so do not add both a domain and one of its subdomains
+  unless the recipient actually wants the subdomain to have a different
+  disposition than the rest of the domain. When the recipient names several
+  domains or addresses for the SAME disposition in one turn, list all of
+  them comma-separated in this one field (e.g. "WHITELIST | paypal.com,
+  gog.com") - never silently propose only one and drop the rest. A
+  different disposition for a different sender needs its own reply or turn.
+  NONE if sender identity alone should not decide disposition.
 - BLACKLIST_PATTERN: a hard-bounce (550) regex for a sender-domain SHAPE
   shared across multiple senders, not one single sender - use SENDER_LIST
   instead whenever one exact domain or address is enough. Formatted as a
@@ -417,7 +429,7 @@ approval before writing anything.
 Respond in exactly this format, nothing else:
 QUESTION: <your question, or NONE>
 REPLY: <a direct answer per above, or NONE>
-SENDER_LIST: <BLACKLIST|GREYLIST|WHITELIST> | <domain-or-address>, or NONE
+SENDER_LIST: <BLACKLIST|GREYLIST|WHITELIST> | <domain-or-address>[, <domain-or-address>...], or NONE
 BLACKLIST_PATTERN: <regex matched against the sender domain>, or NONE
 SEMANTIC_RULE: <250|421|550> | <standalone condition>, or NONE
 CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
@@ -801,7 +813,7 @@ SELECTOR: <exact address or domain>"""
 async def execute_message_decision(
     decision: str, brief: dict, brief_id: str | None = None
 ) -> tuple[str, dict | None]:
-    """Execute one of the four buttons attached to a verdict report.
+    """Execute one of the buttons attached to a verdict report.
 
     The webhook response has already been issued by the time a Telegram
     callback arrives, so bounce decisions cannot rewrite that SMTP response.
@@ -812,6 +824,17 @@ async def execute_message_decision(
     metadata = brief.get("message_metadata", {})
     sender_domain = metadata.get("sender_domain")
     current_disposition = metadata.get("enforced_disposition") or metadata.get("disposition")
+
+    if decision == "dismiss":
+        event_log.log_event("actions", {
+            "executed_at": _now(),
+            "kind": "MESSAGE_DECISION",
+            "details": "dismiss",
+            "outcome_summary": "No action taken.",
+            "result": "DISMISSED",
+            "domain": sender_domain,
+        })
+        return "No action taken.", None
 
     if decision == "unsubscribe":
         outcome, followup = await execute_unsubscribe_action(

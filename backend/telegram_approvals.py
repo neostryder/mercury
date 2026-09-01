@@ -76,6 +76,13 @@ class TelegramApprovals:
             message_context, message_metadata=message_metadata
         )
         self._store.append_turn(brief_id, "loremaster", text)
+        # "Deliver" is only a real action when the message was not already
+        # accepted - once it landed (enforced 250), that button would just
+        # re-propose the whitelist half of what "deliver" normally offers,
+        # so it's relabeled to say so rather than implying redelivery.
+        deliver_label = (
+            "Whitelist" if message_metadata.get("already_delivered") else "Deliver + whitelist"
+        )
         keyboard = {
             "inline_keyboard": [
                 [
@@ -84,7 +91,10 @@ class TelegramApprovals:
                 ],
                 [
                     {"text": "Hard-bounce", "callback_data": f"decision:hard:{brief_id}"},
-                    {"text": "Deliver + whitelist", "callback_data": f"decision:deliver:{brief_id}"},
+                    {"text": deliver_label, "callback_data": f"decision:deliver:{brief_id}"},
+                ],
+                [
+                    {"text": "Do nothing", "callback_data": f"decision:dismiss:{brief_id}"},
                 ],
             ]
         }
@@ -185,10 +195,11 @@ class TelegramApprovals:
         return "unknown filtering change"
 
     def _proposal_text(self, changes: list[dict], action: str | None, caveat: str | None) -> str:
+        plural = "s" if len(changes) > 1 else ""
         if changes and action:
-            lines = ["Mercury: standing change + action proposed"]
+            lines = [f"Mercury: standing change{plural} + action proposed"]
         elif changes:
-            lines = ["Mercury: standing change proposed"]
+            lines = [f"Mercury: standing change{plural} proposed"]
         else:
             lines = ["Mercury: action proposed", f"Action: {action}"]
         for change in changes:
@@ -341,7 +352,7 @@ class TelegramApprovals:
             decision, _, brief_id = ref.partition(":")
             brief = self._store.get_brief(brief_id)
             if (
-                decision not in ("unsubscribe", "soft", "hard", "deliver")
+                decision not in ("unsubscribe", "soft", "hard", "deliver", "dismiss")
                 or not brief
                 or brief["status"] == "resolved"
                 or brief.get("message_decision")
@@ -349,7 +360,7 @@ class TelegramApprovals:
                 await self._answer_callback(callback_id, "Already handled.")
                 return
             self._store.update_brief(brief_id, message_decision=decision)
-            await self._answer_callback(callback_id, "Approved")
+            await self._answer_callback(callback_id, "Dismissed" if decision == "dismiss" else "Approved")
             await self._run_message_decision(brief_id, brief, decision)
             return
 

@@ -38,6 +38,32 @@
   detail view removes the pattern too, the same way it already removes a
   bad semantic rule.
 
+### Changed
+
+- [Visible] [Filtering] A domain sender-list or custom-action entry now
+  also covers its own subdomains, at any depth - whitelisting paypal.com
+  now also covers a sender at billing.paypal.com. When entries in
+  different lists both cover a sender's domain, the longer, more specific
+  entry wins, the same way an exact address already outranks any domain
+  entry. Address selectors are unaffected; they only ever match themselves.
+
+### Fixed
+
+- [Visible] [Filtering] An open-ended brief instruction whitelisting or
+  blacklisting several domains in one turn ("whitelist paypal.com and
+  gog.com") only ever produced one sender-list entry - the SENDER_LIST
+  response format had room for a single selector, so the judge silently
+  dropped the rest rather than proposing all of them. It now accepts a
+  comma-separated list of selectors under one disposition and turns each
+  into its own separate policy entry.
+
+- [Visible] [Telegram] A verdict report's fourth decision button always
+  read "Deliver + whitelist" even when the message had already been
+  delivered (250), where a tap could only ever do the whitelist half. It
+  now reads "Whitelist" in that case, and a new fifth "Do nothing" button
+  resolves a report that turned out not to need any standing change or
+  action.
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.

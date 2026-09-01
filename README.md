@@ -159,10 +159,14 @@ The gitignored runtime file at `MERCURY_RULES_LEDGER_PATH` (normally
 parts:
 
 - Three deterministic sender lists: blacklist (550), greylist (421), and
-  whitelist (250). Entries are exact addresses or domains. Adding a selector
-  to one list removes the same selector from the other two, and exact-address
-  matches override domain matches. A match is honored only when ForwardEmail's
-  own `dmarc` webhook field reports a pass for the claimed domain. A domain
+  whitelist (250). Entries are exact addresses or domains, and a domain
+  entry also covers its subdomains (`paypal.com` covers
+  `billing.paypal.com` too, at any depth) - if a subdomain needs a
+  different disposition than the rest of its domain, whichever entry is
+  more specific wins, the same way an exact address always wins over any
+  domain entry. Adding a selector to one list removes the same selector
+  from the other two. A match is honored only when ForwardEmail's own
+  `dmarc` webhook field reports a pass for the claimed domain. A domain
   with no published DMARC policy never takes the deterministic fast path -
   sender-list entries remain configured, but the message always falls
   through to normal content scanning instead.
@@ -220,11 +224,13 @@ caveat before you approve it, not after:
   - you never have to re-flag the message from scratch to get Mercury to
   actually act on what you asked for.
 
-STANDARD and URGENT message reports also include four common decision
-buttons: Unsubscribe, Soft-bounce, Hard-bounce, and Deliver + whitelist. A
-tap executes the one-message action. Any suggested sender-list entry is sent
-as a separate Approve/Discard proposal afterward and is never committed by
-the first tap alone. Free-text replies continue the same brief as before.
+STANDARD and URGENT message reports also include five common decision
+buttons: Unsubscribe, Soft-bounce, Hard-bounce, Deliver + whitelist (shown
+as just "Whitelist" when the message already got 250, since there is
+nothing left to deliver), and Do nothing. A tap executes the one-message
+action. Any suggested sender-list entry is sent as a separate
+Approve/Discard proposal afterward and is never committed by the first tap
+alone. Free-text replies continue the same brief as before.
 
 An approved unsubscribe can return `NEEDS_SIGNIN` only when the judge has
 already verified that the login wall belongs to the sender or a known
