@@ -316,6 +316,28 @@ CAVEAT: NONE""")
         self.assertEqual(parsed["action"], "UNSUBSCRIBE: fanatical.example")
         self.assertEqual(parsed["changes"], [])
 
+    def test_brief_parser_recognizes_blacklist_pattern(self):
+        parsed = app._parse_brief_response("""QUESTION: NONE
+SENDER_LIST: NONE
+BLACKLIST_PATTERN: ^\\d{6}[a-z]+\\.com$
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: NONE
+CAVEAT: NONE""")
+
+        self.assertEqual([change["kind"] for change in parsed["changes"]], ["blacklist_pattern"])
+        self.assertEqual(parsed["changes"][0]["pattern"], r"^\d{6}[a-z]+\.com$")
+
+    def test_brief_parser_rejects_invalid_blacklist_pattern(self):
+        with self.assertRaises(ValueError):
+            app._parse_brief_response("""QUESTION: NONE
+SENDER_LIST: NONE
+BLACKLIST_PATTERN: [unclosed
+SEMANTIC_RULE: NONE
+CUSTOM_ACTION: NONE
+ACTION: NONE
+CAVEAT: NONE""")
+
     def test_action_field_is_not_confused_with_custom_action(self):
         parsed = app._parse_brief_response("""QUESTION: NONE
 REPLY: NONE

@@ -78,6 +78,38 @@
     margin-bottom: 3px;
   }
 
+  .quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .quick-actions button {
+    flex: 1 1 auto;
+    font-family: inherit;
+    font-size: 0.8em;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--silver);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .quick-actions button:hover {
+    border-color: var(--sky);
+    color: var(--sky);
+  }
+
+  .quick-actions button.selected {
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
   label.field-label {
     display: block;
     font-size: 0.78em;
@@ -175,6 +207,12 @@
   </header>
   <main>
     <div id="subject"></div>
+    <div class="quick-actions">
+      <button type="button" data-quick-action="unsubscribe">Unsubscribe</button>
+      <button type="button" data-quick-action="bounce-domain">Bounce Domain</button>
+      <button type="button" data-quick-action="bounce-pattern">Bounce Pattern</button>
+      <button type="button" data-quick-action="custom">Custom</button>
+    </div>
     <label class="field-label" for="instruction">Instruction</label>
     <textarea id="instruction" placeholder="How should this message, and similar ones, be handled going forward? Write as much as you need - this isn't limited to one sentence."></textarea>
     <button id="submit">

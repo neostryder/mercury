@@ -266,7 +266,7 @@ delivered anywhere at all (Mercury keeps no usable copy of a 421; a
 hard-bounce's content is retained only for review, not redelivery) - so
 "un-defer" or "restore" requests about already-rejected mail can never
 become a real `MAILBOX` action, only a future filtering change plus an
-honest `CAVEAT` about what can't be recovered. It then decides among seven
+honest `CAVEAT` about what can't be recovered. It then decides among eight
 independent fields, only one of which forces a stop:
 
 - `QUESTION` - genuinely unclear intent, or a real design choice that
@@ -283,6 +283,12 @@ independent fields, only one of which forces a stop:
   with a domain or exact address. The judge defaults to an organization's
   own domain and uses an exact address for a shared/public provider where
   one account says nothing about the domain.
+- `BLACKLIST_PATTERN` - a hard-bounce (550) regex for a sender-domain shape
+  shared across multiple senders (a rotating spam campaign), matched
+  full-string against the domain only. The judge is told to use
+  `SENDER_LIST` instead whenever one exact domain or address is enough, and
+  the response is compiled and validated the same way a dashboard-entered
+  pattern is before it becomes a proposal.
 - `SEMANTIC_RULE` - a 550, 421, or 250 content/context condition. Its text is
   standalone but does not repeat the disposition supplied by its bucket.
 - `CUSTOM_ACTION` - a per-sender standing instruction plus an optional real
@@ -343,8 +349,9 @@ one-on-one chat, so a thumbs-up there is never actually received:
   never a separate conversational-only path - a resolved brief is only the
   last round's outcome, not a lock. It can answer a question about what
   happened (a new `REPLY` field in the response format, alongside the
-  existing `QUESTION`/`SENDER_LIST`/`SEMANTIC_RULE`/`CUSTOM_ACTION`/`ACTION`/
-  `CAVEAT` ones), and it can just as well propose a correction or a
+  existing `QUESTION`/`SENDER_LIST`/`BLACKLIST_PATTERN`/`SEMANTIC_RULE`/
+  `CUSTOM_ACTION`/`ACTION`/`CAVEAT` ones), and it can just as well propose a
+  correction or a
   brand-new change or action when the reply calls for one - e.g. "do it"
   after being told an earlier request was never actually carried out
   proposes the action right then, rather than requiring the message be

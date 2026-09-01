@@ -26,6 +26,15 @@ def _reply_update(message_id: int, text: str) -> dict:
     }
 
 
+class ChangeTextTests(unittest.TestCase):
+    def test_blacklist_pattern_renders_its_regex(self):
+        text = TelegramApprovals._change_text({
+            "kind": "blacklist_pattern",
+            "pattern": r"^\d{6}[a-z]+\.com$",
+        })
+        self.assertEqual(text, r"blacklist pattern: ^\d{6}[a-z]+\.com$")
+
+
 class ResolvedBriefReopensTests(unittest.TestCase):
     """A brief reaching an outcome must never become a dead end - a later
     reply has to be able to trigger a real correction or a brand-new

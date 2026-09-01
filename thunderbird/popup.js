@@ -1,5 +1,43 @@
 let currentMessages = [];
 
+function senderDomain() {
+  const author = (currentMessages[0] && currentMessages[0].author) || "";
+  const match = author.match(/@([^\s>]+)/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+const QUICK_ACTION_TEXT = {
+  unsubscribe: () => `Unsubscribe me from ${senderDomain() || "this sender"}.`,
+  "bounce-domain": () => {
+    const domain = senderDomain();
+    return domain
+      ? `Hard bounce (550) all future mail from ${domain}.`
+      : "Hard bounce (550) all future mail from this sender's domain.";
+  },
+  "bounce-pattern": () => {
+    const domain = senderDomain();
+    const example = domain ? ` (like ${domain})` : "";
+    return (
+      "Hard bounce (550) future mail whose sender domain matches this shape" +
+      example +
+      ": [[describe the shared domain shape here]]"
+    );
+  },
+  custom: () => "",
+};
+
+function applyQuickAction(kind, instructionEl) {
+  const text = QUICK_ACTION_TEXT[kind]();
+  instructionEl.value = text;
+  instructionEl.focus();
+  const placeholderStart = text.indexOf("[[");
+  if (placeholderStart !== -1) {
+    instructionEl.setSelectionRange(placeholderStart, text.indexOf("]]") + 2);
+  } else {
+    instructionEl.setSelectionRange(text.length, text.length);
+  }
+}
+
 function extractPlainText(part) {
   if (!part) return "";
   if (part.parts && part.parts.length) {
@@ -44,6 +82,16 @@ async function init() {
     }
 
     submitButton.addEventListener("click", () => onSubmit(submitButton, statusEl));
+
+    const instructionEl = document.getElementById("instruction");
+    document.querySelectorAll("[data-quick-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document
+          .querySelectorAll("[data-quick-action]")
+          .forEach((b) => b.classList.toggle("selected", b === button));
+        applyQuickAction(button.dataset.quickAction, instructionEl);
+      });
+    });
   } catch (err) {
     statusEl.textContent = `Failed to read the open message: ${err.message}`;
     submitButton.disabled = true;

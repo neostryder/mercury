@@ -18,6 +18,7 @@ import mail_delivery
 from approvals import ApprovalStore
 from filtering import (
     FilteringPolicyStore,
+    compile_blacklist_pattern,
     normalize_selector,
     sender_domain_is_authenticated,
 )
@@ -168,10 +169,14 @@ def _parse_brief_response(content: str) -> dict:
         return None if value and value.upper().startswith("NONE") else value
 
     reply = _extract(
-        "REPLY", ["SENDER_LIST", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
+        "REPLY",
+        ["SENDER_LIST", "BLACKLIST_PATTERN", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"],
     )
     sender_list = _extract(
-        "SENDER_LIST", ["SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
+        "SENDER_LIST", ["BLACKLIST_PATTERN", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
+    )
+    blacklist_pattern = _extract(
+        "BLACKLIST_PATTERN", ["SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"]
     )
     semantic_rule = _extract(
         "SEMANTIC_RULE", ["CUSTOM_ACTION", "ACTION", "CAVEAT"]
@@ -188,6 +193,13 @@ def _parse_brief_response(content: str) -> dict:
             "list": parts[0].lower(),
             "selector": normalize_selector(parts[1]),
         })
+
+    if blacklist_pattern:
+        try:
+            compile_blacklist_pattern(blacklist_pattern)
+        except ValueError as exc:
+            raise ValueError(f"invalid BLACKLIST_PATTERN response: {exc}") from exc
+        changes.append({"kind": "blacklist_pattern", "pattern": blacklist_pattern})
 
     if semantic_rule:
         parts = [part.strip() for part in semantic_rule.split("|", 1)]
@@ -213,7 +225,7 @@ def _parse_brief_response(content: str) -> dict:
     return {
         "question": _extract(
             "QUESTION",
-            ["REPLY", "SENDER_LIST", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"],
+            ["REPLY", "SENDER_LIST", "BLACKLIST_PATTERN", "SEMANTIC_RULE", "CUSTOM_ACTION", "ACTION", "CAVEAT"],
         ),
         "reply": reply,
         "changes": changes,
@@ -308,17 +320,17 @@ this reply is not an afterthought to brush off - if it asks what actually
 happened, answer honestly, including admitting a misread from an earlier
 round. If it turns out something the recipient actually wanted was never
 proposed, was discarded, or still is not done, propose or re-propose it now
-via SENDER_LIST/SEMANTIC_RULE/CUSTOM_ACTION/ACTION exactly as you would for
-a brand-new brief - a prior round having concluded is never a reason to
-tell the recipient to go re-flag the message instead of just acting on what
-they are asking for right now.
+via SENDER_LIST/BLACKLIST_PATTERN/SEMANTIC_RULE/CUSTOM_ACTION/ACTION exactly
+as you would for a brand-new brief - a prior round having concluded is never
+a reason to tell the recipient to go re-flag the message instead of just
+acting on what they are asking for right now.
 
-Decide how to respond. You have seven independent things to decide below.
+Decide how to respond. You have eight independent things to decide below.
 QUESTION is mutually exclusive with everything else: if you ask a question,
-leave REPLY, SENDER_LIST, SEMANTIC_RULE, CUSTOM_ACTION, and ACTION all NONE
-this turn, since the answer might change them. Every standing change you
-return is only a proposal. Mercury will show it for explicit approval
-before writing anything.
+leave REPLY, SENDER_LIST, BLACKLIST_PATTERN, SEMANTIC_RULE, CUSTOM_ACTION, and
+ACTION all NONE this turn, since the answer might change them. Every standing
+change you return is only a proposal. Mercury will show it for explicit
+approval before writing anything.
 
 - QUESTION: if what's being asked is genuinely unclear, or a real design
   choice depends on the recipient's answer, ask it directly instead of
@@ -330,10 +342,10 @@ before writing anything.
   that needs a real response and nothing else below already covers it - e.g.
   confirming whether an action from an earlier round was actually carried
   out, or acknowledging a misread. Can stand alone, or introduce a fresh
-  SENDER_LIST/SEMANTIC_RULE/CUSTOM_ACTION/ACTION proposal below it (e.g. "You're
-  right, that was never done - fixing it now:"). NONE when there is nothing
-  worth saying beyond what a proposal or CAVEAT already conveys, or this is
-  the first message in the brief.
+  SENDER_LIST/BLACKLIST_PATTERN/SEMANTIC_RULE/CUSTOM_ACTION/ACTION proposal
+  below it (e.g. "You're right, that was never done - fixing it now:"). NONE
+  when there is nothing worth saying beyond what a proposal or CAVEAT already
+  conveys, or this is the first message in the brief.
 - SENDER_LIST: a deterministic disposition based only on sender identity,
   formatted "BLACKLIST | <domain-or-exact-address>", "GREYLIST | ...", or
   "WHITELIST | ...". Use BLACKLIST for 550, GREYLIST for 421, and WHITELIST
@@ -345,6 +357,16 @@ before writing anything.
   behavior says nothing about the domain. Reason about that normally rather
   than relying on a hardcoded provider list. NONE if sender identity alone
   should not decide disposition.
+- BLACKLIST_PATTERN: a hard-bounce (550) regex for a sender-domain SHAPE
+  shared across multiple senders, not one single sender - use SENDER_LIST
+  instead whenever one exact domain or address is enough. Formatted as a
+  bare regex, matched full-string against the sender domain only (never the
+  address or message body), for a spam pattern where new domains keep
+  rotating in but share a recognizable shape, such as a random numeric
+  prefix plus a word before the TLD. Only propose this when the recipient is
+  actually describing that kind of shape, not a request to be more
+  aggressive about spam in general. NONE if no such standing pattern was
+  requested.
 - SEMANTIC_RULE: a content or context condition that sender matching cannot
   express, formatted "<550|421|250> | <standalone rule text>". The bucket is
   the disposition, so the rule text should describe only the matching
@@ -396,6 +418,7 @@ Respond in exactly this format, nothing else:
 QUESTION: <your question, or NONE>
 REPLY: <a direct answer per above, or NONE>
 SENDER_LIST: <BLACKLIST|GREYLIST|WHITELIST> | <domain-or-address>, or NONE
+BLACKLIST_PATTERN: <regex matched against the sender domain>, or NONE
 SEMANTIC_RULE: <250|421|550> | <standalone condition>, or NONE
 CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
 ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | GANDALF: ... | NONE>

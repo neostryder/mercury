@@ -14,6 +14,18 @@
   a word before the TLD) without needing a separate blacklist entry per
   domain. A pattern can only bounce (550), never greylist or whitelist.
 
+- [Visible] [Filtering] The open-ended brief judge can now propose a
+  BLACKLIST_PATTERN change alongside SENDER_LIST, for a recipient describing
+  a rotating spam domain shape rather than one sender. Same validation and
+  precedence rules as a dashboard-entered pattern.
+
+- [Visible] [Thunderbird] The flagging popup gained four quick-action
+  buttons above the instruction box - Unsubscribe, Bounce Domain, Bounce
+  Pattern, and Custom - each filling in a starting instruction from the
+  flagged message's own sender that the recipient can still edit before
+  sending. All four go through the same instruction box, submission, and
+  Telegram approval flow as typing one by hand (v0.3.6).
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.

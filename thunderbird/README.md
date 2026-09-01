@@ -63,6 +63,16 @@ rather than three. The popup shows the proposed rule text; check Telegram
 to approve it (a reply of "yes", or a thumbs-up reaction on the proposal
 message, both approve it).
 
+Four quick-action buttons above the instruction box fill in a common
+starting instruction from the flagged message's own sender, which you can
+edit before sending: **Unsubscribe** and **Bounce Domain** fill in a
+ready-to-send instruction; **Bounce Pattern** fills in a template with a
+bracketed placeholder describing the shared domain shape (a rotating spam
+campaign, not one sender) for you to fill in; **Custom** clears the box for
+an instruction with no starting point at all. All four still go through the
+same instruction box and the same approval flow - they're a starting point,
+not a separate submission path.
+
 Two special requests get their own handling beyond a plain rule:
 
 - **Deleting existing mail** ("delete similar messages already in my Spam

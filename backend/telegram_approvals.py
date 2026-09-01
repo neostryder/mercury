@@ -180,6 +180,8 @@ class TelegramApprovals:
         if change["kind"] == "custom_action":
             native = f" (folder: {change['native_folder']})" if change.get("native_folder") else ""
             return f"custom action for {change['selector']}: {change['instruction']}{native}"
+        if change["kind"] == "blacklist_pattern":
+            return f"blacklist pattern: {change['pattern']}"
         return "unknown filtering change"
 
     def _proposal_text(self, changes: list[dict], action: str | None, caveat: str | None) -> str:
