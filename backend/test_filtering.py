@@ -140,6 +140,69 @@ class FilteringPolicyStoreTests(unittest.TestCase):
         self.assertEqual(exact["native"]["folder"], "Receipts")
         self.assertEqual(other["native"]["folder"], "Archive")
 
+    def test_blacklist_pattern_matches_rotating_spam_domains(self):
+        self.assertTrue(self.store.add_blacklist_pattern(r"^\d{6}[a-z]+\.com$"))
+
+        match = self.store.match_sender("spam@473245firmwarespro.com")
+
+        self.assertEqual(match.list_name, "blacklist")
+        self.assertEqual(match.disposition, "550")
+        self.assertEqual(match.matched_pattern, r"^\d{6}[a-z]+\.com$")
+
+    def test_blacklist_pattern_does_not_match_unrelated_domain(self):
+        self.store.add_blacklist_pattern(r"^\d{6}[a-z]+\.com$")
+        self.assertIsNone(self.store.match_sender("person@example.com"))
+
+    def test_exact_whitelist_takes_precedence_over_blacklist_pattern(self):
+        self.store.add_blacklist_pattern(r"^\d{6}[a-z]+\.com$")
+        self.store.put_sender("whitelist", "473245firmwarespro.com")
+
+        match = self.store.match_sender("person@473245firmwarespro.com")
+
+        self.assertEqual(match.list_name, "whitelist")
+        self.assertEqual(match.disposition, "250")
+
+    def test_blacklist_pattern_matches_full_domain_only(self):
+        self.store.add_blacklist_pattern(r"radzad\.com")
+        self.assertIsNone(self.store.match_sender("person@myradzad.com.example.com"))
+
+    def test_invalid_blacklist_pattern_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.add_blacklist_pattern(r"[unclosed")
+
+    def test_duplicate_blacklist_pattern_is_a_no_op(self):
+        self.assertTrue(self.store.add_blacklist_pattern(r"^\d+spam\.com$"))
+        self.assertFalse(self.store.add_blacklist_pattern(r"^\d+spam\.com$"))
+        self.assertEqual(self.store.load()["blacklist_patterns"], [r"^\d+spam\.com$"])
+
+    def test_removing_blacklist_pattern(self):
+        self.store.add_blacklist_pattern(r"^\d+spam\.com$")
+        self.assertTrue(self.store.remove_blacklist_pattern(r"^\d+spam\.com$"))
+        self.assertEqual(self.store.load()["blacklist_patterns"], [])
+        self.assertFalse(self.store.remove_blacklist_pattern(r"^\d+spam\.com$"))
+
+    def test_loading_a_v2_ledger_upgrades_it_in_place(self):
+        policy = empty_policy()
+        policy["version"] = 2
+        del policy["blacklist_patterns"]
+        policy["sender_lists"]["blacklist"] = ["example.com"]
+        self.path.write_text(json.dumps(policy))
+
+        loaded = self.store.load()
+
+        self.assertEqual(loaded["version"], 3)
+        self.assertEqual(loaded["blacklist_patterns"], [])
+        self.assertEqual(loaded["sender_lists"]["blacklist"], ["example.com"])
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 3)
+
+    def test_invalid_pattern_in_ledger_file_is_rejected(self):
+        policy = empty_policy()
+        policy["blacklist_patterns"] = ["[unclosed"]
+        self.path.write_text(json.dumps(policy))
+
+        with self.assertRaises(PolicyConfigError):
+            self.store.load()
+
 
 if __name__ == "__main__":
     unittest.main()

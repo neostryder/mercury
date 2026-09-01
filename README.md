@@ -50,13 +50,16 @@ ForwardEmail -> Worker gate -> backend -> authenticated sender lists
    risking a bounce caused by infrastructure rather than the message
    itself.
 3. The backend checks the normalized sender against deterministic
-   **blacklist** (550), **greylist** (421), and **whitelist** (250) entries.
-   Before honoring a match, it requires ForwardEmail's own `dmarc` webhook
-   field to report a pass for the claimed `From:` domain. Missing, failed,
-   or malformed results make the message continue through normal content
-   scanning instead. An authenticated match is final and skips both content
-   scanning calls, including for whitelisted senders. Exact addresses take
-   precedence over domain entries.
+   **blacklist** (550), **greylist** (421), and **whitelist** (250) entries,
+   then against **blacklist regex patterns** matched full-string against the
+   sender domain for rotating spam campaigns that would otherwise need a
+   new exact entry per domain. Before honoring a match, it requires
+   ForwardEmail's own `dmarc` webhook field to report a pass for the claimed
+   `From:` domain. Missing, failed, or malformed results make the message
+   continue through normal content scanning instead. An authenticated match
+   is final and skips both content scanning calls, including for
+   whitelisted senders. Exact addresses take precedence over domain
+   entries, and any exact-list match takes precedence over a pattern.
 4. Without an authenticated sender-list match, the backend **redacts** any
    of the recipient's own known addresses found in the message (see below),
    then sends the redacted copy to a **prompt-injection classifier**.
@@ -152,7 +155,7 @@ for classification.
 ## Filtering policy
 
 The gitignored runtime file at `MERCURY_RULES_LEDGER_PATH` (normally
-`/data/rules_ledger.json`) is now a versioned filtering policy with five
+`/data/rules_ledger.json`) is now a versioned filtering policy with six
 parts:
 
 - Three deterministic sender lists: blacklist (550), greylist (421), and
@@ -163,6 +166,12 @@ parts:
   with no published DMARC policy never takes the deterministic fast path -
   sender-list entries remain configured, but the message always falls
   through to normal content scanning instead.
+- A blacklist pattern list: regexes matched full-string against the sender
+  domain, for rotating spam campaigns that would otherwise need one exact
+  entry per domain. Patterns are compiled and validated when added, checked
+  only after the three exact sender lists find no match (so an exact
+  whitelist or greylist entry always wins over a pattern), and always bounce
+  (550) - a pattern can never be added to the greylist or whitelist.
 - Three semantic rule buckets for content or context conditions that mean
   550, 421, or 250. The bucket supplies the disposition, so rule text does
   not need to repeat it.

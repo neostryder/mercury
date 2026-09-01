@@ -446,6 +446,18 @@ function renderFilteringPolicy() {
     '</div>';
   }).join('');
 
+  const patternEntries = filteringPolicy.blacklist_patterns || [];
+  const patternCard = '<div class="policy-card">' +
+    '<h3>Blacklist patterns (550)</h3>' +
+    '<div>' + (patternEntries.length
+      ? patternEntries.map((pattern, index) => policyEntry(pattern, '', 'blacklist_pattern', 'blacklist_patterns', index)).join('')
+      : '<div class="muted">No entries.</div>') + '</div>' +
+    '<form class="policy-form" data-policy-form="blacklist_pattern" data-policy-group="blacklist_patterns">' +
+      '<input name="pattern" required placeholder="regex matched full-string against the sender domain">' +
+      '<button class="btn" type="submit">Add</button>' +
+    '</form>' +
+  '</div>';
+
   const semanticCards = Object.entries(SEMANTIC_LABELS).map(([disposition, label]) => {
     const entries = filteringPolicy.semantic_rules[disposition] || [];
     return '<div class="policy-card">' +
@@ -481,7 +493,7 @@ function renderFilteringPolicy() {
   '</div>';
 
   document.getElementById('filteringPolicy').innerHTML =
-    '<div><div class="policy-group-title">Deterministic sender lists</div><div class="policy-grid">' + senderCards + '</div></div>' +
+    '<div><div class="policy-group-title">Deterministic sender lists</div><div class="policy-grid">' + senderCards + patternCard + '</div></div>' +
     '<div><div class="policy-group-title">Semantic rule buckets</div><div class="policy-grid">' + semanticCards + '</div></div>' +
     '<div><div class="policy-group-title">Post-delivery behavior</div><div class="policy-grid">' + customCard + '</div></div>';
 }
@@ -537,6 +549,8 @@ document.getElementById('filteringPolicy').addEventListener('submit', async (eve
   } else if (kind === 'semantic_rule') {
     payload.disposition = form.dataset.policyGroup;
     payload.rule = values.get('rule');
+  } else if (kind === 'blacklist_pattern') {
+    payload.pattern = values.get('pattern');
   } else {
     payload.selector = values.get('selector');
     payload.instruction = values.get('instruction');
@@ -564,6 +578,8 @@ document.getElementById('filteringPolicy').addEventListener('click', async (even
   } else if (kind === 'semantic_rule') {
     payload.disposition = group;
     payload.rule = filteringPolicy.semantic_rules[group][index];
+  } else if (kind === 'blacklist_pattern') {
+    payload.pattern = filteringPolicy.blacklist_patterns[index];
   } else {
     payload.selector = filteringPolicy.custom_actions[index].selector;
   }

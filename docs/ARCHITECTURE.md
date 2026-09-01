@@ -145,16 +145,17 @@ quarantined - only to the copy used for classification.
 `MERCURY_RULES_LEDGER_PATH` (normally `/data/rules_ledger.json`). The path is
 unchanged from the flat ledger so deployment does not need a coordinated
 file rename. Writes use a same-directory temporary file, `fsync`, and
-`os.replace` for atomic replacement. The version 2 shape is:
+`os.replace` for atomic replacement. The version 3 shape is:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "sender_lists": {
     "blacklist": [],
     "greylist": [],
     "whitelist": []
   },
+  "blacklist_patterns": [],
   "semantic_rules": {
     "550": [],
     "421": [],
@@ -165,11 +166,31 @@ file rename. Writes use a same-directory temporary file, `fsync`, and
 }
 ```
 
+A version 2 file on disk is upgraded to version 3 in place on first load
+(`blacklist_patterns` defaults to an empty list), so no manual migration
+step is needed on deploy.
+
 Sender selectors are normalized lowercase domains or exact addresses. An
 add operation first removes the same selector from the other sender lists.
 At match time the exact address is checked before its domain. A malformed
 file containing a cross-list duplicate is rejected as ambiguous, causing
 the ingest path to fail open and send its ordinary pipeline-error alert.
+
+`blacklist_patterns` holds regexes for the same rotating-domain spam
+campaigns the exact-match blacklist otherwise needs one entry per domain
+for (a numeric prefix plus a word before the TLD is a common shape). Each
+pattern is compiled and validated when it is added, and matched with
+`re.fullmatch` against the normalized domain only - never the full address
+or message body - which keeps a pathological pattern's blast radius bounded
+by the same 253-character domain length cap the exact-match path already
+enforces. Exact sender-list matches (blacklist, greylist, or whitelist) are
+always checked first; a pattern is only consulted once none of the three
+exact lists match, so an exact whitelist or greylist entry always wins over
+a broader pattern that would otherwise also catch that domain. Pattern
+matches use the blacklist disposition (550) exclusively - unlike exact
+selectors, a pattern cannot be added to the greylist or whitelist, since a
+false-positive bounce is recoverable by the sender while a false-positive
+pattern match against the whitelist would hand a spammer full bypass trust.
 
 Sender authentication uses ForwardEmail's own `dmarc` webhook field
 (`backend/filtering.py`'s `sender_domain_is_authenticated()`) rather than

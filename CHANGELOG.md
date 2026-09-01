@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Filtering] Blacklist entries can now be regex patterns, in
+  addition to exact addresses and domains. A pattern is matched full-string
+  against the sender domain only, is validated (compiled) when it is added,
+  and is checked only after all three exact sender lists find no match, so
+  an exact whitelist or greylist entry always takes precedence over a
+  pattern that would otherwise also catch that domain. Covers rotating spam
+  campaigns that share a domain-naming shape (a random numeric prefix plus
+  a word before the TLD) without needing a separate blacklist entry per
+  domain. A pattern can only bounce (550), never greylist or whitelist.
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.

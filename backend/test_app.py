@@ -431,6 +431,11 @@ CAVEAT: NONE""")
                     "instruction": "File accepted mail in Archive",
                     "native_folder": "Archive",
                 }), "test-secret"))
+            asyncio.run(app.change_filtering_policy(FakeRequest({
+                "operation": "put",
+                "kind": "blacklist_pattern",
+                "pattern": r"^\d{6}[a-z]+\.com$",
+            }), "test-secret"))
 
         policy = asyncio.run(app.get_filtering_policy("test-secret"))
         self.assertEqual(policy["sender_lists"]["blacklist"], [])
@@ -439,6 +444,17 @@ CAVEAT: NONE""")
             policy["semantic_rules"]["421"], ["A genuinely ambiguous message condition"]
         )
         self.assertEqual(policy["custom_actions"][0]["native"]["folder"], "Archive")
+        self.assertEqual(policy["blacklist_patterns"], [r"^\d{6}[a-z]+\.com$"])
+
+    def test_filtering_management_endpoint_rejects_invalid_pattern(self):
+        with patch.object(app.event_log, "log_event"):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.change_filtering_policy(FakeRequest({
+                    "operation": "put",
+                    "kind": "blacklist_pattern",
+                    "pattern": "[unclosed",
+                }), "test-secret"))
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 class CredentialPromptEndpointTests(unittest.TestCase):

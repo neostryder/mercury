@@ -877,6 +877,8 @@ def _change_text(change: dict) -> str:
     if change["kind"] == "custom_action":
         native = f" (folder: {change['native_folder']})" if change.get("native_folder") else ""
         return f"custom action for {change['selector']}: {change['instruction']}{native}"
+    if change["kind"] == "blacklist_pattern":
+        return f"blacklist pattern: {change['pattern']}"
     raise ValueError(f"unknown filtering change kind: {change.get('kind')}")
 
 
@@ -889,6 +891,8 @@ async def _finalize_change(change: dict, source: str = "manual") -> None:
         policy_store.put_custom_action(
             change["selector"], change["instruction"], change.get("native_folder")
         )
+    elif change["kind"] == "blacklist_pattern":
+        policy_store.add_blacklist_pattern(change["pattern"])
     else:
         raise ValueError(f"unknown filtering change kind: {change.get('kind')}")
     event_log.log_event("rule_changes", {
@@ -1177,6 +1181,12 @@ async def change_filtering_policy(
                 changed = True
             else:
                 changed = policy_store.remove_custom_action(change["selector"])
+        elif kind == "blacklist_pattern":
+            change = {"kind": kind, "pattern": payload["pattern"].strip()}
+            if operation == "put":
+                changed = policy_store.add_blacklist_pattern(change["pattern"])
+            else:
+                changed = policy_store.remove_blacklist_pattern(change["pattern"])
         else:
             raise ValueError("unknown filtering entry kind")
     except (KeyError, AttributeError, TypeError, ValueError) as exc:

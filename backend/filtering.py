@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SENDER_LISTS = ("blacklist", "greylist", "whitelist")
 SEMANTIC_DISPOSITIONS = ("550", "421", "250")
 LIST_DISPOSITIONS = {"blacklist": "550", "greylist": "421", "whitelist": "250"}
@@ -53,6 +53,7 @@ class SenderListMatch:
     selector: str
     disposition: str
     verdict: str
+    matched_pattern: str | None = None
 
 
 def sender_domain_is_authenticated(dmarc_result: object, claimed_domain: str | None) -> bool:
@@ -89,10 +90,28 @@ def empty_policy() -> dict:
     return {
         "version": SCHEMA_VERSION,
         "sender_lists": {name: [] for name in SENDER_LISTS},
+        "blacklist_patterns": [],
         "semantic_rules": {disposition: [] for disposition in SEMANTIC_DISPOSITIONS},
         "custom_actions": [],
         "migration_warnings": [],
     }
+
+
+def compile_blacklist_pattern(pattern: str) -> re.Pattern:
+    """Compile a blacklist regex, raising ValueError on anything invalid.
+
+    Patterns are matched full-string against a normalized domain only (never
+    the full address or message body, and never re-run against attacker-sized
+    input), so a pathological pattern's blast radius stays bounded by the same
+    253-character cap _DOMAIN_RE already enforces on every domain selector.
+    """
+    normalized = (pattern or "").strip()
+    if not normalized:
+        raise ValueError("blacklist pattern must not be empty")
+    try:
+        return re.compile(normalized, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(f"invalid blacklist pattern {normalized!r}: {exc}") from exc
 
 
 def normalize_selector(selector: str) -> str:
@@ -179,6 +198,14 @@ class FilteringPolicyStore:
             self._save(migrated)
             return migrated
 
+        if isinstance(raw, dict) and raw.get("version") == 2:
+            upgraded = dict(raw)
+            upgraded["version"] = SCHEMA_VERSION
+            upgraded.setdefault("blacklist_patterns", [])
+            validated = self._validate(upgraded)
+            self._save(validated)
+            return validated
+
         return self._validate(raw)
 
     def _validate(self, raw: object) -> dict:
@@ -216,6 +243,20 @@ class FilteringPolicyStore:
                     )
                 owners[selector] = list_name
                 policy["sender_lists"][list_name].append(selector)
+
+        patterns = raw.get("blacklist_patterns", [])
+        if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+            raise PolicyConfigError("blacklist_patterns must be a list of strings")
+        seen_patterns: set[str] = set()
+        for pattern in (p.strip() for p in patterns if p.strip()):
+            if pattern in seen_patterns:
+                raise PolicyConfigError(f"blacklist pattern {pattern!r} appears more than once")
+            try:
+                compile_blacklist_pattern(pattern)
+            except ValueError as exc:
+                raise PolicyConfigError(str(exc)) from exc
+            seen_patterns.add(pattern)
+            policy["blacklist_patterns"].append(pattern)
 
         semantic_owners: dict[str, str] = {}
         for disposition in SEMANTIC_DISPOSITIONS:
@@ -311,6 +352,19 @@ class FilteringPolicyStore:
                         disposition=LIST_DISPOSITIONS[list_name],
                         verdict=LIST_VERDICTS[list_name],
                     )
+        for pattern in policy["blacklist_patterns"]:
+            try:
+                compiled = compile_blacklist_pattern(pattern)
+            except ValueError:
+                continue
+            if compiled.fullmatch(domain):
+                return SenderListMatch(
+                    list_name="blacklist",
+                    selector=domain,
+                    disposition=LIST_DISPOSITIONS["blacklist"],
+                    verdict=LIST_VERDICTS["blacklist"],
+                    matched_pattern=pattern,
+                )
         return None
 
     def put_sender(self, list_name: str, selector: str) -> dict:
@@ -338,6 +392,25 @@ class FilteringPolicyStore:
         if normalized not in policy["sender_lists"][list_name]:
             return False
         policy["sender_lists"][list_name].remove(normalized)
+        self._save(policy)
+        return True
+
+    def add_blacklist_pattern(self, pattern: str) -> bool:
+        normalized = compile_blacklist_pattern(pattern).pattern
+        policy = self.load()
+        if normalized in policy["blacklist_patterns"]:
+            return False
+        policy["blacklist_patterns"].append(normalized)
+        policy["blacklist_patterns"].sort()
+        self._save(policy)
+        return True
+
+    def remove_blacklist_pattern(self, pattern: str) -> bool:
+        normalized = (pattern or "").strip()
+        policy = self.load()
+        if normalized not in policy["blacklist_patterns"]:
+            return False
+        policy["blacklist_patterns"].remove(normalized)
         self._save(policy)
         return True
 
