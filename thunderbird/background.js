@@ -16,9 +16,27 @@ try {
 }
 
 messenger.menus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === "mercury-flag") {
-    await messenger.messageDisplayAction.openPopup({ windowId: tab.windowId });
+  if (info.menuItemId !== "mercury-flag") return;
+
+  // messageDisplayAction.openPopup() always opens the same popup.html with
+  // no way to pass it which messages were actually right-clicked - the
+  // popup's own messageDisplay.getDisplayedMessages() only ever sees
+  // whatever is in the reading pane, which is not the message_list
+  // selection this click carries in info.selectedMessages (present because
+  // "mercury-flag" was registered for contexts: ["message_list"]). Stashing
+  // a minimal copy in storage.local lets the popup pick it up on the very
+  // next init() instead, one time only.
+  const selected = info.selectedMessages && info.selectedMessages.messages;
+  if (selected && selected.length) {
+    await messenger.storage.local.set({
+      pendingFlagMessages: selected.map((m) => ({
+        id: m.id,
+        subject: m.subject,
+        author: m.author,
+      })),
+    });
   }
+  await messenger.messageDisplayAction.openPopup({ windowId: tab.windowId });
 });
 
 // Mirrors backend/app.py's semantic categories and adds the deterministic

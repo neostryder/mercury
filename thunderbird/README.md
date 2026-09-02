@@ -120,7 +120,14 @@ still used for exactly one thing: the POST to your own configured URL.
 ## Why both a message-display action and a context menu
 
 The toolbar button keeps the flow to one click when a message is already
-open. The `message_list` context-menu item (`background.js`) covers
-flagging straight from the list without opening anything first - it works
-by calling `messageDisplayAction.openPopup()`, so it's the same popup
-either way, reading off whatever the list has selected.
+open - `messageDisplayAction` only exists at all while something is
+displayed, so it has no equivalent for a bare list selection with nothing
+open in the reading pane. The `message_list` context-menu item
+(`background.js`) is what covers that case: flagging any number of selected
+messages straight from the list without opening one first. Both end up
+calling the same `messageDisplayAction.openPopup()` - there is no separate
+popup for the context-menu path - but `openPopup()` has no way to tell the
+popup which messages to use, so the context-menu handler stashes the actual
+right-clicked selection (`info.selectedMessages`) in `storage.local` first,
+and `popup.js`'s `init()` uses it instead of the (irrelevant, for this
+path) displayed message the moment it starts up.

@@ -58,14 +58,24 @@ async function init() {
   const statusEl = document.getElementById("status");
 
   try {
-    // Per Thunderbird's own messageDisplay example: the tab must be looked
-    // up explicitly (currentWindow correctly resolves to the mail window
-    // even from inside this popup - omitting tabId does not reliably find
-    // the displayed message), and getDisplayedMessages resolves to a
-    // MessageList object ({messages: [...], ...}), not a bare array.
-    const [tab] = await messenger.tabs.query({ active: true, currentWindow: true });
-    const result = await messenger.messageDisplay.getDisplayedMessages(tab.id);
-    currentMessages = (result && result.messages) || [];
+    // A right-click "Flag for Mercury" on a message_list selection stashes
+    // its messages here (background.js) since openPopup() has no way to
+    // pass them directly - consume it once, so a later toolbar-button open
+    // never picks up a stale selection from an earlier context-menu click.
+    const { pendingFlagMessages } = await messenger.storage.local.get("pendingFlagMessages");
+    if (pendingFlagMessages && pendingFlagMessages.length) {
+      currentMessages = pendingFlagMessages;
+      await messenger.storage.local.remove("pendingFlagMessages");
+    } else {
+      // Per Thunderbird's own messageDisplay example: the tab must be looked
+      // up explicitly (currentWindow correctly resolves to the mail window
+      // even from inside this popup - omitting tabId does not reliably find
+      // the displayed message), and getDisplayedMessages resolves to a
+      // MessageList object ({messages: [...], ...}), not a bare array.
+      const [tab] = await messenger.tabs.query({ active: true, currentWindow: true });
+      const result = await messenger.messageDisplay.getDisplayedMessages(tab.id);
+      currentMessages = (result && result.messages) || [];
+    }
 
     if (!currentMessages.length) {
       statusEl.textContent = "No message is currently displayed.";

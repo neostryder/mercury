@@ -64,6 +64,13 @@
   resolves a report that turned out not to need any standing change or
   action.
 
+- [Visible] [Thunderbird] Right-clicking a message-list selection with
+  nothing open in the reading pane and choosing "Flag for Mercury" did not
+  open a usable request - the popup was looking at the displayed message,
+  not the actual right-clicked selection, so it found nothing when the two
+  differed. The context-menu click now hands its selection to the popup
+  directly (v0.3.8).
+
 - Initial scaffold: Cloudflare Worker gate, FastAPI backend, prompt-injection
   screening via a local classifier, redaction of the mailbox owner's own
   addresses, semantic verdict via model call, Telegram shadow reports.
