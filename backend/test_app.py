@@ -78,6 +78,7 @@ except ModuleNotFoundError:
 import app
 from approvals import ApprovalStore
 from credential_prompts import CredentialPromptStore
+from dedup import IngestDedupStore
 from filtering import FilteringPolicyStore, empty_policy
 from telegram_approvals import TelegramApprovals
 
@@ -119,8 +120,10 @@ class AppTests(unittest.TestCase):
         self.original_classifier = app.classifier
         self.original_judge = app.judge
         self.original_notifier = app.notifier
+        self.original_dedup_store = app.dedup_store
         self.original_delivery_enabled = app.mail_delivery.DELIVER_ACCEPTED_MAIL
         app.policy_store = self.store
+        app.dedup_store = IngestDedupStore(self.temp_dir / "ingest_dedup.json")
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = False
 
     def tearDown(self):
@@ -128,6 +131,7 @@ class AppTests(unittest.TestCase):
         app.classifier = self.original_classifier
         app.judge = self.original_judge
         app.notifier = self.original_notifier
+        app.dedup_store = self.original_dedup_store
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = self.original_delivery_enabled
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -220,7 +224,8 @@ RULE_MATCH: NONE"""))
                     side_effect=lambda table, fields: events.append((table, fields)),
                 ):
                     response = asyncio.run(app.ingest(
-                        FakeRequest(self._payload(authenticated=False)), "test-secret"
+                        FakeRequest(self._payload(address=f"{list_name}@example.com", authenticated=False)),
+                        "test-secret",
                     ))
 
                 self.assertEqual(response.status_code, 250)
@@ -313,6 +318,63 @@ RULE_MATCH: A concrete scam condition"""
 
         self.assertEqual(response.status_code, 250)
         self.assertEqual(deliveries[0][4], "Archive")
+
+    def test_repeated_ingest_call_for_the_same_message_is_not_reprocessed(self):
+        self.store.put_sender("whitelist", "example.com")
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(side_effect=AssertionError("classifier must be skipped"))
+        )
+        app.judge = SimpleNamespace(
+            ask=AsyncMock(side_effect=AssertionError("judge must be skipped"))
+        )
+        app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
+        deliveries = []
+
+        def deliver(*args):
+            deliveries.append(args)
+            return "delivered to INBOX"
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
+            patch.object(app.event_log, "log_event"),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(first.status_code, 250)
+        self.assertEqual(second.status_code, 250)
+        self.assertEqual(len(deliveries), 1)
+
+    def test_ingest_treats_a_different_message_id_as_a_new_message(self):
+        self.store.put_sender("whitelist", "example.com")
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(side_effect=AssertionError("classifier must be skipped"))
+        )
+        app.judge = SimpleNamespace(
+            ask=AsyncMock(side_effect=AssertionError("judge must be skipped"))
+        )
+        app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
+        deliveries = []
+
+        def deliver(*args):
+            deliveries.append(args)
+            return "delivered to INBOX"
+
+        payload_one = self._payload()
+        payload_one["raw"] = "Message-Id: <one@example.com>\r\n" + payload_one["raw"]
+        payload_two = self._payload()
+        payload_two["raw"] = "Message-Id: <two@example.com>\r\n" + payload_two["raw"]
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
+            patch.object(app.event_log, "log_event"),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(payload_one), "test-secret"))
+            second = asyncio.run(app.ingest(FakeRequest(payload_two), "test-secret"))
+
+        self.assertEqual(first.status_code, 250)
+        self.assertEqual(second.status_code, 250)
+        self.assertEqual(len(deliveries), 2)
 
     def test_brief_parser_returns_typed_changes(self):
         parsed = app._parse_brief_response("""QUESTION: NONE

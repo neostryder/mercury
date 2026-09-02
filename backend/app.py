@@ -1,5 +1,6 @@
 import asyncio
 import email.utils
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import event_log
 import gandalf_relay
 import mail_delivery
 from approvals import ApprovalStore
+from dedup import IngestDedupStore
 from filtering import (
     FilteringPolicyStore,
     compile_blacklist_pattern,
@@ -36,6 +38,26 @@ def _domain_of(address: str) -> str | None:
     m = re.search(r"@([A-Za-z0-9.-]+\.[A-Za-z]{2,})", address or "")
     return m.group(1).lower() if m else None
 
+
+def _dedup_key(raw_message: str | None, raw_content: str) -> str:
+    """A stable identifier for the underlying message, not for one particular
+    webhook delivery of it, so a retried or duplicated call for the same
+    message computes the same key. Prefers the message's own Message-Id
+    header (present on essentially all real mail) over a hash, since two
+    genuinely different messages should never collide just because a sender
+    reused near-identical wording. Falls back to a hash of the raw message
+    body, or of the payload's own reconstructed content when no raw message
+    was included in the webhook payload at all."""
+    if raw_message:
+        try:
+            message_id = email.message_from_string(raw_message).get("Message-Id")
+        except Exception:
+            message_id = None
+        if message_id:
+            return f"msgid:{message_id.strip()}"
+        return f"rawhash:{hashlib.sha256(raw_message.encode('utf-8', errors='replace')).hexdigest()}"
+    return f"contenthash:{hashlib.sha256(raw_content.encode('utf-8', errors='replace')).hexdigest()}"
+
 SHARED_SECRET = os.environ["MERCURY_SHARED_SECRET"]
 # Rollback lever only - enforcement is the default now that it has been turned
 # on. Set MERCURY_SHADOW_MODE=true and restart to go back to report-only
@@ -44,6 +66,7 @@ SHADOW_MODE = os.environ.get("MERCURY_SHADOW_MODE", "false").lower() == "true"
 RULES_LEDGER_PATH = Path(os.environ.get("MERCURY_RULES_LEDGER_PATH", "/data/rules_ledger.json"))
 IDENTITIES_PATH = Path(os.environ.get("MERCURY_IDENTITIES_PATH", "/data/identities.json"))
 PENDING_APPROVALS_PATH = Path(os.environ.get("MERCURY_PENDING_APPROVALS_PATH", "/data/pending_approvals.json"))
+INGEST_DEDUP_PATH = Path(os.environ.get("MERCURY_INGEST_DEDUP_PATH", "/data/ingest_dedup.json"))
 EMAIL_RE = re.compile(r"\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 MAX_CREDENTIAL_BODY_BYTES = 4096
 
@@ -51,6 +74,7 @@ classifier = get_classifier()
 judge = get_judge()
 notifier = get_notifier()
 approval_store = ApprovalStore(PENDING_APPROVALS_PATH)
+dedup_store = IngestDedupStore(INGEST_DEDUP_PATH)
 policy_store = FilteringPolicyStore(RULES_LEDGER_PATH)
 telegram_approvals = TelegramApprovals(
     approval_store,
@@ -1265,6 +1289,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
 
     payload = await request.json()
     subject = payload.get("subject", "")
+    dedup_key = None
 
     try:
         text_body = payload.get("text") or payload.get("html", "")
@@ -1278,6 +1303,30 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         raw_content = f"From: {from_display}\nSubject: {subject}\n\n{text_body}"
         redacted_content = redact(raw_content)
         raw_message = payload.get("raw")
+
+        # A repeat call for the same message - a retried webhook after a slow
+        # response, or two independent deliveries of it - must never re-run
+        # the pipeline: see dedup.py. A "done" repeat replays the disposition
+        # already recorded; a "pending" repeat (the first call is still being
+        # processed) fails open without touching delivery, the same way any
+        # other pipeline ambiguity does.
+        dedup_key = _dedup_key(raw_message, raw_content)
+        existing = dedup_store.claim(dedup_key)
+        if existing is not None:
+            try:
+                event_log.log_event("admin_log", {
+                    "at": _now(),
+                    "event": "ingest_duplicate_suppressed",
+                    "detail": f"key_status={existing['status']} subject={subject!r}",
+                })
+            except Exception:
+                pass
+            if existing["status"] == "done":
+                return JSONResponse(status_code=existing["disposition"], content=existing["content"])
+            return JSONResponse(
+                status_code=250,
+                content={"ok": True, "duplicate": True, "note": "repeat ingest call while the original was still processing"},
+            )
 
         policy = policy_store.load()
         sender_match = policy_store.match_sender(sender_address, policy)
@@ -1398,16 +1447,18 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 },
             )
 
-        return JSONResponse(
-            status_code=int(enforced_disposition),
-            content={
-                "ok": True,
-                "verdict": verdict["verdict"],
-                "disposition": verdict["disposition"],
-                "enforced": enforced_disposition,
-                "injection": injection["label"],
-            },
-        )
+        response_content = {
+            "ok": True,
+            "verdict": verdict["verdict"],
+            "disposition": verdict["disposition"],
+            "enforced": enforced_disposition,
+            "injection": injection["label"],
+        }
+        # Recorded before returning so a repeat call for this same message -
+        # even one arriving moments later - replays this exact outcome
+        # instead of re-running the classifier, judge, and delivery steps.
+        dedup_store.record(dedup_key, int(enforced_disposition), response_content)
+        return JSONResponse(status_code=int(enforced_disposition), content=response_content)
     except Exception as exc:
         # The pipeline itself failed (classifier down, model call failed, etc).
         # This must fail open (accept) regardless of enforcement - a broken
@@ -1416,6 +1467,11 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # the report is that every message gets a signal. Best-effort alert
         # even though the thing that just broke might be the same call this
         # now retries.
+        # The claim is released (not recorded as done) so a genuine retry of
+        # a call that failed before reaching a disposition still runs the
+        # pipeline, rather than being matched against a stale pending marker.
+        if dedup_key is not None:
+            dedup_store.release(dedup_key)
         alert = (
             "\U0001f6a8 Mercury pipeline error\n"
             f"Subject: {subject}\n"

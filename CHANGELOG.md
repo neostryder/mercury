@@ -49,6 +49,18 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] A repeated /ingest call for the same message - a
+  retried webhook after a slow response, or two independent deliveries of
+  it - was reprocessed from scratch every time: on an accepted message this
+  appended a second copy into the mailbox via IMAP, and since the semantic
+  judge is a live model call, a repeat was not guaranteed to reach the same
+  verdict as the first call, so an already-delivered message could come
+  back recorded as bounced. /ingest now keys a persisted dedup store off
+  the message's own Message-Id (falling back to a content hash when one
+  isn't present) and replays the first call's outcome for any repeat within
+  a bounded retention window instead of re-running the classifier, judge,
+  or delivery steps.
+
 - [Visible] [Filtering] An open-ended brief instruction whitelisting or
   blacklisting several domains in one turn ("whitelist paypal.com and
   gog.com") only ever produced one sender-list entry - the SENDER_LIST
