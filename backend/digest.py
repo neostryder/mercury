@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 PHOENIX_TZ = timezone(timedelta(hours=-7), name="MST")
 
 WORKER_LOG_URL = os.environ.get("MERCURY_WORKER_LOG_URL")
-CF_ACCESS_CLIENT_ID = os.environ.get("MERCURY_CF_ACCESS_CLIENT_ID")
-CF_ACCESS_CLIENT_SECRET = os.environ.get("MERCURY_CF_ACCESS_CLIENT_SECRET")
+CF_ACCESS_CLIENT_ID = os.environ.get("MERCURY_DIGEST_ID")
+CF_ACCESS_CLIENT_SECRET = os.environ.get("MERCURY_DIGEST_SECRET")
 SMTP_USER = os.environ.get("MERCURY_DIGEST_SMTP_USER")
 SMTP_PASSWORD = os.environ.get("MERCURY_DIGEST_SMTP_PASSWORD")
 
@@ -69,9 +69,9 @@ def _digest_enabled() -> tuple[bool, str]:
     if not WORKER_LOG_URL:
         missing.append("MERCURY_WORKER_LOG_URL")
     if not CF_ACCESS_CLIENT_ID:
-        missing.append("MERCURY_CF_ACCESS_CLIENT_ID")
+        missing.append("MERCURY_DIGEST_ID")
     if not CF_ACCESS_CLIENT_SECRET:
-        missing.append("MERCURY_CF_ACCESS_CLIENT_SECRET")
+        missing.append("MERCURY_DIGEST_SECRET")
     if not SMTP_USER:
         missing.append("MERCURY_DIGEST_SMTP_USER")
     if not SMTP_PASSWORD:
