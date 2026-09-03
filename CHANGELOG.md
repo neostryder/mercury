@@ -40,6 +40,17 @@
 
 ### Changed
 
+- [Visible] [Dashboard] The browser dashboard no longer authenticates with a
+  shared HTTP Basic Auth password. A Cloudflare Access application on
+  mercury.rpgm.tools/dashboard* now gates entry by email identity instead,
+  reusing the same reusable Access policy already used elsewhere. The daily
+  digest email's own automated fetch of the same routes (backend/digest.py)
+  switched from that shared password to a Cloudflare Access Service Token
+  (CF-Access-Client-Id/CF-Access-Client-Secret headers), authorized through a
+  Service Auth policy on the same application rather than a second human
+  credential. The Worker no longer holds or checks a DASHBOARD_PASSWORD
+  secret at all.
+
 - [Visible] [Filtering] A domain sender-list or custom-action entry now
   also covers its own subdomains, at any depth - whitelisting paypal.com
   now also covers a sender at billing.paypal.com. When entries in

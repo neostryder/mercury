@@ -64,8 +64,10 @@ export default {
     const { pathname, search } = url;
 
     if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
-      const unauthorized = checkDashboardAuth(request, env);
-      if (unauthorized) return unauthorized;
+      // Gated entirely by a Cloudflare Access application on this hostname
+      // and path (Zero Trust dashboard, not this Worker) - a request only
+      // ever reaches this code once Access has already approved it, so
+      // there is nothing left for the Worker itself to check.
       return handleDashboard(pathname, search, env, request);
     }
 
@@ -131,29 +133,6 @@ async function purgeExpiredLogs(env) {
   await db.prepare(
     'INSERT INTO admin_log (at, event, detail) VALUES (?, ?, ?)'
   ).bind(new Date().toISOString(), 'log_retention_sweep', `days=${days} deleted=${totalDeleted}`).run();
-}
-
-// Low-friction single-user gate: standard HTTP Basic Auth, which the browser
-// prompts for once and then remembers for the rest of the session - no
-// login page, no cookies/sessions to manage. Restricted to whoever holds
-// DASHBOARD_PASSWORD (a Worker secret), not tied to a specific email
-// address the way Cloudflare Access would be; that's a stronger option to
-// layer on later if wanted, but requires Zero Trust account configuration
-// beyond what this Worker can set up on its own.
-function checkDashboardAuth(request, env) {
-  const auth = request.headers.get('Authorization') || '';
-  if (auth.startsWith('Basic ')) {
-    try {
-      const [, password] = atob(auth.slice(6)).split(':');
-      if (password === env.DASHBOARD_PASSWORD) return null;
-    } catch (err) {
-      // fall through to challenge
-    }
-  }
-  return new Response('Authentication required', {
-    status: 401,
-    headers: { 'WWW-Authenticate': 'Basic realm="Mercury Dashboard"' },
-  });
 }
 
 const HSTS = 'max-age=31536000; includeSubDomains';
@@ -624,8 +603,9 @@ async function reverseRule(rule, env) {
 }
 
 // The filtering policy is stored on the backend filesystem, not in D1. The
-// dashboard is already protected by Basic Auth; this hop additionally uses
-// the backend's shared secret and never exposes it to browser JavaScript.
+// dashboard is already gated by the Cloudflare Access application on this
+// path; this hop additionally uses the backend's shared secret and never
+// exposes it to browser JavaScript.
 async function proxyFilteringPolicy(request, env) {
   const headers = { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET };
   let body;

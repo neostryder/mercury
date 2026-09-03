@@ -1,13 +1,16 @@
 """Daily digest email: once a day, a standalone HTML email summarizing the
 last 24 hours of Mercury's activity, sent to the mailbox owner.
 
-The backend has no Cloudflare credentials of its own (see event_log.py), so
-this gathers its data the same way the browser dashboard does: authenticated
-HTTPS calls to the Worker's existing /dashboard/api/* routes
-(worker/src/index.js), reusing the same HTTP Basic Auth rather than adding a
-second path into D1. The base URL for those calls is derived from
-MERCURY_WORKER_LOG_URL (the Worker's own hostname, already configured for
-event_log.py) rather than introducing a redundant env var for the same host.
+This gathers its data over authenticated HTTPS calls to the Worker's
+existing /dashboard/api/* routes (worker/src/index.js) rather than adding a
+second path into D1. Those routes sit behind a Cloudflare Access
+application; this makes the same request a browser would, but as a
+non-interactive caller, so it authenticates with a Cloudflare Access
+Service Token (CF-Access-Client-Id/CF-Access-Client-Secret headers) issued
+to a Service Auth policy on that application rather than a human login. The
+base URL for those calls is derived from MERCURY_WORKER_LOG_URL (the
+Worker's own hostname, already configured for event_log.py) rather than
+introducing a redundant env var for the same host.
 
 The insights paragraph reuses the judge provider seam (providers/judge.py)
 with the aggregate stats as context, rather than a separate LLM integration.
@@ -40,8 +43,8 @@ logger = logging.getLogger(__name__)
 PHOENIX_TZ = timezone(timedelta(hours=-7), name="MST")
 
 WORKER_LOG_URL = os.environ.get("MERCURY_WORKER_LOG_URL")
-DASHBOARD_USER = os.environ.get("MERCURY_DASHBOARD_USER")
-DASHBOARD_PASSWORD = os.environ.get("MERCURY_DASHBOARD_PASSWORD")
+CF_ACCESS_CLIENT_ID = os.environ.get("MERCURY_CF_ACCESS_CLIENT_ID")
+CF_ACCESS_CLIENT_SECRET = os.environ.get("MERCURY_CF_ACCESS_CLIENT_SECRET")
 SMTP_USER = os.environ.get("MERCURY_DIGEST_SMTP_USER")
 SMTP_PASSWORD = os.environ.get("MERCURY_DIGEST_SMTP_PASSWORD")
 
@@ -65,10 +68,10 @@ def _digest_enabled() -> tuple[bool, str]:
     missing = []
     if not WORKER_LOG_URL:
         missing.append("MERCURY_WORKER_LOG_URL")
-    if not DASHBOARD_USER:
-        missing.append("MERCURY_DASHBOARD_USER")
-    if not DASHBOARD_PASSWORD:
-        missing.append("MERCURY_DASHBOARD_PASSWORD")
+    if not CF_ACCESS_CLIENT_ID:
+        missing.append("MERCURY_CF_ACCESS_CLIENT_ID")
+    if not CF_ACCESS_CLIENT_SECRET:
+        missing.append("MERCURY_CF_ACCESS_CLIENT_SECRET")
     if not SMTP_USER:
         missing.append("MERCURY_DIGEST_SMTP_USER")
     if not SMTP_PASSWORD:
@@ -115,7 +118,11 @@ async def _get(client: httpx.AsyncClient, base_url: str, path: str) -> object:
 
 async def gather_stats() -> dict:
     base_url = _dashboard_base_url()
-    async with httpx.AsyncClient(auth=(DASHBOARD_USER, DASHBOARD_PASSWORD), timeout=30) as client:
+    headers = {
+        "CF-Access-Client-Id": CF_ACCESS_CLIENT_ID,
+        "CF-Access-Client-Secret": CF_ACCESS_CLIENT_SECRET,
+    }
+    async with httpx.AsyncClient(headers=headers, timeout=30) as client:
         summary, messages, rules, actions = await asyncio.gather(
             _get(client, base_url, "/dashboard/api/summary"),
             _get(client, base_url, "/dashboard/api/messages"),
