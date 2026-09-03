@@ -117,3 +117,130 @@ messenger.messages.onNewMailReceived.addListener(async (folder, messageList) => 
     }
   }
 });
+
+// The account's inbox is a catch-all for the whole domain, so the bare
+// address below should never appear as an outgoing From: composing a new
+// message (or forwarding one) prompts for an alias, and replying picks up
+// whichever alias the original message was actually sent to.
+const ALIAS_DOMAIN = "rpgm.tools";
+const BARE_ADDRESS = `aaron@${ALIAS_DOMAIN}`;
+
+function extractAddresses(headerValue) {
+  if (!headerValue) return [];
+  const matches = String(headerValue).match(/[^\s<>,"]+@[^\s<>,"]+/g);
+  return matches || [];
+}
+
+// Checked in this order: a mail-server-added delivery header (most literal,
+// if ForwardEmail preserves one) before the message's own visible To/Cc.
+const ALIAS_HEADER_PRIORITY = ["delivered-to", "x-original-to", "to", "cc"];
+
+async function findOriginalAlias(relatedMessageId) {
+  if (relatedMessageId == null) return null;
+  let full;
+  try {
+    full = await messenger.messages.getFull(relatedMessageId);
+  } catch (err) {
+    console.error("Mercury: failed to read the original message for a reply", err);
+    return null;
+  }
+  for (const name of ALIAS_HEADER_PRIORITY) {
+    const addresses = extractAddresses(getHeaderValue(full.headers, name));
+    const match = addresses.find((a) => a.toLowerCase().endsWith(`@${ALIAS_DOMAIN}`));
+    if (match) return match.toLowerCase();
+  }
+  return null;
+}
+
+async function getDefaultIdentity() {
+  const accounts = await messenger.accounts.list();
+  for (const account of accounts) {
+    for (const identity of account.identities || []) {
+      if ((identity.email || "").toLowerCase() === BARE_ADDRESS) return identity;
+    }
+  }
+  return null;
+}
+
+async function setFromAddress(tabId, address) {
+  try {
+    const identity = await getDefaultIdentity();
+    const from = identity && identity.name ? `"${identity.name}" <${address}>` : address;
+    await messenger.compose.setComposeDetails(tabId, { from });
+  } catch (err) {
+    console.error("Mercury: failed to set the From address", tabId, err);
+  }
+}
+
+async function openIdentityPrompt(tabId) {
+  try {
+    await messenger.windows.create({
+      url: `identity-prompt.html?tabId=${tabId}`,
+      type: "popup",
+      width: 420,
+      height: 220,
+    });
+  } catch (err) {
+    console.error("Mercury: failed to open the identity prompt", err);
+  }
+}
+
+// ComposeDetails.type is one of "new", "reply", "forward", "redirect",
+// "draft". Forward and redirect are treated like new messages - the
+// address is being exposed to someone who never had it - so only a plain
+// reply gets the silent auto-match.
+async function handleComposeTab(tabId) {
+  let details;
+  try {
+    details = await messenger.compose.getComposeDetails(tabId);
+  } catch (err) {
+    console.error("Mercury: failed to read compose details", tabId, err);
+    return;
+  }
+
+  const currentAddress = extractAddresses(details.from)[0];
+  if (currentAddress && currentAddress.toLowerCase() !== BARE_ADDRESS) {
+    // Already something other than the bare address, e.g. a draft resumed
+    // after this same logic already set it once. Leave it alone.
+    return;
+  }
+
+  if (details.type === "reply") {
+    const alias = await findOriginalAlias(details.relatedMessageId);
+    if (alias) {
+      await setFromAddress(tabId, alias);
+      return;
+    }
+    // No rpgm.tools alias found in the original message's headers - fall
+    // back to the same prompt a new message gets.
+  }
+
+  await openIdentityPrompt(tabId);
+}
+
+// onComposeStateChanged (unlike tabs.onCreated) fires once the composer's
+// initial state - identity, recipients, relatedMessageId for a reply - is
+// actually populated, and fires again on later edits. The guard below acts
+// only on the first firing per tab; if that first firing still lands before
+// a reply's relatedMessageId is ready, findOriginalAlias just returns null
+// and this falls back to the same prompt a new message gets, so a bare
+// address never slips through either way.
+const handledComposeTabs = new Set();
+
+messenger.compose.onComposeStateChanged.addListener((tab, state) => {
+  if (handledComposeTabs.has(tab.id)) return;
+  handledComposeTabs.add(tab.id);
+  handleComposeTab(tab.id).catch((err) => {
+    console.error("Mercury: failed to handle compose tab", tab.id, err);
+    handledComposeTabs.delete(tab.id);
+  });
+});
+
+messenger.tabs.onRemoved.addListener((tabId) => {
+  handledComposeTabs.delete(tabId);
+});
+
+messenger.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "mercury-set-from-alias") return undefined;
+  return setFromAddress(message.tabId, `${message.username}@${ALIAS_DOMAIN}`);
+});

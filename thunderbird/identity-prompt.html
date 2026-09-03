@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mercury - choose a sending address</title>
+<style>
+  :root {
+    --bg-0: #0b0d14;
+    --bg-1: #151827;
+    --bg-2: #1d2136;
+    --border: #2e3350;
+    --silver: #cbd5e6;
+    --silver-dim: #8b93ac;
+    --sky: #7dd3fc;
+    --gold: #e0b872;
+    --danger: #f28b82;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 16px 18px 18px;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: linear-gradient(160deg, var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-2) 100%);
+    color: var(--silver);
+  }
+
+  h1 {
+    margin: 0 0 4px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 1.1em;
+    background: linear-gradient(90deg, var(--silver) 0%, var(--sky) 60%, var(--gold) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  p.lede {
+    color: var(--silver-dim);
+    font-size: 0.82em;
+    line-height: 1.4;
+    margin: 0 0 14px;
+  }
+
+  label {
+    display: block;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--silver-dim);
+    margin-bottom: 6px;
+  }
+
+  .address-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 10px;
+    font-size: 0.95em;
+    background: var(--bg-0);
+    color: var(--silver);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  input:focus {
+    border-color: var(--sky);
+    box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.15);
+  }
+
+  .domain {
+    color: var(--silver-dim);
+    font-size: 0.95em;
+    white-space: nowrap;
+  }
+
+  button {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 0.95em;
+    font-weight: 600;
+    color: #0b0d14;
+    background: linear-gradient(90deg, var(--sky) 0%, var(--silver) 100%);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+
+  button:disabled {
+    cursor: default;
+    background: var(--bg-2);
+    color: var(--silver-dim);
+  }
+
+  #status {
+    font-size: 0.82em;
+    color: var(--danger);
+    margin-top: 10px;
+    min-height: 1.2em;
+    overflow-wrap: break-word;
+  }
+</style>
+</head>
+<body>
+  <h1>Mercury</h1>
+  <p class="lede">Choose which address this message sends from. Never the bare inbox address.</p>
+  <form id="form">
+    <label for="username">Send as</label>
+    <div class="address-row">
+      <input id="username" type="text" autocomplete="off" spellcheck="false">
+      <span class="domain">@rpgm.tools</span>
+    </div>
+    <button type="submit">Use this address</button>
+  </form>
+  <div id="status"></div>
+  <script src="identity-prompt.js"></script>
+</body>
+</html>

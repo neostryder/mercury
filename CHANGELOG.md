@@ -32,6 +32,15 @@
   and Bounce Domain are disabled once removed, since both need a real
   sender; Bounce Pattern and Custom keep working (v0.3.7).
 
+- [Visible] [Thunderbird] Composing a new message, or forwarding one, now
+  pops up a small prompt asking which username to send as (default: the
+  account's own username), combined with the domain to form the From
+  address. Replying instead sets the From address automatically, with no
+  prompt, to whichever domain alias the original message was actually sent
+  to, falling back to the same prompt when no such alias can be found in the
+  original's headers. The account's own bare inbox address is never used as
+  an outgoing From.
+
 - [Visible] [Dashboard] A message bounced by a blacklist pattern now names
   the pattern in its reasoning and saves it as the message's triggered
   rule, so the existing "Reverse this rule" button on a hard-bounce's

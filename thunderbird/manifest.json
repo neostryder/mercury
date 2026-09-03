@@ -17,7 +17,8 @@
     "messagesTags",
     "messagesTagsList",
     "storage",
-    "menus"
+    "menus",
+    "compose"
   ],
   "host_permissions": ["*://*/*"],
   "icons": {

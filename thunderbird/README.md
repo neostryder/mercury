@@ -93,6 +93,26 @@ Two special requests get their own handling beyond a plain rule:
   unsubscribe" section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
   for exactly how that evaluation works.
 
+## Sending address
+
+The account's inbox is a catch-all: any address at its domain reaches it, and
+outgoing mail can be sent from any address at that domain too. This extension
+makes sure the bare account address never appears as an outgoing From:
+
+- **Composing a new message, or forwarding one**, a small popup asks which
+  username to send as (defaulting to the account's own username, editable to
+  anything) and combines it with the domain before the message can be sent.
+  Forward is treated as a new message here, not as a reply, since forwarding
+  exposes the address to a party who never had it.
+- **Replying**, the From address is set automatically, with no popup, to
+  whichever domain alias the original message was actually sent to (read
+  from its Delivered-To/X-Original-To/To/Cc headers, in that order). If none
+  of those headers name an address at the domain - an older message received
+  before this alias habit, for instance - it falls back to the same popup a
+  new message gets.
+- A message already carrying a non-default From (a draft resumed after this
+  logic already set it once) is left alone rather than prompted again.
+
 ## Category tags
 
 Every new message that lands with an `X-Mercury-Category` header (added by
