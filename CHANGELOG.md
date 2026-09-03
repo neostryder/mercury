@@ -39,7 +39,7 @@
   prompt, to whichever domain alias the original message was actually sent
   to, falling back to the same prompt when no such alias can be found in the
   original's headers. The account's own bare inbox address is never used as
-  an outgoing From.
+  an outgoing From (v0.3.9).
 
 - [Visible] [Dashboard] A message bounced by a blacklist pattern now names
   the pattern in its reasoning and saves it as the message's triggered
