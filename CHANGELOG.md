@@ -69,6 +69,17 @@
 
 ### Fixed
 
+- [Internal] [Thunderbird] Removing the tabs permission (below) turned out
+  not to be the whole story - the "module is not a constructor" crash
+  stopped, but reply still triggered nothing. Checked Thunderbird's own
+  current API documentation instead of continuing to guess: there is no
+  dedicated "a compose window was opened" event in the compose API at all,
+  and the pattern actually documented to work is windows.onCreated,
+  checking the WINDOW's own type and then querying its tabs - not
+  tabs.onCreated, which every previous attempt here used instead. Added
+  windows.onCreated alongside the existing tabs.onCreated/onUpdated
+  listeners (v0.3.16).
+
 - [Visible] [Thunderbird] Found it: opening a reply threw "module is not a
   constructor" out of Thunderbird's own WebExtension API loader
   (ExtensionCommon.sys.mjs's asyncGetAPI), an uncaught exception in
