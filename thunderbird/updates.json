@@ -3,7 +3,7 @@
     "mercury-rule-flagger@example.com": {
       "updates": [
         {
-          "version": "0.3.14",
+          "version": "0.3.15",
           "update_link": "https://github.com/neostryder/mercury/releases/latest/download/mercury-rule-flagger.xpi"
         }
       ]
