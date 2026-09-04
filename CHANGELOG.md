@@ -79,7 +79,7 @@
   messaging instead of setting it directly; and it could not be dismissed
   with Escape. The trigger is now tabs.onCreated (fires once, reliably, for
   every new compose tab of any type), the popup sets the From address itself,
-  the window is taller, and Escape closes it.
+  the window is taller, and Escape closes it (v0.3.10).
 
 - [Visible] [Pipeline] A repeated /ingest call for the same message - a
   retried webhook after a slow response, or two independent deliveries of
