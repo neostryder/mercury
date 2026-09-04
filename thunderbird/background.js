@@ -236,13 +236,25 @@ async function handleComposeTab(tabId) {
   await openIdentityPrompt(tabId);
 }
 
-// tabs.onCreated fires exactly once for a new compose tab, unlike
-// compose.onComposeStateChanged which only fires on a later edit (recipient,
-// subject, attachment...) and never fired at all for a reply or forward
-// composer that's already fully populated the moment its tab exists.
-messenger.tabs.onCreated.addListener((tab) => {
+// A new compose window (New, Forward) creates a genuinely new tab, which
+// tabs.onCreated catches. Replying from an already-open message tab instead
+// converts that SAME tab into the compose editor in place - no tab is
+// created, so onCreated never fires for it - which is why reply needed
+// tabs.onUpdated as well, watching for a tab's type flipping to
+// "messageCompose". The guard below acts once per tab id either way, since
+// onUpdated keeps firing on every later edit once a tab is a composer.
+const handledComposeTabs = new Set();
+
+function maybeHandleComposeTab(tab) {
   if (tab.type !== "messageCompose") return;
-  handleComposeTab(tab.id).catch((err) =>
-    console.error("Mercury: failed to handle new compose tab", tab.id, err)
-  );
-});
+  if (handledComposeTabs.has(tab.id)) return;
+  handledComposeTabs.add(tab.id);
+  handleComposeTab(tab.id).catch((err) => {
+    console.error("Mercury: failed to handle compose tab", tab.id, err);
+    handledComposeTabs.delete(tab.id);
+  });
+}
+
+messenger.tabs.onCreated.addListener(maybeHandleComposeTab);
+messenger.tabs.onUpdated.addListener((tabId, changeInfo, tab) => maybeHandleComposeTab(tab));
+messenger.tabs.onRemoved.addListener((tabId) => handledComposeTabs.delete(tabId));

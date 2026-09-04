@@ -69,6 +69,15 @@
 
 ### Fixed
 
+- [Visible] [Thunderbird] Replying still never triggered the sending-address
+  prompt or an auto-matched From, even after v0.3.10 fixed it for new
+  messages and forwards. Replying from an already-open message tab converts
+  that same tab into the compose editor in place instead of creating a new
+  one, so tabs.onCreated - which only fires for a genuinely new tab - never
+  saw it. tabs.onUpdated, watching for a tab's type changing to
+  "messageCompose", now catches this case too, alongside onCreated for the
+  new-tab case (v0.3.11).
+
 - [Visible] [Thunderbird] The sending-address prompt introduced in v0.3.9 had
   four problems: it never appeared at all when replying or forwarding, since
   the compose.onComposeStateChanged event it relied on only fires on a later
