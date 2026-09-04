@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Mercury Rule Flagger",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Flag a message and describe in plain language how it should be handled.",
   "browser_specific_settings": {
     "gecko": {
@@ -18,8 +18,7 @@
     "messagesTagsList",
     "storage",
     "menus",
-    "compose",
-    "tabs"
+    "compose"
   ],
   "host_permissions": ["*://*/*"],
   "icons": {

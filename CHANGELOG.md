@@ -69,6 +69,17 @@
 
 ### Fixed
 
+- [Visible] [Thunderbird] Found it: opening a reply threw "module is not a
+  constructor" out of Thunderbird's own WebExtension API loader
+  (ExtensionCommon.sys.mjs's asyncGetAPI), an uncaught exception in
+  Thunderbird's own machinery that happened before any of this extension's
+  code ever ran - which is why nothing was ever logged for reply, at any
+  logging level. Removed the `tabs` permission added speculatively in
+  v0.3.12: it was never actually required (tabs.onCreated/onUpdated/onRemoved
+  fire without it; that permission only gates sensitive properties like
+  url/title, not type), and its presence is what triggered the crash
+  (v0.3.15).
+
 - [Internal] [Thunderbird] v0.3.13's diagnostic logging used console.log,
   which Thunderbird's Browser Console filters behind its own "Logs" toggle
   (off by default) separately from "Warnings" and "Errors" - so a report of
