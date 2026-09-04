@@ -69,6 +69,18 @@
 
 ### Fixed
 
+- [Visible] [Thunderbird] The sending-address prompt introduced in v0.3.9 had
+  four problems: it never appeared at all when replying or forwarding, since
+  the compose.onComposeStateChanged event it relied on only fires on a later
+  edit and never fired for a composer that was already fully populated the
+  moment its tab existed; the popup window was too short for its own
+  content; submitting it failed with "Could not establish connection" because
+  it round-tripped the chosen address through background.js's runtime
+  messaging instead of setting it directly; and it could not be dismissed
+  with Escape. The trigger is now tabs.onCreated (fires once, reliably, for
+  every new compose tab of any type), the popup sets the From address itself,
+  the window is taller, and Escape closes it.
+
 - [Visible] [Pipeline] A repeated /ingest call for the same message - a
   retried webhook after a slow response, or two independent deliveries of
   it - was reprocessed from scratch every time: on an accepted message this

@@ -177,12 +177,30 @@ async function openIdentityPrompt(tabId) {
     await messenger.windows.create({
       url: `identity-prompt.html?tabId=${tabId}`,
       type: "popup",
-      width: 420,
-      height: 220,
+      width: 460,
+      height: 300,
     });
   } catch (err) {
     console.error("Mercury: failed to open the identity prompt", err);
   }
+}
+
+// A freshly created compose tab's details (in particular a reply's
+// relatedMessageId, and type itself) aren't always populated on the very
+// first read - poll briefly rather than trusting the first response.
+async function getComposeDetailsWhenReady(tabId) {
+  let lastErr;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const details = await messenger.compose.getComposeDetails(tabId);
+      if (details.type) return details;
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (lastErr) throw lastErr;
+  return messenger.compose.getComposeDetails(tabId);
 }
 
 // ComposeDetails.type is one of "new", "reply", "forward", "redirect",
@@ -192,7 +210,7 @@ async function openIdentityPrompt(tabId) {
 async function handleComposeTab(tabId) {
   let details;
   try {
-    details = await messenger.compose.getComposeDetails(tabId);
+    details = await getComposeDetailsWhenReady(tabId);
   } catch (err) {
     console.error("Mercury: failed to read compose details", tabId, err);
     return;
@@ -218,29 +236,13 @@ async function handleComposeTab(tabId) {
   await openIdentityPrompt(tabId);
 }
 
-// onComposeStateChanged (unlike tabs.onCreated) fires once the composer's
-// initial state - identity, recipients, relatedMessageId for a reply - is
-// actually populated, and fires again on later edits. The guard below acts
-// only on the first firing per tab; if that first firing still lands before
-// a reply's relatedMessageId is ready, findOriginalAlias just returns null
-// and this falls back to the same prompt a new message gets, so a bare
-// address never slips through either way.
-const handledComposeTabs = new Set();
-
-messenger.compose.onComposeStateChanged.addListener((tab, state) => {
-  if (handledComposeTabs.has(tab.id)) return;
-  handledComposeTabs.add(tab.id);
-  handleComposeTab(tab.id).catch((err) => {
-    console.error("Mercury: failed to handle compose tab", tab.id, err);
-    handledComposeTabs.delete(tab.id);
-  });
-});
-
-messenger.tabs.onRemoved.addListener((tabId) => {
-  handledComposeTabs.delete(tabId);
-});
-
-messenger.runtime.onMessage.addListener((message) => {
-  if (message?.type !== "mercury-set-from-alias") return undefined;
-  return setFromAddress(message.tabId, `${message.username}@${ALIAS_DOMAIN}`);
+// tabs.onCreated fires exactly once for a new compose tab, unlike
+// compose.onComposeStateChanged which only fires on a later edit (recipient,
+// subject, attachment...) and never fired at all for a reply or forward
+// composer that's already fully populated the moment its tab exists.
+messenger.tabs.onCreated.addListener((tab) => {
+  if (tab.type !== "messageCompose") return;
+  handleComposeTab(tab.id).catch((err) =>
+    console.error("Mercury: failed to handle new compose tab", tab.id, err)
+  );
 });
