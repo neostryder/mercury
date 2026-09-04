@@ -185,45 +185,42 @@ async function openIdentityPrompt(tabId) {
   }
 }
 
-// A freshly created compose tab's details (in particular a reply's
-// relatedMessageId, and type itself) aren't always populated on the very
-// first read - poll briefly rather than trusting the first response.
+// A freshly created (or freshly converted) compose tab's details - in
+// particular a reply's relatedMessageId, and type itself - aren't always
+// populated on the very first read. Poll for a while rather than trusting
+// the first response; returns null (never throws) if it's still not usable
+// after that, so the caller can fail safe instead of giving up.
 async function getComposeDetailsWhenReady(tabId) {
-  let lastErr;
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const details = await messenger.compose.getComposeDetails(tabId);
       if (details.type) return details;
     } catch (err) {
-      lastErr = err;
+      // Not ready yet - keep polling.
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  if (lastErr) throw lastErr;
-  return messenger.compose.getComposeDetails(tabId);
+  return null;
 }
 
 // ComposeDetails.type is one of "new", "reply", "forward", "redirect",
 // "draft". Forward and redirect are treated like new messages - the
 // address is being exposed to someone who never had it - so only a plain
-// reply gets the silent auto-match.
+// reply gets the silent auto-match. If the details can't be read at all
+// (details is null) or type never resolves to "reply", this falls through
+// to the prompt - the one thing that must never happen is doing nothing,
+// since that's what leaves the bare address in place.
 async function handleComposeTab(tabId) {
-  let details;
-  try {
-    details = await getComposeDetailsWhenReady(tabId);
-  } catch (err) {
-    console.error("Mercury: failed to read compose details", tabId, err);
-    return;
-  }
+  const details = await getComposeDetailsWhenReady(tabId);
 
-  const currentAddress = extractAddresses(details.from)[0];
+  const currentAddress = details ? extractAddresses(details.from)[0] : undefined;
   if (currentAddress && currentAddress.toLowerCase() !== BARE_ADDRESS) {
     // Already something other than the bare address, e.g. a draft resumed
     // after this same logic already set it once. Leave it alone.
     return;
   }
 
-  if (details.type === "reply") {
+  if (details && details.type === "reply") {
     const alias = await findOriginalAlias(details.relatedMessageId);
     if (alias) {
       await setFromAddress(tabId, alias);

@@ -70,6 +70,17 @@
 ### Fixed
 
 - [Visible] [Thunderbird] Replying still never triggered the sending-address
+  prompt or an auto-matched From even after v0.3.11's tabs.onUpdated fix.
+  Reading a reply's compose details could keep failing for longer than the
+  short poll window allowed for, and that failure silently gave up instead
+  of falling back to the prompt - the one outcome that must never happen,
+  since it's what leaves the bare address in place. The poll window is
+  longer now, and failing to read compose details at all (or failing to
+  resolve a recognized type) now still opens the prompt rather than doing
+  nothing. Also added the `tabs` permission, to remove any doubt about
+  whether a tab's `type` was visible to the extension without it (v0.3.12).
+
+- [Visible] [Thunderbird] Replying still never triggered the sending-address
   prompt or an auto-matched From, even after v0.3.10 fixed it for new
   messages and forwards. Replying from an already-open message tab converts
   that same tab into the compose editor in place instead of creating a new
