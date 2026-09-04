@@ -234,23 +234,18 @@ async function handleComposeTab(tabId) {
   await openIdentityPrompt(tabId);
 }
 
-// A new compose window (New, Forward) creates a genuinely new tab, which
-// tabs.onCreated catches. Replying from an already-open message tab was
-// assumed to instead convert that SAME tab into the compose editor in
-// place - tabs.onUpdated was added to catch that. Neither theory has been
-// confirmed against real logged behavior yet: reply still doesn't trigger
-// anything, with nothing at all logged by either listener, which means one
-// of them isn't observing whatever Thunderbird actually does for reply.
-// The logging below (temporary - trim once the real cause is confirmed) is
-// there to answer that directly instead of guessing again: every onCreated
-// fire, and every onUpdated fire that touches type at all, gets logged with
-// the tab's actual type, so a reply attempt's console output shows either
-// what type it really carries or that neither listener fires for it at all.
-// Using console.warn rather than console.log deliberately - Thunderbird's
-// Browser Console filters plain log-level output behind its own "Logs"
-// toggle (off by default), separately from "Warnings"/"Errors", and a
-// warning is much harder to miss than a category that might be filtered out
-// without any indication it's happening.
+// There is no dedicated "a compose window was opened" event in Thunderbird's
+// compose API at all - beginNew/beginReply/beginForward return promises, not
+// events, and onComposeStateChanged only fires on a later edit. The pattern
+// confirmed to actually work elsewhere is windows.onCreated, checking the
+// WINDOW's own type, then querying that window's tabs - not tabs.onCreated,
+// which is what every previous attempt here used instead. tabs.onUpdated
+// stays as a second path in case some configuration converts an existing
+// tab rather than opening a new window. Logging stays on console.warn
+// (Thunderbird's Browser Console filters plain console.log behind its own
+// "Logs" toggle, off by default, separately from "Warnings"/"Errors") and
+// stays in place - temporary, meant to come back out once this is confirmed
+// actually fixed rather than assumed fixed again.
 const handledComposeTabs = new Set();
 
 function maybeHandleComposeTab(tab) {
@@ -266,6 +261,19 @@ function maybeHandleComposeTab(tab) {
     handledComposeTabs.delete(tab.id);
   });
 }
+
+messenger.windows.onCreated.addListener(async (win) => {
+  console.warn("Mercury: windows.onCreated", win.id, win.type);
+  if (win.type !== "messageCompose") return;
+  try {
+    const tabs = await messenger.tabs.query({ windowId: win.id });
+    for (const tab of tabs) {
+      maybeHandleComposeTab(tab);
+    }
+  } catch (err) {
+    console.error("Mercury: failed to query tabs for new compose window", win.id, err);
+  }
+});
 
 messenger.tabs.onCreated.addListener((tab) => {
   console.warn("Mercury: tabs.onCreated", tab.id, tab.type);
