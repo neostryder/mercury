@@ -212,7 +212,7 @@ async function getComposeDetailsWhenReady(tabId) {
 // since that's what leaves the bare address in place.
 async function handleComposeTab(tabId) {
   const details = await getComposeDetailsWhenReady(tabId);
-  console.log("Mercury: compose details for tab", tabId, details);
+  console.warn("Mercury: compose details for tab", tabId, details);
 
   const currentAddress = details ? extractAddresses(details.from)[0] : undefined;
   if (currentAddress && currentAddress.toLowerCase() !== BARE_ADDRESS) {
@@ -246,15 +246,20 @@ async function handleComposeTab(tabId) {
 // fire, and every onUpdated fire that touches type at all, gets logged with
 // the tab's actual type, so a reply attempt's console output shows either
 // what type it really carries or that neither listener fires for it at all.
+// Using console.warn rather than console.log deliberately - Thunderbird's
+// Browser Console filters plain log-level output behind its own "Logs"
+// toggle (off by default), separately from "Warnings"/"Errors", and a
+// warning is much harder to miss than a category that might be filtered out
+// without any indication it's happening.
 const handledComposeTabs = new Set();
 
 function maybeHandleComposeTab(tab) {
   if (tab.type !== "messageCompose") return;
   if (handledComposeTabs.has(tab.id)) {
-    console.log("Mercury: compose tab already handled, skipping", tab.id);
+    console.warn("Mercury: compose tab already handled, skipping", tab.id);
     return;
   }
-  console.log("Mercury: handling compose tab", tab.id);
+  console.warn("Mercury: handling compose tab", tab.id);
   handledComposeTabs.add(tab.id);
   handleComposeTab(tab.id).catch((err) => {
     console.error("Mercury: failed to handle compose tab", tab.id, err);
@@ -263,13 +268,13 @@ function maybeHandleComposeTab(tab) {
 }
 
 messenger.tabs.onCreated.addListener((tab) => {
-  console.log("Mercury: tabs.onCreated", tab.id, tab.type);
+  console.warn("Mercury: tabs.onCreated", tab.id, tab.type);
   maybeHandleComposeTab(tab);
 });
 
 messenger.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if ("type" in changeInfo || tab.type === "messageCompose") {
-    console.log("Mercury: tabs.onUpdated", tabId, tab.type, changeInfo);
+    console.warn("Mercury: tabs.onUpdated", tabId, tab.type, changeInfo);
   }
   maybeHandleComposeTab(tab);
 });
