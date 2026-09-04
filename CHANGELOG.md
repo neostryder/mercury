@@ -69,6 +69,14 @@
 
 ### Fixed
 
+- [Internal] [Thunderbird] v0.3.13's diagnostic logging used console.log,
+  which Thunderbird's Browser Console filters behind its own "Logs" toggle
+  (off by default) separately from "Warnings" and "Errors" - so a report of
+  "nothing at all logged" was consistent with the code never running, but
+  also with it running fine and simply being filtered out with no
+  indication that was happening. Switched to console.warn, which isn't
+  gated behind that toggle (v0.3.14).
+
 - [Internal] [Thunderbird] Reply still triggers nothing at all - neither the
   prompt nor a logged error - even after the tabs.onUpdated and fail-safe
   changes below, and with no logging in place there was no way to tell
