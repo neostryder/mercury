@@ -69,6 +69,15 @@
 
 ### Fixed
 
+- [Internal] [Thunderbird] Reply still triggers nothing at all - neither the
+  prompt nor a logged error - even after the tabs.onUpdated and fail-safe
+  changes below, and with no logging in place there was no way to tell
+  whether either listener even fires for it. Added logging (temporary,
+  meant to be trimmed once this is actually diagnosed) to every
+  tabs.onCreated fire, every tabs.onUpdated fire that touches a tab's type,
+  and every compose-details read, so the next attempt's console output
+  shows what's actually happening instead of another guess (v0.3.13).
+
 - [Visible] [Thunderbird] Replying still never triggered the sending-address
   prompt or an auto-matched From even after v0.3.11's tabs.onUpdated fix.
   Reading a reply's compose details could keep failing for longer than the

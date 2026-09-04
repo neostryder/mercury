@@ -212,6 +212,7 @@ async function getComposeDetailsWhenReady(tabId) {
 // since that's what leaves the bare address in place.
 async function handleComposeTab(tabId) {
   const details = await getComposeDetailsWhenReady(tabId);
+  console.log("Mercury: compose details for tab", tabId, details);
 
   const currentAddress = details ? extractAddresses(details.from)[0] : undefined;
   if (currentAddress && currentAddress.toLowerCase() !== BARE_ADDRESS) {
@@ -234,17 +235,26 @@ async function handleComposeTab(tabId) {
 }
 
 // A new compose window (New, Forward) creates a genuinely new tab, which
-// tabs.onCreated catches. Replying from an already-open message tab instead
-// converts that SAME tab into the compose editor in place - no tab is
-// created, so onCreated never fires for it - which is why reply needed
-// tabs.onUpdated as well, watching for a tab's type flipping to
-// "messageCompose". The guard below acts once per tab id either way, since
-// onUpdated keeps firing on every later edit once a tab is a composer.
+// tabs.onCreated catches. Replying from an already-open message tab was
+// assumed to instead convert that SAME tab into the compose editor in
+// place - tabs.onUpdated was added to catch that. Neither theory has been
+// confirmed against real logged behavior yet: reply still doesn't trigger
+// anything, with nothing at all logged by either listener, which means one
+// of them isn't observing whatever Thunderbird actually does for reply.
+// The logging below (temporary - trim once the real cause is confirmed) is
+// there to answer that directly instead of guessing again: every onCreated
+// fire, and every onUpdated fire that touches type at all, gets logged with
+// the tab's actual type, so a reply attempt's console output shows either
+// what type it really carries or that neither listener fires for it at all.
 const handledComposeTabs = new Set();
 
 function maybeHandleComposeTab(tab) {
   if (tab.type !== "messageCompose") return;
-  if (handledComposeTabs.has(tab.id)) return;
+  if (handledComposeTabs.has(tab.id)) {
+    console.log("Mercury: compose tab already handled, skipping", tab.id);
+    return;
+  }
+  console.log("Mercury: handling compose tab", tab.id);
   handledComposeTabs.add(tab.id);
   handleComposeTab(tab.id).catch((err) => {
     console.error("Mercury: failed to handle compose tab", tab.id, err);
@@ -252,6 +262,16 @@ function maybeHandleComposeTab(tab) {
   });
 }
 
-messenger.tabs.onCreated.addListener(maybeHandleComposeTab);
-messenger.tabs.onUpdated.addListener((tabId, changeInfo, tab) => maybeHandleComposeTab(tab));
+messenger.tabs.onCreated.addListener((tab) => {
+  console.log("Mercury: tabs.onCreated", tab.id, tab.type);
+  maybeHandleComposeTab(tab);
+});
+
+messenger.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if ("type" in changeInfo || tab.type === "messageCompose") {
+    console.log("Mercury: tabs.onUpdated", tabId, tab.type, changeInfo);
+  }
+  maybeHandleComposeTab(tab);
+});
+
 messenger.tabs.onRemoved.addListener((tabId) => handledComposeTabs.delete(tabId));
