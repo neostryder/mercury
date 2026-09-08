@@ -69,6 +69,31 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] An approved unsubscribe no longer terminates as
+  `SKIPPED_UNSAFE` for a sender whose `text/plain` alternative is a
+  link-stripped rendering of the HTML. Such a part keeps the anchor text and
+  drops every URL, so a footer reading `Unsubscribe | Update Profile` was the
+  only trace of a route that really existed, and neither the `text/html`
+  part carrying the `href` nor the `List-Unsubscribe` header ever reached the
+  judge. Routes are now extracted from the headers and link targets before
+  the prompt is built and stated in a labelled block ahead of the body, so
+  the per-message size cap cannot remove them either. Quoted-printable soft
+  line breaks are rejoined first, which repairs URLs previously recorded with
+  a truncated host such as `manage.kmail-`. Extraction feeds only the action
+  context: the dedup key, the injection classifier, and the judge's verdict
+  still read the unmodified message.
+
+- [Visible] [Pipeline] A message with no unsubscribe route at all now
+  reports `FAILED` rather than `SKIPPED_UNSAFE`, which previously conflated
+  finding nothing with rejecting something.
+
+- [Internal] [Thunderbird] The flagging popup now sends the `text/html` part
+  and the `List-Unsubscribe` and `List-Unsubscribe-Post` header values
+  alongside the plain-text body, instead of discarding everything but the
+  first `text/plain` part. Inline CSS, scripts, and comments are stripped
+  first, and an over-budget document keeps its tail rather than its head,
+  since an unsubscribe footer sits at the end (v0.3.17).
+
 - [Internal] [Thunderbird] Removing the tabs permission (below) turned out
   not to be the whole story - the "module is not a constructor" crash
   stopped, but reply still triggered nothing. Checked Thunderbird's own

@@ -445,13 +445,30 @@ under the previously approved stored instruction.
 ## Executing an approved unsubscribe
 
 An approved `UNSUBSCRIBE` action is also handed to the judge provider, using
-its browsing skill, but with an evaluation step first: it is prompted to
-find the flagged message's unsubscribe mechanism (a `List-Unsubscribe`
-header, or a link in the body) and verify the link's domain before visiting
-it. The domain, and every redirect domain, must have a clear relationship to
-the sender or be a known mailing-list provider acting for it. An unrelated
-domain, payment request, non-login credential request, phishing indicator,
-or uncertain relationship is unsafe and is never visited.
+its browsing skill, but with an evaluation step first: it verifies the
+route's domain before visiting it. The domain, and every redirect domain,
+must have a clear relationship to the sender or be a known mailing-list
+provider acting for it. An unrelated domain, payment request, non-login
+credential request, phishing indicator, or uncertain relationship is unsafe
+and is never visited.
+
+The routes themselves are extracted before the prompt is built, not found by
+reading the message. `unsubscribe_routes` collects the `List-Unsubscribe` and
+`List-Unsubscribe-Post` header values and the `href` targets of links whose
+visible text or URL marks them as an unsubscribe or preference route, and
+states them in a labelled block ahead of the body. This is required rather
+than convenient: a sender whose `text/plain` alternative is a link-stripped
+rendering of the HTML contributes the word "Unsubscribe" and no URL at all,
+so a route that genuinely exists is unreachable from the body alone. Placing
+the block ahead of the body also keeps the per-message size cap from being
+what removes a long newsletter's footer. Quoted-printable soft line breaks
+are rejoined first, since an undecoded body splits a long URL on a trailing
+`=`. Extraction feeds the action context only; the dedup key, the injection
+classifier, and the judge's own verdict all continue to read the unmodified
+message, so a newly visible footer link cannot shift a disposition.
+
+A message with no route at all yields `FAILED`, because nothing was found to
+evaluate. `SKIPPED_UNSAFE` means a route was found and then rejected.
 
 If safe: tracking query parameters are stripped from the URL before
 visiting it, and only a single confirm click or form submit is attempted -

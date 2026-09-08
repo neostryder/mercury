@@ -39,6 +39,134 @@ def _domain_of(address: str) -> str | None:
     return m.group(1).lower() if m else None
 
 
+# A sender whose text/plain alternative is a link-stripped rendering of the
+# HTML contributes anchor text and no URLs at all, so "Unsubscribe | Update
+# Profile" can be the only trace of a route that really does exist, in the
+# HTML part or in the List-Unsubscribe header. Scanning prose for a link
+# cannot recover that, so routes are extracted deterministically here and
+# stated separately from the body rather than left to be found in it.
+_UNSUBSCRIBE_HINT = re.compile(
+    r"unsubscribe|opt[-_ ]?out|email[-_ ]?preferences"
+    r"|manage[-_ ]?(?:your[-_ ]?)?(?:preferences|subscription)|remove[-_ ]?me",
+    re.I,
+)
+_ANCHOR = re.compile(
+    r"""<a\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a\s*>""",
+    re.I | re.S,
+)
+_MARKUP_TAG = re.compile(r"<[^>]+>")
+_BARE_URL = re.compile(r"""https?://[^\s"'<>)\]]+""")
+
+
+def _mend_soft_breaks(text: str | None) -> str:
+    """Rejoins quoted-printable soft line breaks. An undecoded body splits a
+    long URL across lines on a trailing "=", which otherwise yields a
+    truncated host such as "manage.kmail-"."""
+    return re.sub(r"=\r?\n", "", text or "")
+
+
+def _unescape_entities(url: str) -> str:
+    for entity, char in (("&amp;", "&"), ("&#38;", "&"), ("&#61;", "="), ("&quot;", '"')):
+        url = url.replace(entity, char)
+    return url
+
+
+def unsubscribe_routes(
+    text: str | None = None,
+    html: str | None = None,
+    list_unsubscribe: str | None = None,
+    list_unsubscribe_post: str | None = None,
+    limit: int = 8,
+) -> str:
+    """Returns a short block naming every unsubscribe route found in a message,
+    or an empty string when there is none."""
+    lines: list[str] = []
+
+    header = _mend_soft_breaks(list_unsubscribe).strip()
+    if header:
+        lines.append(f"List-Unsubscribe: {header}")
+    post = (list_unsubscribe_post or "").strip()
+    if post:
+        lines.append(f"List-Unsubscribe-Post: {post}")
+
+    seen: set[str] = set()
+    links: list[str] = []
+    for match in _ANCHOR.finditer(_mend_soft_breaks(html)):
+        href = _unescape_entities(
+            (match.group(1) or match.group(2) or match.group(3) or "").strip()
+        )
+        label = " ".join(_MARKUP_TAG.sub(" ", match.group(4) or "").split())
+        if not href.lower().startswith(("http://", "https://", "mailto:")):
+            continue
+        if not (_UNSUBSCRIBE_HINT.search(label) or _UNSUBSCRIBE_HINT.search(href)):
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        links.append(f"- {label or '(no link text)'} -> {href}")
+        if len(links) >= limit:
+            break
+
+    # A plain-text part sometimes carries the URL itself, so it is scanned too
+    # rather than assumed to be link-free whenever an HTML part came through.
+    if len(links) < limit:
+        for found in _BARE_URL.findall(_mend_soft_breaks(text)):
+            url = _unescape_entities(found.rstrip(".,;"))
+            if not _UNSUBSCRIBE_HINT.search(url) or url in seen:
+                continue
+            seen.add(url)
+            links.append(f"- (from the plain-text body) -> {url}")
+            if len(links) >= limit:
+                break
+
+    if links:
+        lines.append("Links that look like an unsubscribe or preference route:")
+        lines.extend(links)
+
+    if not lines:
+        return ""
+    return "Unsubscribe routes extracted from this message:\n" + "\n".join(lines)
+
+
+def _header_value(headers: object, name: str) -> str:
+    """Reads one header out of whatever shape the caller received. A webhook
+    payload carries either a name-keyed mapping (values may be a list) or a
+    headerLines array of {key, line} entries."""
+    lower = name.lower()
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if str(key).lower() != lower:
+                continue
+            if isinstance(value, (list, tuple)):
+                return ", ".join(str(v) for v in value)
+            return str(value)
+    if isinstance(headers, (list, tuple)):
+        for entry in headers:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("key", "")).lower() != lower:
+                continue
+            line = str(entry.get("line", ""))
+            return line.split(":", 1)[1].strip() if ":" in line else line
+    return ""
+
+
+def _header_from_raw(raw: str | None, name: str) -> str:
+    """Falls back to the raw message when no parsed headers came through.
+    Only the header block is scanned, and a folded value is unfolded."""
+    if not raw:
+        return ""
+    block = re.split(r"\r?\n\r?\n", raw, maxsplit=1)[0]
+    match = re.search(
+        rf"^{re.escape(name)}:[ \t]*(.*(?:\r?\n[ \t]+.*)*)",
+        block,
+        re.I | re.M,
+    )
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())
+
+
 def _dedup_key(raw_message: str | None, raw_content: str) -> str:
     """A stable identifier for the underlying message, not for one particular
     webhook delivery of it, so a retried or duplicated call for the same
@@ -662,12 +790,22 @@ link...", "Submitting the unsubscribe form...") using your own
 Telegram-sending capability, so the recipient sees progress instead of
 waiting in silence for the final report.
 
-First, evaluate whether the unsubscribe route is safe to use at all. Find
-the unsubscribe mechanism in the flagged message below - a List-Unsubscribe
-header if present, otherwise an unsubscribe link in the body. Before visiting
-it, verify that its domain has a clear relationship to the sender's own
-domain or is a well-known mailing-list provider acting for it. Treat a link
-that fails this check as UNSAFE and do not visit it. Apply the same domain
+First, evaluate whether the unsubscribe route is safe to use at all. When the
+message below carries a block headed "Unsubscribe routes extracted from this
+message", those entries are the routes: they were pulled from the message's
+own headers and link targets, so prefer them over anything you infer from the
+visible text, and do not treat a route as missing merely because the body
+renders it as the bare word "Unsubscribe" with no URL beside it. Prefer an
+https entry in List-Unsubscribe, then a listed link. Fall back to scanning the
+body for a link only when no such block is present.
+
+Before visiting a route, verify that its domain has a clear relationship to
+the sender's own domain or is a well-known mailing-list provider acting for
+it. Treat a link that fails this check as UNSAFE and do not visit it.
+
+If no route can be found at all, that is RESULT: FAILED, because there was
+nothing to evaluate. Reserve SKIPPED_UNSAFE for a route that was found and
+then rejected, and say which route you rejected and why. Apply the same domain
 relationship check to every redirect before following it. Also treat payment
 details, non-login credentials, phishing indicators, credential harvesting,
 or genuine uncertainty as unsafe.
@@ -1304,6 +1442,30 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         redacted_content = redact(raw_content)
         raw_message = payload.get("raw")
 
+        # An action taken on this message later needs its unsubscribe routes,
+        # which text_body alone may not contain. raw_content itself stays
+        # byte-identical: the dedup key and the classifier and judge verdicts
+        # are all derived from it, and none of them should shift because a
+        # footer link became visible. Redaction still applies, since this
+        # context reaches an external model like any other.
+        _routes = unsubscribe_routes(
+            text=payload.get("text", ""),
+            html=payload.get("html", ""),
+            list_unsubscribe=(
+                _header_value(payload.get("headers"), "List-Unsubscribe")
+                or _header_value(payload.get("headerLines"), "List-Unsubscribe")
+                or _header_from_raw(raw_message, "List-Unsubscribe")
+            ),
+            list_unsubscribe_post=(
+                _header_value(payload.get("headers"), "List-Unsubscribe-Post")
+                or _header_value(payload.get("headerLines"), "List-Unsubscribe-Post")
+                or _header_from_raw(raw_message, "List-Unsubscribe-Post")
+            ),
+        )
+        action_content = (
+            f"{redact(_routes)}\n\n{redacted_content}" if _routes else redacted_content
+        )
+
         # A repeat call for the same message - a retried webhook after a slow
         # response, or two independent deliveries of it - must never re-run
         # the pipeline: see dedup.py. A "done" repeat replays the disposition
@@ -1415,7 +1577,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                         "domain": custom_action["selector"],
                     })
                 else:
-                    await execute_standing_custom_action(custom_action, redacted_content[:8000])
+                    await execute_standing_custom_action(custom_action, action_content[:8000])
 
         if verdict["alert"] in ("STANDARD", "URGENT"):
             prefix = "\U0001f6a8 URGENT" if verdict["alert"] == "URGENT" else "Mercury report"
@@ -1431,7 +1593,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             )
             await telegram_approvals.send_trackable_report(
                 report[:4000],
-                redacted_content[:8000],
+                action_content[:8000],
                 {
                     "sender_address": sender_address,
                     "sender_domain": sender_domain,
@@ -1529,7 +1691,18 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             from_display = message.get("from", "")
             body = message.get("text", "")
             header = f"Message {i} of {min(len(messages), max_messages)}" if len(messages) > 1 else "Message"
-            blocks.append(f"{header}\nFrom: {from_display}\nSubject: {subject}\n\n{body}"[:2000])
+            routes = unsubscribe_routes(
+                text=body,
+                html=message.get("html", ""),
+                list_unsubscribe=message.get("list_unsubscribe", ""),
+                list_unsubscribe_post=message.get("list_unsubscribe_post", ""),
+            )
+            # The routes precede the body, and only the body carries the cap,
+            # so a long newsletter's footer can never be what the cap removes.
+            preamble = f"{header}\nFrom: {from_display}\nSubject: {subject}\n"
+            if routes:
+                preamble += f"\n{routes}\n"
+            blocks.append(f"{preamble}\n{body[:2000]}")
         message_context = (
             redact("\n\n---\n\n".join(blocks)[:8000])
             if blocks

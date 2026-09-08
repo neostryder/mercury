@@ -608,6 +608,123 @@ CAVEAT: NONE""")
         self.assertIn("no message attached", message_context_arg)
 
 
+class UnsubscribeRouteExtractionTests(unittest.TestCase):
+    """A sender whose plain-text alternative is a link-stripped rendering of
+    the HTML leaves the word "Unsubscribe" and no URL, so the route has to be
+    recovered from the HTML part or the List-Unsubscribe header instead."""
+
+    CONSTANT_CONTACT = (
+        "https://audience.constantcontact.com/preferences/unsubscribe"
+        "?m=001fIS_4xfK59QnUCDJNLa_dA%3D%3D&c=e801572a-a41c-11f0-a672-fa163e6ac540"
+    )
+
+    def test_recovers_the_href_when_the_plain_text_part_kept_only_the_label(self):
+        routes = app.unsubscribe_routes(
+            text="London Gold, Scottsdale, AZ 85253 US "
+                 "Unsubscribe | Update Profile | Constant Contact Data Notice",
+            html=f'<a href="{self.CONSTANT_CONTACT}&amp;ca=916af247">Unsubscribe</a>',
+        )
+        self.assertIn(f"{self.CONSTANT_CONTACT}&ca=916af247", routes)
+
+    def test_reports_the_list_unsubscribe_headers(self):
+        routes = app.unsubscribe_routes(
+            text="Nothing useful here.",
+            list_unsubscribe="<mailto:leave@example.com>, <https://example.com/unsub?x=1>",
+            list_unsubscribe_post="List-Unsubscribe=One-Click",
+        )
+        self.assertIn("<https://example.com/unsub?x=1>", routes)
+        self.assertIn("List-Unsubscribe-Post: List-Unsubscribe=One-Click", routes)
+
+    def test_rejoins_a_quoted_printable_soft_break_inside_a_url(self):
+        routes = app.unsubscribe_routes(
+            html='<a href="https://manage.kmail-=\r\nlists.com/subscriptions/unsubscribe?a=X">'
+                 "Unsubscribe</a>",
+        )
+        self.assertIn("https://manage.kmail-lists.com/subscriptions/unsubscribe?a=X", routes)
+
+    def test_finds_a_url_carried_only_by_the_plain_text_part(self):
+        routes = app.unsubscribe_routes(
+            text="To stop these, visit https://example.com/email-preferences/opt-out?id=9 today.",
+        )
+        self.assertIn("https://example.com/email-preferences/opt-out?id=9", routes)
+
+    def test_ignores_ordinary_marketing_links(self):
+        routes = app.unsubscribe_routes(
+            text="Shop the sale.",
+            html='<a href="https://example.com/sale">Big Sale</a>'
+                 '<a href="https://example.com/cart">Your Cart</a>',
+        )
+        self.assertEqual(routes, "")
+
+    def test_ignores_a_non_http_scheme(self):
+        routes = app.unsubscribe_routes(
+            html='<a href="javascript:void(0)">Unsubscribe</a>',
+        )
+        self.assertEqual(routes, "")
+
+    def test_reads_a_header_out_of_a_webhook_header_lines_array(self):
+        value = app._header_value(
+            [{"key": "list-unsubscribe", "line": "List-Unsubscribe: <https://example.com/u>"}],
+            "List-Unsubscribe",
+        )
+        self.assertEqual(value, "<https://example.com/u>")
+
+    def test_reads_a_folded_header_out_of_the_raw_message(self):
+        raw = (
+            "From: a@example.com\r\n"
+            "List-Unsubscribe: <https://example.com/u>,\r\n"
+            "\t<mailto:leave@example.com>\r\n"
+            "Subject: Hello\r\n"
+            "\r\n"
+            "List-Unsubscribe: not-a-header-down-here\r\n"
+        )
+        value = app._header_from_raw(raw, "List-Unsubscribe")
+        self.assertEqual(value, "<https://example.com/u>, <mailto:leave@example.com>")
+
+
+class ProposeRuleUnsubscribeContextTests(unittest.TestCase):
+    def _propose(self, message: dict) -> str:
+        fake_telegram = SimpleNamespace(
+            propose_new=AsyncMock(return_value=("brief-1", None, "UNSUBSCRIBE: example.com"))
+        )
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            asyncio.run(app.propose_rule(
+                FakeRequest({"instruction": "Unsubscribe me.", "messages": [message]}),
+                "test-secret",
+            ))
+        return fake_telegram.propose_new.call_args[0][1]
+
+    def test_context_states_the_route_the_body_alone_does_not_contain(self):
+        context = self._propose({
+            "subject": "A newsletter",
+            "from": "News <news@example.com>",
+            "text": "Body text. Unsubscribe | Update Profile",
+            "html": '<a href="https://example.com/unsubscribe?id=7">Unsubscribe</a>',
+            "list_unsubscribe": "<https://example.com/u/one-click>",
+        })
+        self.assertIn("Unsubscribe routes extracted from this message", context)
+        self.assertIn("https://example.com/unsubscribe?id=7", context)
+        self.assertIn("<https://example.com/u/one-click>", context)
+
+    def test_the_route_survives_a_body_long_enough_to_be_truncated(self):
+        context = self._propose({
+            "subject": "A very long newsletter",
+            "from": "News <news@example.com>",
+            "text": "filler. " * 900,
+            "html": '<a href="https://example.com/unsubscribe?id=7">Unsubscribe</a>',
+        })
+        self.assertIn("https://example.com/unsubscribe?id=7", context)
+
+    def test_a_message_with_no_route_gets_no_block(self):
+        context = self._propose({
+            "subject": "A personal note",
+            "from": "A Friend <friend@example.com>",
+            "text": "Lunch on Tuesday?",
+        })
+        self.assertNotIn("Unsubscribe routes extracted", context)
+        self.assertIn("Lunch on Tuesday?", context)
+
+
 class CredentialPromptEndpointTests(unittest.TestCase):
     def setUp(self):
         self.clock = MutableClock()
