@@ -284,6 +284,12 @@ class TelegramApprovals:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    # An update already off self._offset (a callback tap, a
+                    # reply) is not retried by Telegram, so an exception
+                    # anywhere in handling it used to vanish here with
+                    # nothing logged and nothing sent - the recipient's last
+                    # signal was that something was "working on it", forever.
+                    logger.exception("poll_forever: update handling failed")
                     await asyncio.sleep(5)
 
     async def _handle_update(self, update: dict) -> None:
@@ -304,7 +310,14 @@ class TelegramApprovals:
 
         brief_id = self._store.brief_for_message(reply_to["message_id"])
         if not brief_id:
-            return
+            # A reply to a message Mercury never tracked - too old to still
+            # be in the index, or a reply to something Loremaster said
+            # rather than Mercury - should still land somewhere rather than
+            # vanish silently. The newest open brief is the only reasonable
+            # guess for what a reply like that is actually about.
+            brief_id = self._store.most_recent_open_brief()
+            if not brief_id:
+                return
         brief = self._store.get_brief(brief_id)
         if not brief:
             return
@@ -411,6 +424,7 @@ class TelegramApprovals:
     async def _approve(self, brief_id: str, brief: dict) -> None:
         result_lines = []
         followup_change = None
+        action_failed = False
         for change in brief.get("changes", []):
             await self._finalize(change, "filtering_proposal")
             result_lines.append(f"Standing change added: {self._change_text(change)}")
@@ -420,9 +434,23 @@ class TelegramApprovals:
             # than the answerCallbackQuery toast, which is easy to miss.
             await self._send("Approved - working on it now...")
             recipient_email = brief.get("message_metadata", {}).get("recipient_email")
-            outcome, followup = await self._execute_action(
-                brief["action"], brief["message_context"], brief_id, recipient_email
-            )
+            try:
+                outcome, followup = await self._execute_action(
+                    brief["action"], brief["message_context"], brief_id, recipient_email
+                )
+            except Exception as exc:
+                # An unhandled exception here used to propagate up into
+                # poll_forever's blanket per-update try/except, which just
+                # sleeps and moves on with no log line and nothing sent to
+                # Telegram - the action's own live progress updates (from
+                # the browsing agent's own Telegram capability) would arrive
+                # and then just stop, forever, with no final word. The brief
+                # stays open on its original action so approving again retries
+                # the same thing rather than needing to be re-proposed.
+                logger.error("Approved action failed for brief %s: %s", brief_id, exc)
+                outcome = f"Action failed: {type(exc).__name__}: {exc}. You can try approving again."
+                followup = None
+                action_failed = True
             result_lines.append(outcome)
             if (
                 followup
@@ -441,7 +469,13 @@ class TelegramApprovals:
         message_id = await self._send(text)
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
-        if followup_change:
+        if action_failed:
+            # Leave the brief open on its original action untouched - a
+            # failed attempt is not a resolved one, and approving again (or
+            # replying "yes") should retry the same action rather than
+            # needing to be re-proposed from scratch.
+            self._store.update_brief(brief_id, status="open", changes=[])
+        elif followup_change:
             await self._apply_brief_result(brief_id, {
                 "question": None,
                 "changes": [followup_change],

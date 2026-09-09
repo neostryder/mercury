@@ -69,6 +69,24 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] An approved action's own failure (an agent-gateway
+  timeout, a malformed judge response) used to propagate into
+  `poll_forever`'s blanket per-update exception handler, which silently
+  slept and moved on - no log line, no Telegram message. The recipient's
+  last signal was a live "working on it" progress update that just stopped
+  forever, with the brief stuck open on its stale original action.
+  `_approve` now reports `Action failed: ...` back to Telegram and leaves
+  the brief open on its original action so approving again retries the
+  same thing; `poll_forever` now logs before sleeping so a future failure
+  at least shows up in the container logs.
+
+- [Visible] [Pipeline] A reply whose `reply_to_message` doesn't resolve to
+  a tracked brief - too old to still be in the message index, or a reply to
+  something a different Telegram participant said rather than Mercury
+  itself - used to be dropped outright. It now falls back to whatever
+  brief is genuinely still open, rather than the reply vanishing with no
+  effect and no acknowledgement.
+
 - [Visible] [Pipeline] [Thunderbird] The unsubscribe agent can now fill in
   the recipient's own subscribed email address when a confirmation page asks
   for one before it will process the request - common on Mailchimp and

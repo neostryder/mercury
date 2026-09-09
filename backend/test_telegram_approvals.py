@@ -305,5 +305,135 @@ class UnsubscribeFollowupAndRecipientEmailTests(unittest.TestCase):
         )
 
 
+class MostRecentOpenBriefTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-most-recent-open-brief-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_returns_none_when_nothing_is_open(self):
+        self.assertIsNone(self.store.most_recent_open_brief())
+
+    def test_returns_the_newest_of_several_open_briefs(self):
+        older = self.store.create_brief("From: a@example.com")
+        newer = self.store.create_brief("From: b@example.com")
+        self.assertEqual(self.store.most_recent_open_brief(), newer)
+        self.assertNotEqual(self.store.most_recent_open_brief(), older)
+
+    def test_ignores_a_resolved_brief_even_if_newer(self):
+        open_brief = self.store.create_brief("From: a@example.com")
+        resolved_brief = self.store.create_brief("From: b@example.com")
+        self.store.resolve_brief(resolved_brief)
+        self.assertEqual(self.store.most_recent_open_brief(), open_brief)
+
+
+class ReplyToUntrackedMessageFallsBackToOpenBriefTests(unittest.TestCase):
+    """A reply to a message Mercury never tracked - too old to still be in
+    the index, or a reply to something Loremaster said rather than Mercury -
+    used to be silently dropped. It should fall back to whatever is
+    genuinely still open rather than leaving the recipient's reply
+    unanswered."""
+
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-untracked-reply-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+        # A question (rather than NO_OP_RESULT) keeps the brief "open" -
+        # the fallback only has something to find when a brief actually is.
+        self.advance = AsyncMock(return_value={
+            "question": "Which folder should this go to?",
+            "reply": None,
+            "changes": [],
+            "action": None,
+            "caveat": None,
+        })
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=self.advance,
+            finalize=AsyncMock(),
+            execute_action=AsyncMock(),
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(501, 520))
+        self.telegram._answer_callback = AsyncMock()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_reply_to_an_untracked_message_still_reaches_the_open_brief(self):
+        brief_id, _, _ = asyncio.run(
+            self.telegram.propose_new("Flag this", "From: someone@example.com")
+        )
+
+        # 999999 was never sent by Mercury - not in message_index at all,
+        # e.g. a reply to a much older message or to Loremaster's own text.
+        asyncio.run(self.telegram._handle_update(_reply_update(999999, "Do it")))
+
+        self.assertEqual(self.advance.await_count, 2)
+        brief = self.store.get_brief(brief_id)
+        self.assertEqual(len(brief["history"]), 4)
+        self.assertEqual(brief["history"][2], {"speaker": "user", "text": "Do it"})
+
+    def test_reply_to_an_untracked_message_with_nothing_open_is_dropped(self):
+        asyncio.run(self.telegram._handle_update(_reply_update(999999, "Do it")))
+        self.assertEqual(self.advance.await_count, 0)
+
+
+class ApproveActionFailureTests(unittest.TestCase):
+    """A failed action used to propagate an exception up into
+    poll_forever's blanket try/except, which logged nothing and told the
+    recipient nothing - the action's own live progress updates would arrive
+    and then just stop forever. It must now report back and leave the
+    brief retryable."""
+
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-approve-failure-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+        self.execute_action = AsyncMock(side_effect=RuntimeError("agent gateway timed out"))
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=AsyncMock(),
+            finalize=AsyncMock(),
+            execute_action=self.execute_action,
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(601, 620))
+        self.telegram._answer_callback = AsyncMock()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_failed_action_reports_back_and_stays_open_for_retry(self):
+        brief_id = self.store.create_brief("From: news@prcmarketresearch.com")
+        self.store.update_brief(brief_id, action="UNSUBSCRIBE: prcmarketresearch.com", status="open")
+
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        sent_texts = [call.args[0] for call in self.telegram._send.await_args_list]
+        self.assertTrue(any("Action failed" in text and "RuntimeError" in text for text in sent_texts))
+        brief = self.store.get_brief(brief_id)
+        self.assertEqual(brief["status"], "open")
+        self.assertEqual(brief["action"], "UNSUBSCRIBE: prcmarketresearch.com")
+
+    def test_retry_after_failure_calls_execute_action_again(self):
+        brief_id = self.store.create_brief("From: news@prcmarketresearch.com")
+        self.store.update_brief(brief_id, action="UNSUBSCRIBE: prcmarketresearch.com", status="open")
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        self.execute_action.side_effect = None
+        self.execute_action.return_value = ("Unsubscribe: UNSUBSCRIBED.", None)
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        self.assertEqual(self.execute_action.await_count, 2)
+        self.assertEqual(self.store.get_brief(brief_id)["status"], "resolved")
+
+
 if __name__ == "__main__":
     unittest.main()

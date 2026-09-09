@@ -19,6 +19,7 @@ in-flight brief or lose the message-to-brief index a reply depends on.
 """
 import json
 import secrets
+import time
 from pathlib import Path
 
 
@@ -39,6 +40,7 @@ class ApprovalStore:
             brief.setdefault("message_metadata", {})
             brief.setdefault("changes", [])
             brief.setdefault("message_decision", None)
+            brief.setdefault("created_at", 0.0)
         return data
 
     def _save(self, data: dict) -> None:
@@ -64,6 +66,7 @@ class ApprovalStore:
             "caveat": None,
             "message_decision": None,
             "rounds": 0,
+            "created_at": time.time(),
         }
         self._save(data)
         return brief_id
@@ -109,3 +112,17 @@ class ApprovalStore:
 
     def brief_for_message(self, message_id: int) -> str | None:
         return self._load()["message_index"].get(str(message_id))
+
+    def most_recent_open_brief(self) -> str | None:
+        """The newest still-open brief - the fallback target for a reply that
+        does not resolve to any tracked message, e.g. a reply to a much
+        older message, or to something Loremaster said rather than Mercury.
+        A reply should never just be dropped when there is exactly one open
+        thing it could plausibly be about."""
+        open_briefs = (
+            (brief_id, brief)
+            for brief_id, brief in self._load()["briefs"].items()
+            if brief.get("status") == "open"
+        )
+        newest = max(open_briefs, key=lambda pair: pair[1].get("created_at", 0.0), default=None)
+        return newest[0] if newest else None
