@@ -227,5 +227,83 @@ class BriefNeverForceAbandonsTests(unittest.TestCase):
             self.assertNotIn("gone on a while", call.args[0])
 
 
+class UnsubscribeFollowupAndRecipientEmailTests(unittest.TestCase):
+    """execute_action's bounce_decision followup used to be offered for any
+    outcome that named a domain, including a plain FAILED - which meant a
+    benign failure (an unsubscribe form asking for an email address that
+    was never supplied) still prompted to blacklist a legitimate sender.
+    It should only be offered when the outcome actually recommends it."""
+
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-telegram-unsubscribe-followup-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+        self.execute_action = AsyncMock()
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=AsyncMock(),
+            finalize=AsyncMock(),
+            execute_action=self.execute_action,
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(401, 420))
+        self.telegram._answer_callback = AsyncMock()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _brief_with_action(self, message_metadata=None) -> str:
+        brief_id = self.store.create_brief(
+            "From: news@prcmarketresearch.com\n\nUnsubscribe link",
+            message_metadata=message_metadata,
+        )
+        self.store.update_brief(
+            brief_id, action="UNSUBSCRIBE: prcmarketresearch.com", status="open"
+        )
+        return brief_id
+
+    def test_none_recommendation_does_not_propose_a_blacklist_followup(self):
+        self.execute_action.return_value = (
+            "Unsubscribe: FAILED. The form needs an email address.",
+            {"kind": "bounce_decision", "domain": "prcmarketresearch.com", "recommendation": "none"},
+        )
+        brief_id = self._brief_with_action()
+
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        sent_texts = [call.args[0] for call in self.telegram._send.await_args_list]
+        self.assertFalse(any("blacklist" in text.lower() for text in sent_texts))
+        self.assertEqual(self.store.get_brief(brief_id)["status"], "resolved")
+
+    def test_hard_recommendation_still_proposes_a_blacklist_followup(self):
+        self.execute_action.return_value = (
+            "Unsubscribe: SKIPPED_UNSAFE. The route looked like a phishing page.",
+            {"kind": "bounce_decision", "domain": "prcmarketresearch.com", "recommendation": "hard"},
+        )
+        brief_id = self._brief_with_action()
+
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        sent_texts = [call.args[0] for call in self.telegram._send.await_args_list]
+        self.assertTrue(any("blacklist" in text.lower() for text in sent_texts))
+        self.assertEqual(self.store.get_brief(brief_id)["status"], "open")
+
+    def test_recipient_email_from_message_metadata_reaches_execute_action(self):
+        self.execute_action.return_value = ("Unsubscribe: UNSUBSCRIBED.", None)
+        brief_id = self._brief_with_action(
+            message_metadata={"recipient_email": "subscriber@example.com"}
+        )
+
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        self.execute_action.assert_awaited_once_with(
+            "UNSUBSCRIBE: prcmarketresearch.com",
+            "From: news@prcmarketresearch.com\n\nUnsubscribe link",
+            brief_id,
+            "subscriber@example.com",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

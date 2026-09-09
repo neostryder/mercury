@@ -69,6 +69,24 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] [Thunderbird] The unsubscribe agent can now fill in
+  the recipient's own subscribed email address when a confirmation page asks
+  for one before it will process the request - common on Mailchimp and
+  similar list-management providers. The flagging popup captures the
+  account's own address (matched against the flagged message's
+  Delivered-To/To/Cc headers, falling back to the account's default
+  identity) and sends it alongside the flagged message; the browsing prompt
+  is told it is safe to type into an email-confirmation field and is never a
+  credential. Previously the agent had no such address at all and could only
+  report `FAILED` (v0.3.18).
+
+- [Visible] [Pipeline] The bounce-decision followup ("Also add this domain
+  to the blacklist?") is now offered only when the outcome's own
+  `recommendation` is `hard` (a route rejected as unsafe), rather than for
+  every outcome that named a domain. A benign `FAILED` - such as an
+  unsubscribe form that needed an email address that was not available - no
+  longer prompts to blacklist what may be a perfectly legitimate sender.
+
 - [Visible] [Pipeline] An approved unsubscribe no longer terminates as
   `SKIPPED_UNSAFE` for a sender whose `text/plain` alternative is a
   link-stripped rendering of the HTML. Such a part keeps the anchor text and

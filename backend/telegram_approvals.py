@@ -110,9 +110,15 @@ class TelegramApprovals:
             self._store.track_message(message_id, brief_id)
 
     async def propose_new(
-        self, instruction: str, message_context: str, via_dictation: bool = False
+        self,
+        instruction: str,
+        message_context: str,
+        via_dictation: bool = False,
+        message_metadata: dict | None = None,
     ) -> tuple[str, str | None, str | None]:
-        brief_id = self._store.create_brief(message_context, via_dictation=via_dictation)
+        brief_id = self._store.create_brief(
+            message_context, via_dictation=via_dictation, message_metadata=message_metadata
+        )
         self._store.append_turn(brief_id, "user", instruction)
         result = await self._advance([], message_context, instruction, via_dictation)
         await self._apply_brief_result(brief_id, result)
@@ -413,11 +419,16 @@ class TelegramApprovals:
             # can take a while; an instant chat message here matters more
             # than the answerCallbackQuery toast, which is easy to miss.
             await self._send("Approved - working on it now...")
+            recipient_email = brief.get("message_metadata", {}).get("recipient_email")
             outcome, followup = await self._execute_action(
-                brief["action"], brief["message_context"], brief_id
+                brief["action"], brief["message_context"], brief_id, recipient_email
             )
             result_lines.append(outcome)
-            if followup and followup.get("kind") == "bounce_decision":
+            if (
+                followup
+                and followup.get("kind") == "bounce_decision"
+                and followup.get("recommendation") == "hard"
+            ):
                 followup_change = {
                     "kind": "sender_list",
                     "list": "blacklist",

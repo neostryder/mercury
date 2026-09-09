@@ -935,6 +935,40 @@ SUMMARY: The redirect requests a password on an unrelated domain."""))
         self.assertEqual(events[0][1]["result"], "SKIPPED_UNSAFE")
         self.assertEqual(followup["recommendation"], "hard")
 
+    def test_recipient_email_is_offered_to_the_browsing_prompt(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: prcmarketresearch.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Typed the subscribed email address into the confirmation field and submitted it."""))
+
+        outcome, followup = asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from prcmarketresearch.com",
+            "From: news@prcmarketresearch.com",
+            None,
+            "subscriber@example.com",
+        ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("subscriber@example.com", prompt)
+        self.assertIn("UNSUBSCRIBED", outcome)
+        self.assertEqual(followup["recommendation"], "none")
+
+    def test_missing_recipient_email_tells_the_prompt_not_to_guess_one(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: prcmarketresearch.com
+RESULT: FAILED
+SUMMARY: The confirmation page asked for the subscribed email address."""))
+
+        outcome, followup = asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from prcmarketresearch.com", "From: news@prcmarketresearch.com"
+        ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("No subscribed email address was provided", prompt)
+        self.assertNotIn("Type it into a field", prompt)
+        self.assertIn("FAILED", outcome)
+        self.assertEqual(followup["recommendation"], "none")
+
 
 class TelegramDecisionTests(unittest.TestCase):
     def setUp(self):

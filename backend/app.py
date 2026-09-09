@@ -210,8 +210,8 @@ telegram_approvals = TelegramApprovals(
         history, ctx, new_message, via_dictation
     ),
     finalize=lambda change, source="filtering_proposal": _finalize_change(change, source),
-    execute_action=lambda action, ctx, brief_id=None: dispatch_action(
-        action, ctx, brief_id
+    execute_action=lambda action, ctx, brief_id=None, recipient_email=None: dispatch_action(
+        action, ctx, brief_id, recipient_email
     ),
     execute_message_decision=lambda decision, brief, brief_id=None: execute_message_decision(
         decision, brief, brief_id
@@ -592,11 +592,14 @@ CAVEAT: <a direct heads-up per above, or NONE>"""
 
 
 async def dispatch_action(
-    action: str, message_context: str, brief_id: str | None = None
+    action: str,
+    message_context: str,
+    brief_id: str | None = None,
+    recipient_email: str | None = None,
 ) -> tuple[str, dict | None]:
     if action.upper().startswith("UNSUBSCRIBE:"):
         return await execute_unsubscribe_action(
-            action.split(":", 1)[1].strip(), message_context, brief_id
+            action.split(":", 1)[1].strip(), message_context, brief_id, recipient_email
         )
     if action.upper().startswith("GANDALF:"):
         outcome = await execute_gandalf_handoff(
@@ -775,14 +778,35 @@ def _remove_submitted_credentials(text: str, username: str, password: str) -> st
 
 
 async def execute_unsubscribe_action(
-    action: str, message_context: str, brief_id: str | None = None
+    action: str,
+    message_context: str,
+    brief_id: str | None = None,
+    recipient_email: str | None = None,
 ) -> tuple[str, dict | None]:
     """Runs the unsubscribe attempt and reports its own outcome - this never
     commits a sender-list entry itself. Whether to add one is a separate
     Approve/Discard proposal after the outcome, since an unsubscribe request
     is not, by itself, a standing sender decision."""
+    email_note = (
+        f"""
+The recipient's own subscribed email address is {recipient_email}. Many
+unsubscribe pages (Mailchimp and similar list-management providers
+especially) ask for this before they will process the request - it is not
+a credential and not a sign-in, just confirming which address to remove.
+Type it into a field asking for the recipient's own email address and
+continue; that is a normal part of the unsubscribe flow, not something to
+stop for. Never type it into a password field or anywhere the page is
+asking for someone else's address."""
+        if recipient_email
+        else """
+No subscribed email address was provided for this recipient. If the page
+asks for the recipient's own email address before it will process the
+request, that is not something to guess - report RESULT: FAILED and say
+the form needs an email address that was not available."""
+    )
     prompt = f"""The recipient has approved an unsubscribe request and it should be carried
 out now, using your browsing skill.
+{email_note}
 
 Before you begin, and as you complete each meaningful step, send a brief
 status update to this same Telegram chat (e.g. "Examining the unsubscribe
@@ -1003,8 +1027,9 @@ async def execute_message_decision(
             f"Unsubscribe from {sender_domain or 'this sender'}",
             brief["message_context"],
             brief_id,
+            mail_delivery.IMAP_USER,
         )
-        if followup is None:
+        if not followup or followup.get("recommendation") != "hard":
             return outcome, None
         return outcome, await _sender_list_followup("blacklist", brief)
 
@@ -1686,6 +1711,7 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
 
     try:
         blocks = []
+        recipient_email = None
         for i, message in enumerate(messages[:max_messages], start=1):
             subject = message.get("subject", "")
             from_display = message.get("from", "")
@@ -1703,13 +1729,25 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             if routes:
                 preamble += f"\n{routes}\n"
             blocks.append(f"{preamble}\n{body[:2000]}")
+            # Kept out of message_context (which gets redact()-ed to mask any
+            # of the recipient's own known addresses before it ever reaches an
+            # LLM prompt) since an unsubscribe action needs this one verbatim -
+            # the first message's address wins, matching the single sender an
+            # UNSUBSCRIBE action is ever scoped to.
+            if recipient_email is None and message.get("recipient_email"):
+                recipient_email = message["recipient_email"]
         message_context = (
             redact("\n\n---\n\n".join(blocks)[:8000])
             if blocks
             else "(no message attached - this is a general instruction, not about any specific message)"
         )
         redacted_instruction = redact(instruction)
-        _, rule, action = await telegram_approvals.propose_new(redacted_instruction, message_context, via_dictation)
+        _, rule, action = await telegram_approvals.propose_new(
+            redacted_instruction,
+            message_context,
+            via_dictation,
+            message_metadata={"recipient_email": recipient_email} if recipient_email else None,
+        )
         return {"ok": True, "status": "pending", "rule": rule, "action": action}
     except Exception as exc:
         try:

@@ -342,10 +342,10 @@ An `ACTION`, when present, is one of:
   to interpret further.
 - `UNSUBSCRIBE: <details>` - see "Executing an approved unsubscribe" below.
   An unsubscribe request is not itself a standing sender decision. A
-  blacklist follow-up is proposed separately after the final result and
-  requires its own approval. An intermediate `NEEDS_SIGNIN` result opens the
-  one-time credential path described below and never proposes a bounce by
-  itself.
+  blacklist follow-up is proposed separately after the final result, only
+  when that result's own recommendation calls for it, and requires its own
+  approval. An intermediate `NEEDS_SIGNIN` result opens the one-time
+  credential path described below and never proposes a bounce by itself.
 - `GANDALF: <note>` - hands the note and flagged message context to the
   separate Gandalf/Loremaster system as a plain-text email at
   `gandalf@rpgm.tools`. The relay uses SMTP over SSL with
@@ -419,8 +419,10 @@ after a separate Approve tap. Deliver appends
 the retained raw message immediately unless it was already delivered, then
 proposes a whitelist entry. The duplicate-delivery guard is important for a
 STANDARD or URGENT report whose original disposition was already 250.
-Unsubscribe uses the existing safe unsubscribe executor and then proposes a
-blacklist entry. Do nothing records that no action was taken and resolves
+Unsubscribe uses the existing safe unsubscribe executor, supplying the
+monitored mailbox's own address, and proposes a blacklist entry only when
+the result's recommendation is `hard`. Do nothing records that no action
+was taken and resolves
 the brief without proposing any standing change - for a report that turned
 out not to need any of the other four.
 
@@ -451,6 +453,18 @@ must have a clear relationship to the sender or be a known mailing-list
 provider acting for it. An unrelated domain, payment request, non-login
 credential request, phishing indicator, or uncertain relationship is unsafe
 and is never visited.
+
+The recipient's own subscribed email address travels alongside the flagged
+message as `recipient_email`, kept separate from `message_context` so
+`redact()` never masks it - the Thunderbird flagging popup resolves it
+per-message (matched against Delivered-To/X-Original-To/To/Cc against the
+account's own identities, falling back to the account's default identity),
+and the auto-verdict Telegram decision path uses the single monitored
+mailbox's `MERCURY_MAILBOX_IMAP_USER`. Many list-management providers
+(Mailchimp and similar) require this address to be typed into a
+confirmation field before they will process the request; the browsing
+prompt is told this is not a credential and is safe to enter, and to report
+`FAILED` rather than guess an address when none was supplied.
 
 The routes themselves are extracted before the prompt is built, not found by
 reading the message. `unsubscribe_routes` collects the `List-Unsubscribe` and
@@ -515,9 +529,14 @@ The backend parses a structured `SAFE / DOMAIN / RESULT / SUMMARY` reply
 (not free text, for the same reason the typed proposal fields are parsed
 rather than inferred) and accepts `UNSUBSCRIBED`, `FAILED`,
 `SKIPPED_UNSAFE`, or the intermediate `NEEDS_SIGNIN` result. No sender entry
-is committed at this point. After a final result, a blacklist entry is
-presented as a normal Approve/Discard proposal, so the unsubscribe result
-never decides standing disposition on the recipient's behalf.
+is committed at this point. A domain-bearing result carries its own
+`recommendation` - `hard` only for `SKIPPED_UNSAFE`, `none` otherwise - and
+only a `hard` recommendation is offered as a blacklist Approve/Discard
+proposal, so a benign `FAILED` (an unsubscribe form that needed an email
+address, say) is never mistaken for a reason to block a legitimate sender.
+When it is offered, it is still a normal proposal requiring its own
+approval, so the unsubscribe result never decides standing disposition on
+the recipient's behalf by itself.
 
 ## Prompt injection: why it shapes this design
 

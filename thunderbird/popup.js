@@ -96,6 +96,47 @@ function headerValue(headers, name) {
   return (Array.isArray(value) ? value.join(", ") : String(value || "")).trim();
 }
 
+function extractAddresses(headerText) {
+  if (!headerText) return [];
+  const matches = headerText.match(/[^\s<>,"]+@[^\s<>,"]+/g);
+  return (matches || []).map((a) => a.toLowerCase());
+}
+
+const RECIPIENT_HEADER_PRIORITY = ["delivered-to", "x-original-to", "to", "cc"];
+
+// The account an unsubscribe form actually wants is the specific address the
+// list mail was delivered to, not just "the account this folder belongs to" -
+// a catch-all account receives mail addressed to any of several identities.
+// Falls back to the account's own default identity when no header address
+// matches one on file (a plus-alias the account never registered, say).
+async function resolveRecipientEmail(message, full) {
+  let accountId;
+  try {
+    accountId = message.folder && message.folder.accountId;
+  } catch (err) {
+    accountId = undefined;
+  }
+  if (!accountId) return "";
+
+  let account;
+  try {
+    account = await messenger.accounts.get(accountId);
+  } catch (err) {
+    return "";
+  }
+  const identityEmails = ((account && account.identities) || [])
+    .map((identity) => (identity.email || "").toLowerCase())
+    .filter(Boolean);
+  if (!identityEmails.length) return "";
+
+  for (const name of RECIPIENT_HEADER_PRIORITY) {
+    const addresses = extractAddresses(headerValue(full.headers, name));
+    const match = addresses.find((a) => identityEmails.includes(a));
+    if (match) return match;
+  }
+  return identityEmails[0];
+}
+
 async function init() {
   const submitButton = document.getElementById("submit");
   const statusEl = document.getElementById("status");
@@ -194,6 +235,7 @@ async function onSubmit(submitButton, statusEl) {
           html: condenseHtml(extractHtml(full)),
           list_unsubscribe: headerValue(full.headers, "list-unsubscribe"),
           list_unsubscribe_post: headerValue(full.headers, "list-unsubscribe-post"),
+          recipient_email: await resolveRecipientEmail(m, full),
         };
       })
     );
