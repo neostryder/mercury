@@ -28,7 +28,11 @@ class Judge(Protocol):
 
 
 class HttpAgentGatewayJudge:
-    def __init__(self, url: str, secret: str, timeout: float = 180.0):
+    # Kept comfortably above the reference gateway's own AGENT_GATEWAY_TIMEOUT
+    # (agent_gateway.py, default 240s) so a slow-but-legitimate agent call
+    # gets that gateway's own 504 - reported with useful context - rather
+    # than this client giving up first with a bare connection timeout.
+    def __init__(self, url: str, secret: str, timeout: float = 300.0):
         self._url = url
         self._secret = secret
         self._timeout = timeout

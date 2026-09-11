@@ -69,6 +69,16 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] The agent gateway's own subprocess timeout defaulted
+  to 60 seconds, far shorter than a real browsing task (checking a route's
+  domain, visiting it, filling a confirmation form) can need, and shorter
+  than the backend's own 180-second client timeout - so a genuinely slow
+  but legitimate agent call died with a 504 well before the backend would
+  have given up waiting. Raised to 240 seconds on the gateway and 300 on
+  the backend client, keeping the gateway's own timeout safely below the
+  client's so a slow call still gets the gateway's informative 504 rather
+  than the client's blunter connection-level timeout.
+
 - [Visible] [Pipeline] An approved action's own failure (an agent-gateway
   timeout, a malformed judge response) used to propagate into
   `poll_forever`'s blanket per-update exception handler, which silently
