@@ -457,9 +457,13 @@ and is never visited.
 The recipient's own subscribed email address travels alongside the flagged
 message as `recipient_email`, kept separate from `message_context` so
 `redact()` never masks it - the Thunderbird flagging popup resolves it
-per-message (matched against Delivered-To/X-Original-To/To/Cc against the
-account's own identities, falling back to the account's default identity),
-and the auto-verdict Telegram decision path uses the single monitored
+per-message, matched against Delivered-To/X-Original-To/To/Cc against the
+account's own identities. It falls back to the account's one identity only
+when there is exactly one on file; an account with several identities and
+no header match sends no address at all rather than guessing one, since a
+wrong address submitted to a real unsubscribe form is a wrong action taken
+silently, not a missing one the backend can honestly report and ask about.
+The auto-verdict Telegram decision path uses the single monitored
 mailbox's `MERCURY_MAILBOX_IMAP_USER`. Many list-management providers
 (Mailchimp and similar) require this address to be typed into a
 confirmation field before they will process the request; the browsing

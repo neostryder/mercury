@@ -69,6 +69,16 @@
 
 ### Fixed
 
+- [Visible] [Thunderbird] [Pipeline] The unsubscribe agent submitted the
+  wrong recipient email for an account with more than one identity: when no
+  message header matched a known identity, the flagging popup fell back to
+  the account's first identity rather than admitting it did not know which
+  one was actually meant, and that guess was wrong for a message sent to a
+  different identity on the same account. It now sends no address at all in
+  that case, so the backend reports FAILED and asks rather than acting on a
+  guess - a wrong address submitted to a real unsubscribe form is a wrong
+  action taken silently, not a missing one (v0.3.19).
+
 - [Visible] [Pipeline] The agent gateway's own subprocess timeout defaulted
   to 60 seconds, far shorter than a real browsing task (checking a route's
   domain, visiting it, filling a confirmation form) can need, and shorter

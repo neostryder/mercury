@@ -107,8 +107,11 @@ const RECIPIENT_HEADER_PRIORITY = ["delivered-to", "x-original-to", "to", "cc"];
 // The account an unsubscribe form actually wants is the specific address the
 // list mail was delivered to, not just "the account this folder belongs to" -
 // a catch-all account receives mail addressed to any of several identities.
-// Falls back to the account's own default identity when no header address
-// matches one on file (a plus-alias the account never registered, say).
+// Only falls back to a single, unambiguous identity when the account has
+// exactly one on file; an account with several identities and no header
+// match returns "" rather than guessing one - a wrong address submitted to
+// a real unsubscribe form is a wrong action taken silently, not a missing
+// one the backend can honestly report and ask about.
 async function resolveRecipientEmail(message, full) {
   let accountId;
   try {
@@ -134,7 +137,7 @@ async function resolveRecipientEmail(message, full) {
     const match = addresses.find((a) => identityEmails.includes(a));
     if (match) return match;
   }
-  return identityEmails[0];
+  return identityEmails.length === 1 ? identityEmails[0] : "";
 }
 
 async function init() {
