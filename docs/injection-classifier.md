@@ -26,11 +26,16 @@ attempt the classifier misses.
 
 ## The model
 
-`protectai/deberta-v3-base-prompt-injection-v2` on Hugging Face - a
-DeBERTa-v3-base (about 184M parameters) fine-tuned specifically for binary
-prompt-injection detection. It outputs exactly two labels, `SAFE` and
-`INJECTION`, with a confidence score. It's small enough to run on CPU with
-sub-second latency per message; no GPU or paid API needed. This is a
+`meta-llama/Llama-Prompt-Guard-2-86M` on Hugging Face (gated - requires
+accepting Meta's license and an access token to download) - an 86M-parameter
+multilingual classifier purpose-built for prompt-injection and jailbreak
+detection. Its own config ships no label names (`LABEL_0`/`LABEL_1`), so a
+deployment maps those to this contract's `SAFE`/`INJECTION` strings itself
+(index 1 is the injection class). It's small enough to run on CPU with
+sub-second latency per message; no GPU or paid API needed. This replaced
+`protectai/deberta-v3-base-prompt-injection-v2` as the reference choice on
+2026-09-13 after the older model false-flagged ordinary transactional email
+(password resets, account notices) as `INJECTION` - see mercury#48. This is a
 reference choice, not a requirement - the contract below is model-agnostic,
 so any classifier (a different open model, a hosted moderation API, a
 regex/heuristic pass as a cheap first cut) works as a drop-in as long as it
@@ -55,10 +60,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import pipeline
 
+LABELS = {"LABEL_0": "SAFE", "LABEL_1": "INJECTION"}  # the model ships no label names of its own
+
 app = FastAPI()
 classifier = pipeline(
     "text-classification",
-    model="protectai/deberta-v3-base-prompt-injection-v2",
+    model="meta-llama/Llama-Prompt-Guard-2-86M",
 )
 
 class ClassifyRequest(BaseModel):
@@ -67,14 +74,21 @@ class ClassifyRequest(BaseModel):
 @app.post("/classify")
 def classify(req: ClassifyRequest):
     result = classifier(req.text, truncation=True, max_length=512)[0]
-    return {"label": result["label"], "score": result["score"]}
+    return {"label": LABELS[result["label"]], "score": result["score"]}
 ```
 
 Requirements: `fastapi`, `uvicorn`, `transformers`, and a backend
-(`torch` or `tensorflow`) transformers can load the model with. The first
-request downloads and caches the model from Hugging Face; every request
-after that is local inference only - no network call per message, and
-message content never leaves the machine running this server.
+(`torch` or `tensorflow`) transformers can load the model with, plus a
+Hugging Face access token (`huggingface-cli login`, or `HF_TOKEN` in the
+environment) since this model is gated - accept the license on the model
+page once, then generate a read-only token. The first request downloads and
+caches the model from Hugging Face; every request after that is local
+inference only - no network call per message, and message content never
+leaves the machine running this server. A production deployment can convert
+the model to ONNX (`optimum-cli export onnx`) and serve it with
+`onnxruntime` directly instead of through `transformers.pipeline`, for lower
+latency and a smaller runtime dependency footprint - the contract above is
+unaffected either way.
 
 Deploy it the same way as any other small always-on service: a
 `docker-compose.yaml` under its own directory, `restart: unless-stopped`,

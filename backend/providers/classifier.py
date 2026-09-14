@@ -11,8 +11,8 @@ The one built-in implementation calls a small HTTP contract:
     POST <url>  {"text": "..."}
     -> 200  {"label": "SAFE" | "INJECTION", "score": <float 0..1>}
 
-A reference server implementing that contract for the ProtectAI
-deberta-v3-base-prompt-injection-v2 model lives in docs/injection-classifier.md.
+A reference server implementing that contract for Meta's
+Llama-Prompt-Guard-2-86M model lives in docs/injection-classifier.md.
 Point PROMPT_INJECTION_CLASSIFIER_URL at any host implementing the same
 contract - it does not have to be that specific model.
 """

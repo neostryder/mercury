@@ -67,6 +67,16 @@
   entry wins, the same way an exact address already outranks any domain
   entry. Address selectors are unaffected; they only ever match themselves.
 
+- [Visible] [Pipeline] The prompt-injection classifier reference server now
+  runs `meta-llama/Llama-Prompt-Guard-2-86M` instead of
+  `protectai/deberta-v3-base-prompt-injection-v2`. The previous model
+  false-flagged ordinary transactional email (password resets, account
+  notices) as `INJECTION`; the new one was benchmarked clean against the
+  same failing samples plus a real-attack sample, with no false positives
+  either direction. The HTTP contract (`{"label": "SAFE"|"INJECTION",
+  "score": <float>}`) and `PROMPT_INJECTION_CLASSIFIER_URL` are unchanged,
+  so this is a drop-in swap for any consumer.
+
 ### Fixed
 
 - [Visible] [Thunderbird] [Pipeline] The unsubscribe agent submitted the
