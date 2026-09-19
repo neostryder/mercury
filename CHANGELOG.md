@@ -77,6 +77,16 @@
   "score": <float>}`) and `PROMPT_INJECTION_CLASSIFIER_URL` are unchanged,
   so this is a drop-in swap for any consumer.
 
+- [Visible] [Pipeline] A message the judge accepts outright (disposition 250)
+  no longer pages Telegram on the judge's own subjective alert level alone.
+  Only a soft-defer (421), a hard-bounce (550), or a real prompt-injection
+  finding can still trigger a STANDARD or URGENT ping; an accepted message
+  now stays silent regardless of category or how confident the judge's
+  wording sounded, covered by the daily summary and dashboard instead. Fixes
+  a recurring false-alarm pattern where routine account-security
+  notifications (e.g. a legitimate "new login" email) paged Telegram despite
+  a LEGIT verdict and a SAFE injection screen.
+
 ### Fixed
 
 - [Visible] [Thunderbird] [Pipeline] The unsubscribe agent submitted the

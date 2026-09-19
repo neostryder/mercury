@@ -264,6 +264,40 @@ RULE_MATCH: NONE"""))
         self.assertFalse(body["ok"])
         self.assertEqual(app.notifier.send.await_count, 1)
 
+    def test_accepted_message_never_pages_telegram_even_if_the_judge_wants_to(self):
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
+        )
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""VERDICT: LEGIT
+DISPOSITION: 250
+CATEGORY: ACCOUNT_SECURITY
+ALERT: STANDARD
+REASONING: A new-login notice, unsure if this needed a heads-up.
+RULE_MATCH: NONE"""))
+        fake_telegram = SimpleNamespace(send_trackable_report=AsyncMock())
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(response.status_code, 250)
+        self.assertEqual(fake_telegram.send_trackable_report.await_count, 0)
+
+    def test_soft_defer_still_pages_telegram_when_the_judge_wants_to(self):
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
+        )
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""VERDICT: UNSURE
+DISPOSITION: 421
+CATEGORY: OTHER
+ALERT: STANDARD
+REASONING: Genuinely ambiguous sender legitimacy.
+RULE_MATCH: NONE"""))
+        fake_telegram = SimpleNamespace(send_trackable_report=AsyncMock())
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(response.status_code, 421)
+        self.assertEqual(fake_telegram.send_trackable_report.await_count, 1)
+
     def test_judge_prompt_uses_buckets_and_legitimate_mail_calibration(self):
         captured = []
 

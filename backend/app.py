@@ -1239,13 +1239,19 @@ Respond with:
   is enforced at SMTP time, not just advisory, so weigh it accordingly
 - a category, your best single label from: {categories_block}
 - an alert level, your own judgment call on whether the recipient should be
-  pinged in Telegram right now rather than waiting for the daily summary:
-  URGENT if it likely needs their action today (e.g. a legitimate
-  time-sensitive message you're unsure was classified correctly, or signs of
-  an active account-compromise attempt); STANDARD for other high-severity
-  events worth same-day attention (e.g. a new phishing pattern, low
-  confidence in this disposition); NONE for routine traffic the daily
-  summary already covers, which is most messages including most hard bounces
+  pinged in Telegram right now rather than waiting for the daily summary.
+  A STANDARD or URGENT alert only actually pages when the disposition above
+  is 421 or 550, or the prompt-injection screen found a real injection - an
+  accepted (250) message never pages regardless of this field, so do not
+  mark one STANDARD or URGENT just because the category is sensitive (e.g.
+  an ordinary account-security login notice) or your wording feels unsure;
+  use NONE for any 250 unless you are also recommending 421/550 instead:
+  URGENT if it likely needs their action today (e.g. a genuinely ambiguous
+  soft-defer, or signs of an active account-compromise attempt behind a
+  disposition other than 250); STANDARD for other high-severity events worth
+  same-day attention (e.g. a new phishing pattern behind a 550); NONE for
+  routine traffic the daily summary already covers, which is most messages
+  including most hard bounces
 - one or two sentences of reasoning
 - which standing rule, if any, decided this disposition on its own (rather
   than general judgment) - copy that rule's text back exactly as it appears
@@ -1548,6 +1554,13 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # the full message + reasoning so it can be reviewed (and a rule
         # reversed) later without having had to catch it live.
         is_hard_bounce = verdict["disposition"] == "550"
+        # A message the judge accepts outright (250) never pages Telegram on
+        # its own subjective ALERT call alone - only a soft-defer, a
+        # hard-bounce, or a real injection-classifier hit can still earn one.
+        # A routine LEGIT message (e.g. an account-security login notice)
+        # stays silent regardless of category or how the judge worded its
+        # confidence; the daily summary and dashboard cover it instead.
+        alert_eligible = verdict["disposition"] in ("421", "550") or injection["label"] == "INJECTION"
         event_log.log_event("messages", {
             "received_at": _now(),
             "from_display": from_display,
@@ -1604,7 +1617,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 else:
                     await execute_standing_custom_action(custom_action, action_content[:8000])
 
-        if verdict["alert"] in ("STANDARD", "URGENT"):
+        if alert_eligible and verdict["alert"] in ("STANDARD", "URGENT"):
             prefix = "\U0001f6a8 URGENT" if verdict["alert"] == "URGENT" else "Mercury report"
             report = (
                 f"{prefix}\n"
