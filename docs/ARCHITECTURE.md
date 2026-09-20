@@ -25,13 +25,20 @@ purpose; Cloudflare Workers is what I already had DNS on.
 
 1. Your mail host POSTs the parsed message to the Worker's public hostname.
 2. **If the path is `/ingest`** (the mail-webhook path): the Worker waits
-   on the backend's response and returns its disposition (250/421/550) as
-   the webhook's own HTTP status - this is what ForwardEmail's webhook
-   contract expects, per the design goal above of an edge gate producing
-   the actual bounce decision. But a backend that's unreachable, slow past
-   a fixed timeout, or returns anything other than one of those three
-   recognized codes must still resolve to "accept" (250) - infrastructure
-   trouble is never itself a legitimate reason to bounce a message.
+   on the backend's response and returns its disposition as the webhook's
+   own HTTP status, since ForwardEmail's own error-code translation
+   (`helpers/get-error-code.js`) reads a thrown non-200 webhook status in
+   the 400-599 range as the real SMTP reply to give the original sender -
+   which is how 421 and 550 correctly produce a genuine soft-defer or
+   hard-bounce at ForwardEmail's own MX. A backend accept (250) does NOT
+   fall in that range, so it is translated to a literal HTTP 200 rather
+   than passed through raw - passing 250 through was silently miscoded by
+   that same fallback into a hard-bounce reported to the sender for an
+   accepted message (see neostryder/mercury#53). A backend that's
+   unreachable, slow past a fixed timeout, or returns anything other than
+   one of the three recognized codes must still resolve to "accept" - sent
+   as that same literal HTTP 200 - since infrastructure trouble is never
+   itself a legitimate reason to bounce a message.
 3. **Any other path** (e.g. `/rules/propose`, used by the Thunderbird
    extension) is proxied synchronously - the caller is a direct,
    interactive user action, not something under SMTP bounce-risk, so the

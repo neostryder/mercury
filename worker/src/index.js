@@ -542,6 +542,19 @@ async function handleLog(request, env) {
   }
 }
 
+// ForwardEmail's own webhook-recipient code (helpers/retry-request.js)
+// throws for any HTTP status other than exactly 200, and its error-code
+// translation (helpers/get-error-code.js) only recognizes a thrown status
+// in the 400-599 range as a real SMTP disposition - 421 and 550 both fall
+// in that range and round-trip correctly, but 250 does not, so it falls
+// through to that function's unconditional final `return 550`. The result:
+// an accepted message was being reported to the ORIGINAL SENDER as a hard
+// bounce, even though it was correctly delivered here - see
+// neostryder/mercury#53. An accept must therefore be signaled as a literal
+// HTTP 200, never the raw 250, or ForwardEmail miscodes it as a rejection.
+const ACCEPT_DISPOSITION = 250;
+const ACCEPT_HTTP_STATUS = 200;
+
 // Enforcement now depends on this call completing, but a self-hosted outage
 // or a slow backend must still never itself cause a bounce of legitimate
 // mail - see docs/ARCHITECTURE.md. Anything short of a clean, recognized
@@ -562,12 +575,13 @@ async function proxyIngest(backendUrl, bodyText, env) {
     });
     const text = await resp.text();
     if (KNOWN_DISPOSITIONS.includes(resp.status)) {
-      return new Response(text, { status: resp.status, headers: { 'Content-Type': 'application/json' } });
+      const webhookStatus = resp.status === ACCEPT_DISPOSITION ? ACCEPT_HTTP_STATUS : resp.status;
+      return new Response(text, { status: webhookStatus, headers: { 'Content-Type': 'application/json' } });
     }
-    return new Response(text || 'OK', { status: 250 });
+    return new Response(text || 'OK', { status: ACCEPT_HTTP_STATUS });
   } catch (err) {
     // Backend unreachable, slow, or errored - accept rather than guess.
-    return new Response('OK', { status: 250 });
+    return new Response('OK', { status: ACCEPT_HTTP_STATUS });
   } finally {
     clearTimeout(timeout);
   }

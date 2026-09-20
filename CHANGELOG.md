@@ -100,6 +100,16 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] An accepted message (disposition 250) was being
+  reported back to the original sender as a hard bounce, ever since Mercury
+  first went live - ForwardEmail's own webhook error-code translation only
+  recognizes a thrown status in the 400-599 range as a real SMTP reply, so
+  250 fell through to that logic's unconditional default of 550 and told
+  senders their mail failed even though it was delivered correctly. Soft-defer
+  (421) and hard-bounce (550) were never affected, since both already fall in
+  that range and round-trip to the sender correctly. An accept is now signaled
+  to ForwardEmail as a literal HTTP 200 instead of the raw disposition code.
+
 - [Visible] [Thunderbird] [Pipeline] The unsubscribe agent submitted the
   wrong recipient email for an account with more than one identity: when no
   message header matched a known identity, the flagging popup fell back to
