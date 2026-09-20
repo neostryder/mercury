@@ -4,6 +4,17 @@
 
 ### Added
 
+- [Visible] [Dashboard] The Recent activity and Hard bounces tables gained a
+  Recip. column showing how the message was actually addressed: `R` (an
+  rpgm.tools address visible in To/Cc), `F` (a personal address that
+  forwards into rpgm.tools visible in To/Cc), `r` (Bcc'd straight to an
+  rpgm.tools address), or `f` (Bcc'd on a personal address before it was
+  forwarded in). A tooltip on each badge names the exact matched address and
+  which header it was found in, or which envelope alias the message arrived
+  on for a Bcc. Computed at ingest time from ForwardEmail's own parsed
+  To/Cc fields and its webhook session recipient; only applies to messages
+  ingested from here forward.
+
 - [Visible] [Filtering] Blacklist entries can now be regex patterns, in
   addition to exact addresses and domains. A pattern is matched full-string
   against the sender domain only, is validated (compiled) when it is added,

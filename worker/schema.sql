@@ -71,3 +71,14 @@ CREATE TABLE IF NOT EXISTS admin_log (
 -- so the dashboard's hard-bounce detail view can show it and support
 -- reversing that specific rule from the ledger.
 ALTER TABLE messages ADD COLUMN triggered_rule TEXT;
+
+-- How Aaron's own address was actually named on the message - one of
+-- R (rpgm.tools address visible in To/Cc), F (a personal address that
+-- forwards into rpgm.tools visible in To/Cc), r (Bcc'd straight to an
+-- rpgm.tools address) or f (Bcc'd on a message to a personal address,
+-- forwarded in). Computed at ingest time (backend/app.py's
+-- _classify_recipient()); recipient_detail is a short human-readable string
+-- for the dashboard's tooltip. Both NULL for messages ingested before this
+-- column existed.
+ALTER TABLE messages ADD COLUMN recipient_class TEXT;
+ALTER TABLE messages ADD COLUMN recipient_detail TEXT;

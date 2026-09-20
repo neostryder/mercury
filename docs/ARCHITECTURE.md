@@ -111,6 +111,20 @@ classifier/judge reasoning so it remains visible in the dashboard and digest.
 A hard-bounce recommendation also saves the message's full content and
 reasoning so it can be reviewed later.
 
+Each logged message also gets a `recipient_class` (`backend/app.py`'s
+`_classify_recipient()`), shown as a badge in the dashboard: `R` when an
+rpgm.tools address is visibly in To/Cc, `F` when one of the personal
+addresses in `identities.json` (the same gitignored list `redact()` uses -
+see above) is visibly in To/Cc, `r` when neither is visible but
+ForwardEmail's own webhook session recipient shows a direct rpgm.tools
+address (a Bcc straight to rpgm.tools), or `f` when the session recipient is
+the personal-address forwarding alias instead (a Bcc on a message sent to a
+personal address, before it was forwarded in). `recipient_detail` carries
+the specific matched address and field (or envelope alias) for the
+dashboard's tooltip. Only
+computed going forward - it relies on To/Cc and session data that was never
+persisted before this existed, so older rows carry neither column.
+
 ## Providers
 
 `backend/providers/` holds three seams, each a small `Protocol` plus one

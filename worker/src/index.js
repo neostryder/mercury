@@ -46,7 +46,7 @@ const LOG_TABLES = {
     'received_at', 'from_display', 'from_domain', 'subject', 'injection_label',
     'injection_score', 'verdict', 'disposition', 'enforced_disposition',
     'category', 'alert_level', 'reasoning', 'shadow_mode', 'full_content', 'analysis',
-    'triggered_rule',
+    'triggered_rule', 'recipient_class', 'recipient_detail',
   ],
   rule_changes: ['changed_at', 'action', 'rule_text', 'source'],
   actions: ['executed_at', 'kind', 'details', 'outcome_summary', 'result', 'domain'],
@@ -391,7 +391,7 @@ async function handleDashboard(pathname, search, env, request) {
     if (pathname === '/dashboard/api/hard-bounces') {
       const { limit, offset } = pageParams(params);
       const result = await env.MERCURY_LOG.prepare(
-        "SELECT id, received_at, from_display, from_domain, subject, category, verdict, triggered_rule FROM messages WHERE enforced_disposition = '550' ORDER BY id DESC LIMIT ? OFFSET ?"
+        "SELECT id, received_at, from_display, from_domain, subject, category, verdict, triggered_rule, recipient_class, recipient_detail FROM messages WHERE enforced_disposition = '550' ORDER BY id DESC LIMIT ? OFFSET ?"
       ).bind(limit + 1, offset).all();
       return json(paginate(result.results ?? [], limit));
     }

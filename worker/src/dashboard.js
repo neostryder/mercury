@@ -210,6 +210,8 @@ export const DASHBOARD_HTML = `<!doctype html>
   .pill.disp-550 { background: var(--bad-bg); color: var(--bad); }
   .pill.alert-URGENT { background: var(--bad-bg); color: var(--bad); }
   .pill.alert-STANDARD { background: var(--warn-bg); color: var(--warn); }
+  .pill.recip-R, .pill.recip-F { background: var(--good-bg); color: var(--good); }
+  .pill.recip-r, .pill.recip-f { background: var(--warn-bg); color: var(--warn); }
   .muted { color: var(--muted); }
   .bars { display: flex; flex-direction: column; gap: 8px; }
   .bar-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
@@ -314,8 +316,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     <h2>Hard bounces</h2>
     <div class="panel scroll-x">
       <table id="bouncesTable">
-        <thead><tr><th></th><th>Time</th><th>From</th><th>Subject</th><th>Category</th><th>Rule</th></tr></thead>
-        <tbody><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+        <thead><tr><th></th><th>Time</th><th>From</th><th title="R: to rpgm.tools&#10;F: to a personal address that forwards in&#10;r: Bcc'd straight to rpgm.tools&#10;f: Bcc'd on a personal address, forwarded in">Recip.</th><th>Subject</th><th>Category</th><th>Rule</th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
     ${pagerHtml('bounces')}
@@ -332,9 +334,9 @@ export const DASHBOARD_HTML = `<!doctype html>
     <div class="panel scroll-x">
       <table id="messagesTable">
         <thead>
-          <tr><th>Time</th><th>From</th><th>Subject</th><th>Category</th><th>Verdict</th><th>Disposition</th><th>Alert</th></tr>
+          <tr><th>Time</th><th>From</th><th title="R: to rpgm.tools&#10;F: to a personal address that forwards in&#10;r: Bcc'd straight to rpgm.tools&#10;f: Bcc'd on a personal address, forwarded in">Recip.</th><th>Subject</th><th>Category</th><th>Verdict</th><th>Disposition</th><th>Alert</th></tr>
         </thead>
-        <tbody><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+        <tbody><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
     ${pagerHtml('messages')}
@@ -371,6 +373,18 @@ function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+const RECIP_LABELS = {
+  R: 'To/Cc: an rpgm.tools address',
+  F: 'To/Cc: a personal address that forwards in',
+  r: 'Bcc, direct to rpgm.tools',
+  f: 'Bcc, forwarded in from a personal address',
+};
+function recipCell(cls, detail) {
+  if (!cls) return '<span class="muted">-</span>';
+  const label = RECIP_LABELS[cls] || cls;
+  const title = detail ? label + '\\n' + detail : label;
+  return '<span class="pill recip-' + esc(cls) + '" title="' + esc(title) + '">' + esc(cls) + '</span>';
 }
 
 async function loadSummary() {
@@ -651,12 +665,13 @@ async function loadMessages(filter) {
     <tr class="disp-\${esc(r.enforced_disposition)}">
       <td>\${esc(fmtTime(r.received_at))}</td>
       <td>\${esc(r.from_domain)}</td>
+      <td>\${recipCell(r.recipient_class, r.recipient_detail)}</td>
       <td class="subject-cell" title="\${esc(r.subject)}">\${esc(r.subject)}</td>
       <td>\${esc(r.category)}</td>
       <td>\${esc(r.verdict)}</td>
       <td><span class="pill disp-\${esc(r.enforced_disposition)}">\${esc(r.enforced_disposition)}</span></td>
       <td>\${r.alert_level && r.alert_level !== 'NONE' ? \`<span class="pill alert-\${esc(r.alert_level)}">\${esc(r.alert_level)}</span>\` : '<span class="muted">-</span>'}</td>
-    </tr>\`).join('') : '<tr><td colspan="7" class="empty">Nothing here yet.</td></tr>';
+    </tr>\`).join('') : '<tr><td colspan="8" class="empty">Nothing here yet.</td></tr>';
   updatePagerControls('messages', hasMore);
 }
 
@@ -714,12 +729,13 @@ async function loadHardBounces() {
       <td><span class="caret">&#9656;</span></td>
       <td>\${esc(fmtTime(r.received_at))}</td>
       <td>\${esc(r.from_domain)}</td>
+      <td>\${recipCell(r.recipient_class, r.recipient_detail)}</td>
       <td class="subject-cell" title="\${esc(r.subject)}">\${esc(r.subject)}</td>
       <td>\${esc(r.category)}</td>
       <td>\${r.triggered_rule ? '<span class="pill disp-421">rule</span>' : '<span class="muted">-</span>'}</td>
     </tr>
-    <tr class="bounce-detail" data-detail-for="\${r.id}" style="display:none;"><td colspan="6"></td></tr>\`).join('')
-    : '<tr><td colspan="6" class="empty">No hard bounces yet.</td></tr>';
+    <tr class="bounce-detail" data-detail-for="\${r.id}" style="display:none;"><td colspan="7"></td></tr>\`).join('')
+    : '<tr><td colspan="7" class="empty">No hard bounces yet.</td></tr>';
   updatePagerControls('bounces', hasMore);
 }
 

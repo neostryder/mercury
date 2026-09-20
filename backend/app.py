@@ -305,6 +305,94 @@ def _sender_address(from_field: object) -> str | None:
     return None
 
 
+# The one alias every personal-account address (identities.json's own
+# entries - see KNOWN_IDENTITIES above) lands on before reaching
+# ForwardEmail. Seeing this as the webhook's own envelope recipient - never
+# visible in any header - is what tells a Bcc apart as "forwarded in from a
+# personal address" versus "Bcc'd straight to an rpgm.tools address".
+_PERSONAL_FORWARD_ALIAS = "aaron-icloud@rpgm.tools"
+
+
+def _is_known_identity(address: str) -> bool:
+    """Whether `address` matches one of the mailbox owner's own aliases from
+    identities.json - the same gitignored list `redact()` uses to mask
+    Aaron's own address out of content before it reaches an external model.
+    Reused here so the personal-address family is defined in exactly one
+    config file rather than duplicated into source."""
+    local, _, domain = address.partition("@")
+    domain_lc, local_lc = domain.lower(), local.lower()
+    for known_domain, local_parts, is_prefix in KNOWN_IDENTITIES:
+        if domain_lc != known_domain:
+            continue
+        if is_prefix:
+            if any(local_lc.startswith(p) for p in local_parts):
+                return True
+        elif local_lc in local_parts:
+            return True
+    return False
+
+
+def _addresses_of(field: object, header_name: str, headers: object, raw_message: str | None) -> list[str]:
+    """All addresses in a structured To/Cc-shaped field (MailParser's
+    ``{value: [{address, ...}]}`` shape), falling back to the raw header
+    text for older/test payloads where the structured field is absent."""
+    found: list[str] = []
+    if isinstance(field, dict):
+        values = field.get("value")
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict) and isinstance(value.get("address"), str):
+                    found.append(value["address"])
+    elif isinstance(field, str) and field:
+        found.append(field)
+
+    if not found:
+        header_text = _header_value(headers, header_name) or _header_from_raw(raw_message, header_name)
+        found = [addr for _, addr in email.utils.getaddresses([header_text]) if addr]
+
+    return [a.lower() for a in found if a]
+
+
+def _classify_recipient(
+    payload: dict, headers: object, raw_message: str | None
+) -> tuple[str | None, str | None]:
+    """How Aaron's own address was actually named on this message.
+
+    R: an rpgm.tools address is visibly in To/Cc. F: one of the personal
+    addresses that forward into rpgm.tools is visibly in To/Cc. r: neither is
+    visible, but the webhook's own envelope recipient shows a direct
+    rpgm.tools address - a Bcc straight to rpgm.tools. f: neither is visible
+    and the envelope recipient is the iCloud-family forwarding alias - a Bcc
+    on a message sent to a personal address, before it was forwarded in.
+    Returns (class_letter, detail_text) for the dashboard's tooltip; both
+    None when the payload carries no usable To/Cc or session data at all.
+    """
+    addressed = [
+        (field, addr)
+        for field, source in (("To", payload.get("to")), ("Cc", payload.get("cc")))
+        for addr in _addresses_of(source, field, headers, raw_message)
+    ]
+
+    for field, addr in addressed:
+        if addr.endswith("@rpgm.tools"):
+            return "R", f"{field}: {addr}"
+    for field, addr in addressed:
+        if _is_known_identity(addr):
+            return "F", f"{field}: {addr}"
+
+    session = payload.get("session")
+    session_recipient = (
+        session.get("recipient").lower()
+        if isinstance(session, dict) and isinstance(session.get("recipient"), str)
+        else None
+    )
+    if session_recipient == _PERSONAL_FORWARD_ALIAS:
+        return "f", "Bcc via personal-address forward (original address not visible)"
+    if session_recipient:
+        return "r", f"Bcc: {session_recipient}"
+    return None, None
+
+
 def _parse_brief_response(content: str) -> dict:
     def _extract(field: str, later_fields: list[str]) -> str | None:
         if later_fields:
@@ -1561,6 +1649,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # stays silent regardless of category or how the judge worded its
         # confidence; the daily summary and dashboard cover it instead.
         alert_eligible = verdict["disposition"] in ("421", "550") or injection["label"] == "INJECTION"
+        recipient_class, recipient_detail = _classify_recipient(payload, payload.get("headers"), raw_message)
         event_log.log_event("messages", {
             "received_at": _now(),
             "from_display": from_display,
@@ -1578,6 +1667,8 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             "full_content": raw_content[:20000] if is_hard_bounce else None,
             "analysis": verdict["reasoning"] if is_hard_bounce else None,
             "triggered_rule": verdict["triggered_rule"],
+            "recipient_class": recipient_class,
+            "recipient_detail": recipient_detail,
         })
 
         delivery_result = None

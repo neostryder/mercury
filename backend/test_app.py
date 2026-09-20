@@ -716,6 +716,82 @@ class UnsubscribeRouteExtractionTests(unittest.TestCase):
         self.assertEqual(value, "<https://example.com/u>, <mailto:leave@example.com>")
 
 
+class RecipientClassificationTests(unittest.TestCase):
+    """Uses fake local_parts/domains rather than Aaron's real personal
+    addresses, patched in as KNOWN_IDENTITIES for the duration of each test -
+    the same list identities.json supplies at runtime (see
+    _is_known_identity's docstring). Keeps real personal addresses out of
+    the repo entirely, consistent with why identities.json itself is
+    gitignored."""
+
+    FAKE_IDENTITIES = [("personal-example.test", {"someone"}, False)]
+    FAKE_FORWARD_ALIAS = "forwarded@rpgm.tools"
+
+    def setUp(self):
+        patcher_identities = patch.object(app, "KNOWN_IDENTITIES", self.FAKE_IDENTITIES)
+        patcher_alias = patch.object(app, "_PERSONAL_FORWARD_ALIAS", self.FAKE_FORWARD_ALIAS)
+        patcher_identities.start()
+        patcher_alias.start()
+        self.addCleanup(patcher_identities.stop)
+        self.addCleanup(patcher_alias.stop)
+
+    def _addr_field(self, *addresses):
+        return {"value": [{"address": a, "name": ""} for a in addresses]}
+
+    def test_rpgm_tools_address_in_to_is_R(self):
+        payload = {"to": self._addr_field("aaron@rpgm.tools")}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "R")
+        self.assertEqual(detail, "To: aaron@rpgm.tools")
+
+    def test_rpgm_tools_address_in_cc_is_R(self):
+        payload = {"cc": self._addr_field("gandalf@rpgm.tools")}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "R")
+        self.assertEqual(detail, "Cc: gandalf@rpgm.tools")
+
+    def test_known_identity_in_to_is_F(self):
+        payload = {"to": self._addr_field("someone@personal-example.test")}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "F")
+        self.assertEqual(detail, "To: someone@personal-example.test")
+
+    def test_unrelated_address_in_to_is_not_F(self):
+        payload = {"to": self._addr_field("someone-else@personal-example.test")}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertIsNone(cls)
+
+    def test_bcc_direct_to_rpgm_tools_is_lowercase_r(self):
+        payload = {"session": {"recipient": "aaron@rpgm.tools"}}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "r")
+        self.assertEqual(detail, "Bcc: aaron@rpgm.tools")
+
+    def test_bcc_forwarded_from_a_personal_address_is_lowercase_f(self):
+        payload = {"session": {"recipient": self.FAKE_FORWARD_ALIAS}}
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "f")
+
+    def test_rpgm_tools_and_known_identity_both_present_prefers_R(self):
+        payload = {
+            "to": self._addr_field("aaron@rpgm.tools"),
+            "cc": self._addr_field("someone@personal-example.test"),
+        }
+        cls, detail = app._classify_recipient(payload, None, None)
+        self.assertEqual(cls, "R")
+
+    def test_no_to_cc_or_session_data_is_undetermined(self):
+        cls, detail = app._classify_recipient({}, None, None)
+        self.assertIsNone(cls)
+        self.assertIsNone(detail)
+
+    def test_falls_back_to_raw_to_header_when_no_structured_field_present(self):
+        raw = "From: a@example.com\r\nTo: aaron@rpgm.tools\r\nSubject: Hi\r\n\r\nBody\r\n"
+        cls, detail = app._classify_recipient({}, None, raw)
+        self.assertEqual(cls, "R")
+        self.assertEqual(detail, "To: aaron@rpgm.tools")
+
+
 class ProposeRuleUnsubscribeContextTests(unittest.TestCase):
     def _propose(self, message: dict) -> str:
         fake_telegram = SimpleNamespace(
