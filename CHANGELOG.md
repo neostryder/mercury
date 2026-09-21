@@ -15,6 +15,22 @@
   selected by id, so a paraphrased or invented rule cannot reach the policy.
   Apply `worker/schema.sql` first.
 
+- [Internal] [Filtering] `backend/sender_facts.py` computes the sender's TLD,
+  whether it is a foreign country code, and how the recipient was actually
+  addressed, and hands them to the structured judge as observed facts. Two
+  standing rules previously asked the classifier to decide these, which is a
+  model guessing at a string comparison; both have been retired. Neither became
+  a deterministic bounce: a Bcc has no visible recipient by design, and
+  `_classify_recipient()` returns nothing whenever the webhook payload lacks
+  usable To/Cc data, which is true of 564 of 570 accepted messages in the log.
+  A foreign TLD likewise catches a Japanese support desk as readily as a spam
+  campaign. Measured across four representative messages, supplying the facts
+  changed no disposition; the retirement of the rules is what mattered.
+
+- [Internal] [Filtering] The structured judge retries once on 429 and 529
+  rather than falling straight back to the judge alone. A real 529 from the
+  service was observed during development.
+
 - [Internal] [Filtering] `backend/verdict_policy.py`, holding the thresholds
   that turn a structured verdict into a disposition and an alert level. Each
   one is overridable by environment variable. Accepting is the default and

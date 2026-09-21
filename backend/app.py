@@ -16,6 +16,7 @@ import digest
 import event_log
 import gandalf_relay
 import mail_delivery
+import sender_facts
 import verdict_policy
 from approvals import ApprovalStore
 from dedup import IngestDedupStore
@@ -1288,7 +1289,8 @@ def _deterministic_verdict(match) -> tuple[dict, dict]:
     )
 
 
-async def judge_email(redacted_content: str, injection: dict, rules: dict[str, list[str]]) -> dict:
+async def judge_email(redacted_content: str, injection: dict,
+                      rules: dict[str, list[str]], facts: dict | None = None) -> dict:
     def _rule_block(disposition: str) -> str:
         return "\n".join(f"- {rule}" for rule in rules.get(disposition, [])) or "(none yet)"
 
@@ -1372,7 +1374,7 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     if structured_judge is not None:
         content, structured = await asyncio.gather(
             judge.ask(prompt),
-            structured_judge.classify(redacted_content, rules, injection),
+            structured_judge.classify(redacted_content, rules, injection, facts),
         )
     else:
         content, structured = await judge.ask(prompt), None
@@ -1673,12 +1675,19 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 f"for {sender_match.selector}: ForwardEmail's own DMARC verdict did not "
                 f"report a pass aligned with claimed From domain {sender_domain}."
             )
+        # Computed before the judge runs, not just for the dashboard: how the
+        # recipient was addressed is one of the facts handed to the structured
+        # judge rather than left for a model to infer from the headers.
+        recipient_class, recipient_detail = _classify_recipient(
+            payload, payload.get("headers"), raw_message)
+
         if sender_match and not authentication_skip:
             injection, verdict = _deterministic_verdict(sender_match)
         else:
             injection = await classifier.check(redacted_content[:4000])
             verdict = await judge_email(
-                redacted_content[:6000], injection, policy["semantic_rules"]
+                redacted_content[:6000], injection, policy["semantic_rules"],
+                facts=sender_facts.describe(sender_domain, recipient_class, recipient_detail),
             )
             if authentication_skip:
                 verdict["reasoning"] = f"{authentication_skip} {verdict['reasoning']}"
@@ -1704,7 +1713,6 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # stays silent regardless of category or how the judge worded its
         # confidence; the daily summary and dashboard cover it instead.
         alert_eligible = verdict["disposition"] in ("421", "550") or injection["label"] == "INJECTION"
-        recipient_class, recipient_detail = _classify_recipient(payload, payload.get("headers"), raw_message)
         event_log.log_event("messages", {
             "received_at": _now(),
             "from_display": from_display,
