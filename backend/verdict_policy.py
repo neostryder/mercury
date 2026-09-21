@@ -34,10 +34,22 @@ RULE_CONFIDENCE = float(os.environ.get("MERCURY_RULE_CONFIDENCE", "0.70"))
 PHISH_CONFIDENCE = float(os.environ.get("MERCURY_PHISH_CONFIDENCE", "0.80"))
 SPAM_CONFIDENCE = float(os.environ.get("MERCURY_SPAM_CONFIDENCE", "0.80"))
 
-# Accepting is the safe direction and the overwhelming majority of real mail, so
-# this is the one threshold where being slightly wrong is cheap.
-LEGIT_CONFIDENCE = float(os.environ.get("MERCURY_LEGIT_CONFIDENCE", "0.80"))
-LEGIT_SEVERITY_CEILING = float(os.environ.get("MERCURY_LEGIT_SEVERITY_CEILING", "1.0"))
+# Accepting is the default, and nothing has to earn it.
+#
+# An earlier version of this file inverted that: it accepted only a confidently
+# LEGIT verdict and soft-deferred everything else. Measured against 45 messages
+# this mailbox actually accepted, 44 of them would have been held. Ordinary mail
+# is frequently not confidently anything - a bank statement notice, a credit
+# alert and a newsletter all sat between 0.50 and 0.60 - because they are
+# structurally similar to the phishing that imitates them. Confidence separates
+# a certain call from a borderline one; it does not measure legitimacy, and
+# requiring it before accepting mail penalises exactly the categories a real
+# inbox is full of.
+#
+# So only confident badness moves a message off 250. These two thresholds are
+# the only paths to a soft-defer.
+DEFER_SEVERITY = float(os.environ.get("MERCURY_DEFER_SEVERITY", "2.0"))
+DEFER_CONFIDENCE = float(os.environ.get("MERCURY_DEFER_CONFIDENCE", "0.50"))
 
 # A signal counts as present above this. Used only for the alert level, never to
 # decide a disposition on its own.
@@ -97,15 +109,16 @@ def decide(structured: dict, rules: dict[str, list[str]]) -> dict:
             disposition, why = "550", "confident phish"
         elif verdict == "SPAM" and verdict_conf >= SPAM_CONFIDENCE:
             disposition, why = "550", "confident spam"
-        elif (verdict == "LEGIT" and verdict_conf >= LEGIT_CONFIDENCE
-              and severity < LEGIT_SEVERITY_CEILING):
-            disposition, why = "250", "confident legit"
-        else:
-            # Everything that is not confidently one thing is a soft-defer. This
-            # is the case the prompt tried to describe in prose, and it is the
-            # one a probability actually settles.
+        elif severity >= DEFER_SEVERITY:
             disposition = "421"
-            why = "verdict {} at confidence {:.2f}".format(verdict, verdict_conf)
+            why = "threat evidence {:.1f} without a confident verdict".format(severity)
+        elif verdict in ("PHISH", "SPAM") and verdict_conf >= DEFER_CONFIDENCE:
+            disposition = "421"
+            why = "leaning {} at confidence {:.2f}".format(verdict, verdict_conf)
+        else:
+            # Accept. Nothing here is evidence of a problem, and an unfamiliar
+            # sender is not by itself a reason to hold someone's mail.
+            disposition, why = "250", "no confident evidence of a problem"
 
     injection_signal = signals.get("attempts_injection", 0.0)
     alert = _alert_for(disposition, verdict, verdict_conf, severity,

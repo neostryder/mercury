@@ -17,10 +17,16 @@
 
 - [Internal] [Filtering] `backend/verdict_policy.py`, holding the thresholds
   that turn a structured verdict into a disposition and an alert level. Each
-  one is overridable by environment variable. An accepted message can no
-  longer page Telegram under any combination of signals. Spam bounces on
-  verdict confidence alone: bulk marketing carries almost no threat evidence,
-  and a severity gate soft-deferred a real one at 0.98 confidence.
+  one is overridable by environment variable. Accepting is the default and
+  nothing has to earn it: only a confident SPAM or PHISH verdict, threat
+  evidence at or above `MERCURY_DEFER_SEVERITY`, or a lean toward one of those
+  above `MERCURY_DEFER_CONFIDENCE` moves a message off 250. Confidence is not a
+  legitimacy score, and requiring it before accepting mail held 44 of 45
+  messages this mailbox had really accepted: a bank statement notice, a credit
+  alert and a newsletter all sat between 0.50 and 0.60, because phishing
+  imitates exactly those. The severity cutoff sits above everything those 45
+  produced, the highest being 1.81. An accepted message can no longer page
+  Telegram under any combination of signals.
 
 - [Visible] [Dashboard] The Recent activity and Hard bounces tables gained a
   Recip. column showing how the message was actually addressed: `R` (an

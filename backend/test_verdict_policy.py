@@ -87,18 +87,33 @@ class DispositionTests(unittest.TestCase):
             verdict_policy.decide(structured("SPAM", 0.64, severity=0.8), RULES)["disposition"],
             "421")
 
-    def test_unsure_always_soft_defers(self):
+    def test_unsure_with_no_threat_evidence_is_accepted(self):
+        """22 of 45 messages this mailbox actually accepted came back UNSURE.
+        Deferring on the verdict alone would hold half the inbox."""
         d = verdict_policy.decide(structured("UNSURE", 0.27), RULES)
-        self.assertEqual(d["disposition"], "421")
-        self.assertIn("0.27", d["why"])
+        self.assertEqual(d["disposition"], "250")
 
-    def test_confident_legit_accepts_but_severity_overrides_it(self):
+    def test_unconfident_verdicts_do_not_hold_mail(self):
+        """Ordinary mail is frequently not confidently anything: a bank notice,
+        a credit alert and a newsletter measured 0.50 to 0.60, because phishing
+        imitates exactly those. Confidence is not a legitimacy score."""
+        for verdict, conf in (("LEGIT", 0.60), ("LEGIT", 0.50), ("UNSURE", 0.31)):
+            d = verdict_policy.decide(structured(verdict, conf, severity=0.6), RULES)
+            self.assertEqual(d["disposition"], "250", "{} at {}".format(verdict, conf))
+
+    def test_real_threat_evidence_defers_without_a_confident_verdict(self):
+        """Severity 2.0 is above everything 45 real accepted messages produced;
+        the highest was 1.81."""
         self.assertEqual(
-            verdict_policy.decide(structured("LEGIT", 0.9, severity=0.2), RULES)["disposition"],
+            verdict_policy.decide(structured("UNSURE", 0.3, severity=1.8), RULES)["disposition"],
             "250")
         self.assertEqual(
-            verdict_policy.decide(structured("LEGIT", 0.9, severity=1.8), RULES)["disposition"],
+            verdict_policy.decide(structured("UNSURE", 0.3, severity=2.2), RULES)["disposition"],
             "421")
+
+    def test_leaning_bad_defers_even_below_the_bounce_bar(self):
+        d = verdict_policy.decide(structured("PHISH", 0.55, severity=0.9), RULES)
+        self.assertEqual(d["disposition"], "421")
 
     def test_an_unfamiliar_sender_is_not_by_itself_a_reason_to_defer(self):
         """The prompt spent four lines saying this. Here it is just the absence
@@ -120,7 +135,7 @@ class AlertTests(unittest.TestCase):
             self.assertEqual(d["alert"], "NONE")
 
     def test_a_genuinely_ambiguous_soft_defer_pages_urgently(self):
-        d = verdict_policy.decide(structured("UNSURE", 0.3), RULES)
+        d = verdict_policy.decide(structured("UNSURE", 0.3, severity=2.4), RULES)
         self.assertEqual(d["disposition"], "421")
         self.assertEqual(d["alert"], "URGENT")
 
