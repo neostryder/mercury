@@ -21,5 +21,10 @@ services:
       - MERCURY_DIGEST_SECRET=${MERCURY_DIGEST_SECRET}
       - MERCURY_DIGEST_SMTP_USER=${MERCURY_DIGEST_SMTP_USER}
       - MERCURY_DIGEST_SMTP_PASSWORD=${MERCURY_DIGEST_SMTP_PASSWORD}
+      # Structured judge. Both default false, so an image built without them
+      # behaves exactly as it did before.
+      - STRUCTURED_JUDGE_ENABLED=${STRUCTURED_JUDGE_ENABLED:-false}
+      - STRUCTURED_JUDGE_AUTHORITATIVE=${STRUCTURED_JUDGE_AUTHORITATIVE:-false}
+      - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
     volumes:
       - ./data:/data
