@@ -1,8 +1,18 @@
--- Mercury's event log / dashboard data store (D1). Applied with:
---   wrangler d1 execute mercury-log --remote --file=schema.sql
--- Written by hand rather than via a migrations tool for now - this is a
--- small, append-mostly schema. If it grows enough to need real migrations,
--- switch to `wrangler d1 migrations`.
+-- Mercury's event log / dashboard data store (D1).
+--
+-- THIS FILE IS NO LONGER SAFE TO RUN WHOLE against the live database. The
+-- ALTER TABLE ADD COLUMN statements at the bottom have already been applied,
+-- and SQLite has no IF NOT EXISTS form for them, so a full run fails on
+-- "duplicate column name" and D1 rolls the whole batch back. The CREATE TABLE
+-- statements above never get committed, which makes the failure look like
+-- nothing happened when in fact nothing did.
+--
+-- To add something, run only the new statements:
+--   wrangler d1 execute mercury-log --remote --command "<the new statement>"
+-- On a fresh database, comment the ALTER block out and run the rest.
+--
+-- Written by hand rather than via a migrations tool. It has now grown enough
+-- to want `wrangler d1 migrations` instead; this header is the interim fix.
 
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
