@@ -61,6 +61,31 @@ CREATE TABLE IF NOT EXISTS admin_log (
   detail TEXT
 );
 
+-- Rows where the semantic judge and the structured judge reached different
+-- answers for the same message. Agreement is never written, so this is a
+-- tuning record rather than a second copy of `messages`: the thresholds in
+-- backend/verdict_policy.py are read off these disagreements.
+--
+-- Apply this file BEFORE deploying a worker that references the table. The
+-- nightly retention sweep runs its DELETEs as one D1 batch, and a batch
+-- naming a table that does not exist fails as a whole, taking the other
+-- tables' purges down with it.
+CREATE TABLE IF NOT EXISTS judge_comparisons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  compared_at TEXT NOT NULL,
+  authoritative TEXT,
+  fields TEXT,
+  detail TEXT,
+  structured_confidence REAL,
+  structured_severity REAL,
+  structured_why TEXT,
+  latency_ms INTEGER,
+  model TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_judge_comparisons_compared_at
+  ON judge_comparisons (compared_at);
+
 -- Migration, apply once against an existing remote database (CREATE TABLE
 -- IF NOT EXISTS above is safe to re-run; ALTER TABLE ADD COLUMN is not -
 -- SQLite has no IF NOT EXISTS form for it, so re-running this against a

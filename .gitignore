@@ -8,3 +8,5 @@ __pycache__/
 data/
 identities.json
 worker/wrangler.toml
+
+.claude/

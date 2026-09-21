@@ -101,7 +101,27 @@ it in the matching `get_*()` function to use something else:
 |---|---|---|---|
 | Prompt-injection classifier | `providers/classifier.py` | HTTP call to any classifier server | `POST {"text"} -> {"label": "SAFE"\|"INJECTION", "score"}` |
 | Semantic judge | `providers/judge.py` | HTTP call to an [agent gateway](gateway/README.md) | `POST {"prompt"} -> {"response"}` |
+| Structured judge (optional) | `providers/structured_judge.py` | TypeSafe System One | `classify(content, rules, injection) -> typed answers with probabilities, or None` |
 | Notifications | `providers/notifier.py` | Telegram bot message | send one plain-text message |
+
+The **structured judge** is off unless `STRUCTURED_JUDGE_ENABLED=true`, and with
+it unset the pipeline is exactly what it was. It exists because the judge above
+returns free text that gets parsed back into fields by six regexes, each with a
+silent fallback: a reply whose format drifts leaves the verdict at UNSURE and the
+disposition at 250, which is indistinguishable from a deliberate accept. It also
+returns no probability, so nothing downstream can separate a borderline call from
+a certain one.
+
+It does not replace the judge. It answers the classification questions and the
+judge still writes the reasoning sentence, because the model behind this seam
+does not generate text at all. Thresholds turning those answers into a
+disposition and an alert level live in `backend/verdict_policy.py` rather than in
+prose inside a prompt, and each is overridable by environment variable.
+
+Enabled, it only reports: disagreements between the two judges are written to the
+`judge_comparisons` table and nothing else changes. It decides a disposition only
+once `STRUCTURED_JUDGE_AUTHORITATIVE=true` as well. Apply `worker/schema.sql`
+before enabling either.
 
 The judge in particular is meant to be whatever LLM or agent setup you
 already trust with something like this - a hosted model API called
