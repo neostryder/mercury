@@ -16,6 +16,7 @@ import digest
 import event_log
 import gandalf_relay
 import mail_delivery
+import verdict_policy
 from approvals import ApprovalStore
 from dedup import IngestDedupStore
 from filtering import (
@@ -27,6 +28,7 @@ from filtering import (
 from providers.classifier import get_classifier
 from providers.judge import get_judge
 from providers.notifier import get_notifier
+from providers.structured_judge import get_structured_judge
 from telegram_approvals import TelegramApprovals
 
 
@@ -201,6 +203,14 @@ MAX_CREDENTIAL_BODY_BYTES = 4096
 classifier = get_classifier()
 judge = get_judge()
 notifier = get_notifier()
+# None unless STRUCTURED_JUDGE_ENABLED is set, in which case the pipeline is
+# byte-for-byte what it was before. When it is set, the structured judge runs
+# alongside the judge and only reports; it decides nothing until
+# STRUCTURED_JUDGE_AUTHORITATIVE is also set, so the disagreements can be read
+# off the event log first.
+structured_judge = get_structured_judge()
+STRUCTURED_JUDGE_AUTHORITATIVE = os.environ.get(
+    "STRUCTURED_JUDGE_AUTHORITATIVE", "false").lower() == "true"
 approval_store = ApprovalStore(PENDING_APPROVALS_PATH)
 dedup_store = IngestDedupStore(INGEST_DEDUP_PATH)
 policy_store = FilteringPolicyStore(RULES_LEDGER_PATH)
@@ -1354,7 +1364,18 @@ ALERT: <NONE|STANDARD|URGENT>
 REASONING: <reasoning>
 RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 """
-    content = await judge.ask(prompt)
+    # Both judges see the same message. They are gathered rather than awaited in
+    # turn because the structured one answers in well under a second and the
+    # judge can take minutes; running them in sequence would make the cheap call
+    # look expensive. A structured-judge failure returns None inside its own
+    # provider, so it cannot fail this gather.
+    if structured_judge is not None:
+        content, structured = await asyncio.gather(
+            judge.ask(prompt),
+            structured_judge.classify(redacted_content, rules, injection),
+        )
+    else:
+        content, structured = await judge.ask(prompt), None
 
     verdict, disposition, reasoning = "UNSURE", "250", content.strip()
     category, alert = "OTHER", "NONE"
@@ -1382,7 +1403,7 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         # fail (or worse, match the wrong entry) when used to reverse a rule.
         if candidate and candidate.upper() != "NONE" and candidate in all_rules:
             triggered_rule = candidate
-    return {
+    result = {
         "verdict": verdict,
         "disposition": disposition,
         "category": category,
@@ -1390,6 +1411,40 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         "reasoning": reasoning,
         "triggered_rule": triggered_rule,
     }
+
+    if structured is None:
+        return result
+
+    decision = verdict_policy.decide(structured, rules)
+    diffs = verdict_policy.disagreement(result, decision)
+    # Agreement is not informative and is not worth a row. Only the cases where
+    # the two judges reached different answers are worth tuning thresholds on.
+    if diffs:
+        event_log.log_event("judge_comparisons", {
+            "compared_at": _now(),
+            "authoritative": "structured" if STRUCTURED_JUDGE_AUTHORITATIVE else "judge",
+            "fields": json.dumps(sorted(diffs)),
+            "detail": json.dumps(diffs)[:4000],
+            "structured_confidence": decision["confidence"],
+            "structured_severity": decision["severity"],
+            "structured_why": decision["why"],
+            "latency_ms": structured.get("latency_ms"),
+            "model": structured.get("model"),
+        })
+
+    if not STRUCTURED_JUDGE_AUTHORITATIVE:
+        return result
+
+    # The classification comes from the structured judge; the reasoning sentence
+    # stays with the judge, because the structured model does not generate text
+    # at all. When the judge's own parse fell through to its defaults there is no
+    # real sentence to keep, so a line built from the numbers goes in instead.
+    parsed_anything = bool(re.search(r"VERDICT:\s*\w+", content))
+    result.update({k: decision[k] for k in
+                   ("verdict", "disposition", "category", "alert", "triggered_rule")})
+    if not parsed_anything:
+        result["reasoning"] = verdict_policy.describe(decision, structured)
+    return result
 
 
 @app.get("/health")

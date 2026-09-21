@@ -48,6 +48,13 @@ const LOG_TABLES = {
     'category', 'alert_level', 'reasoning', 'shadow_mode', 'full_content', 'analysis',
     'triggered_rule', 'recipient_class', 'recipient_detail',
   ],
+  // Only rows where the two judges disagreed. Agreement is not informative and
+  // is never written, so this table is a tuning record rather than a second
+  // copy of `messages`.
+  judge_comparisons: [
+    'compared_at', 'authoritative', 'fields', 'detail', 'structured_confidence',
+    'structured_severity', 'structured_why', 'latency_ms', 'model',
+  ],
   rule_changes: ['changed_at', 'action', 'rule_text', 'source'],
   actions: ['executed_at', 'kind', 'details', 'outcome_summary', 'result', 'domain'],
   action_items: ['created_at', 'kind', 'summary', 'related_message_id', 'completed_at'],
@@ -124,6 +131,7 @@ async function purgeExpiredLogs(env) {
   const db = env.MERCURY_LOG;
   const results = await db.batch([
     db.prepare("DELETE FROM messages WHERE received_at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM judge_comparisons WHERE compared_at < datetime('now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM rule_changes WHERE changed_at < datetime('now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM actions WHERE executed_at < datetime('now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM admin_log WHERE at < datetime('now', ?)").bind(cutoffModifier),

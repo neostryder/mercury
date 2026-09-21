@@ -4,6 +4,24 @@
 
 ### Added
 
+- [Internal] [Filtering] A fourth provider seam,
+  `backend/providers/structured_judge.py`, answering the judge's
+  classification questions as typed values with calibrated probabilities. It
+  runs alongside the judge on the same message and logs a `judge_comparisons`
+  row whenever the two disagree. Agreement is not logged. Gated behind
+  `STRUCTURED_JUDGE_ENABLED`, and decides nothing until
+  `STRUCTURED_JUDGE_AUTHORITATIVE` is set too. The judge still writes the
+  reasoning sentence; this seam's model generates no text. Standing rules are
+  selected by id, so a paraphrased or invented rule cannot reach the policy.
+  Apply `worker/schema.sql` first.
+
+- [Internal] [Filtering] `backend/verdict_policy.py`, holding the thresholds
+  that turn a structured verdict into a disposition and an alert level. Each
+  one is overridable by environment variable. An accepted message can no
+  longer page Telegram under any combination of signals. Spam bounces on
+  verdict confidence alone: bulk marketing carries almost no threat evidence,
+  and a severity gate soft-deferred a real one at 0.98 confidence.
+
 - [Visible] [Dashboard] The Recent activity and Hard bounces tables gained a
   Recip. column showing how the message was actually addressed: `R` (an
   rpgm.tools address visible in To/Cc), `F` (a personal address that

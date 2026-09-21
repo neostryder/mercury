@@ -1178,5 +1178,139 @@ class TelegramDecisionTests(unittest.TestCase):
         self.assertEqual(self.finalize.await_count, 0)
 
 
+JUDGE_REPLY = """VERDICT: LEGIT
+DISPOSITION: 250
+CATEGORY: TRANSACTIONAL
+ALERT: NONE
+REASONING: An ordinary receipt from a known retailer.
+RULE_MATCH: NONE"""
+
+STRUCTURED_RULES = {
+    "550": ["The message asks the reader to give money to a political campaign."],
+    "421": [],
+    "250": [],
+}
+
+
+def _structured(verdict="PHISH", confidence=0.97, severity=3.0, category="PHISHING"):
+    return {
+        "verdict": {"choice": verdict, "confidence": confidence},
+        "category": {"choice": category, "confidence": 0.95},
+        "severity": {"score": severity, "confidence": 0.9},
+        "matched_rule": {"choice": "none", "confidence": 0.9},
+        "signals": {"attempts_injection": 0.02,
+                    "impersonates_known_party": 0.9,
+                    "requests_credentials_or_payment": 0.1,
+                    "manufactured_urgency": 0.8,
+                    "solicits_money": 0.1},
+        "rule_ids": {"r550_0": "550"},
+        "latency_ms": 310,
+        "model": "jev-1.13.0",
+    }
+
+
+class StructuredJudgeWiringTests(unittest.TestCase):
+    def setUp(self):
+        self.original_judge = app.judge
+        self.original_structured = app.structured_judge
+        self.original_authoritative = app.STRUCTURED_JUDGE_AUTHORITATIVE
+        self.logged = []
+        self.log_patch = patch.object(app.event_log, "log_event",
+                                      side_effect=lambda t, f: self.logged.append((t, f)))
+        self.log_patch.start()
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value=JUDGE_REPLY))
+
+    def tearDown(self):
+        self.log_patch.stop()
+        app.judge = self.original_judge
+        app.structured_judge = self.original_structured
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = self.original_authoritative
+
+    def _run(self):
+        return asyncio.run(app.judge_email(
+            "From: a@example.com\n\nMessage",
+            {"label": "SAFE", "score": 0.01},
+            STRUCTURED_RULES,
+        ))
+
+    def test_unconfigured_leaves_the_pipeline_exactly_as_it_was(self):
+        app.structured_judge = None
+        result = self._run()
+        self.assertEqual(result["verdict"], "LEGIT")
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(self.logged, [])
+
+    def test_shadow_mode_logs_the_disagreement_and_changes_nothing(self):
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = False
+        result = self._run()
+
+        self.assertEqual(result["verdict"], "LEGIT")
+        self.assertEqual(result["disposition"], "250")
+
+        table, fields = self.logged[0]
+        self.assertEqual(table, "judge_comparisons")
+        self.assertEqual(fields["authoritative"], "judge")
+        detail = json.loads(fields["detail"])
+        self.assertEqual(detail["disposition"], {"judge": "250", "structured": "550"})
+        self.assertEqual(fields["latency_ms"], 310)
+
+    def test_agreement_is_not_logged(self):
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured(
+                "LEGIT", 0.95, 0.1, category="TRANSACTIONAL")))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = False
+        result = self._run()
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual([t for t, _ in self.logged], [])
+
+    def test_authoritative_takes_the_classification_and_keeps_the_reasoning(self):
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+
+        self.assertEqual(result["verdict"], "PHISH")
+        self.assertEqual(result["disposition"], "550")
+        self.assertEqual(result["category"], "PHISHING")
+        self.assertEqual(result["alert"], "STANDARD")
+        # The structured model does not generate text, so a real parsed sentence
+        # from the judge is kept rather than replaced with a built one.
+        self.assertEqual(result["reasoning"],
+                         "An ordinary receipt from a known retailer.")
+
+    def test_a_structured_failure_never_disturbs_the_verdict(self):
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(self.logged, [])
+
+    def test_an_unparseable_judge_reply_gets_a_reasoning_line_built_from_numbers(self):
+        """The six parse regexes fall back to UNSURE/250 silently. When the
+        structured judge is authoritative that no longer decides anything, but
+        the reasoning field would still be the raw unparsed reply."""
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="I could not comply."))
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+
+        self.assertEqual(result["disposition"], "550")
+        self.assertIn("Structured verdict:", result["reasoning"])
+        self.assertIn("PHISH at 97% confidence", result["reasoning"])
+
+    def test_both_judges_see_the_same_message_and_rules(self):
+        classify = AsyncMock(return_value=_structured())
+        app.structured_judge = SimpleNamespace(classify=classify)
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = False
+        self._run()
+        args = classify.await_args.args
+        self.assertEqual(args[0], "From: a@example.com\n\nMessage")
+        self.assertEqual(args[1], STRUCTURED_RULES)
+        self.assertEqual(args[2], {"label": "SAFE", "score": 0.01})
+
+
 if __name__ == "__main__":
     unittest.main()
