@@ -34,6 +34,19 @@ RULE_CONFIDENCE = float(os.environ.get("MERCURY_RULE_CONFIDENCE", "0.70"))
 PHISH_CONFIDENCE = float(os.environ.get("MERCURY_PHISH_CONFIDENCE", "0.80"))
 SPAM_CONFIDENCE = float(os.environ.get("MERCURY_SPAM_CONFIDENCE", "0.80"))
 
+# A SPAM/PHISH verdict carrying a real deception signal - it claims to be a
+# party it is not, or the model itself categorized it as a scam or phishing
+# attempt - does not need to clear the full confidence bar above before it
+# bounces outright. Two live 421s (2026-09-23) were exactly this: a HELOC
+# lead-gen message wearing AmeriSave's branding from an unrelated domain, and
+# a health-insurance lead-gen message wearing HealthCare.com's branding from
+# another unrelated domain, one scored PROMOTIONAL and one SCAM by category but
+# both plainly deceptive. Genuinely unclear mail - no impersonation signal, no
+# scam/phishing category, or real confidence below this bar - still lands on
+# 421 for review; this only narrows what qualifies for it.
+DECEPTIVE_CONFIDENCE = float(os.environ.get("MERCURY_DECEPTIVE_CONFIDENCE", "0.55"))
+DECEPTIVE_CATEGORIES = {"SCAM", "PHISHING"}
+
 # Accepting is the default, and nothing has to earn it.
 #
 # An earlier version of this file inverted that: it accepted only a confidently
@@ -104,11 +117,18 @@ def decide(structured: dict, rules: dict[str, list[str]]) -> dict:
             except (ValueError, IndexError, KeyError):
                 triggered_rule = None
 
+    deceptive = (category in DECEPTIVE_CATEGORIES
+                 or signals.get("impersonates_known_party", 0.0) >= SIGNAL_PRESENT)
+
     if disposition is None:
         if verdict == "PHISH" and verdict_conf >= PHISH_CONFIDENCE:
             disposition, why = "550", "confident phish"
         elif verdict == "SPAM" and verdict_conf >= SPAM_CONFIDENCE:
             disposition, why = "550", "confident spam"
+        elif (verdict in ("PHISH", "SPAM") and deceptive
+              and verdict_conf >= DECEPTIVE_CONFIDENCE):
+            disposition = "550"
+            why = "confident deceptive {} ({})".format(verdict.lower(), category)
         elif severity >= DEFER_SEVERITY:
             disposition = "421"
             why = "threat evidence {:.1f} without a confident verdict".format(severity)

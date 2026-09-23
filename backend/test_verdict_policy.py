@@ -121,6 +121,39 @@ class DispositionTests(unittest.TestCase):
         d = verdict_policy.decide(structured("LEGIT", 0.86, severity=0.3), RULES)
         self.assertEqual(d["disposition"], "250")
 
+    def test_a_scam_categorized_spam_bounces_below_the_general_bar(self):
+        """2026-09-23 421: a health-insurance lead-gen message wearing
+        HealthCare.com's branding from an unrelated domain, categorized SCAM.
+        Deceptive and confident is enough; it does not need to clear the
+        blanket 0.80 SPAM bar too."""
+        d = verdict_policy.decide(structured("SPAM", 0.65, severity=1.0, category="SCAM"), RULES)
+        self.assertEqual(d["disposition"], "550")
+        self.assertEqual(d["why"], "confident deceptive spam (SCAM)")
+
+    def test_impersonation_promotes_a_promotional_spam_to_bounce(self):
+        """2026-09-23 421: a HELOC lead-gen message wearing AmeriSave's
+        branding from an unrelated domain, categorized PROMOTIONAL rather than
+        SCAM. The impersonation signal, not the category, is what makes it
+        deceptive."""
+        d = verdict_policy.decide(
+            structured("SPAM", 0.65, severity=1.0, category="PROMOTIONAL",
+                       impersonates_known_party=0.9),
+            RULES)
+        self.assertEqual(d["disposition"], "550")
+
+    def test_a_low_confidence_scam_verdict_still_defers(self):
+        """Narrowing 421, not removing it: a deceptive category or signal
+        does not bypass the confidence floor, only the higher general one."""
+        d = verdict_policy.decide(structured("SPAM", 0.52, severity=1.0, category="SCAM"), RULES)
+        self.assertEqual(d["disposition"], "421")
+
+    def test_a_generic_promotional_spam_without_deception_still_defers(self):
+        """No scam/phishing category and no impersonation signal: this is the
+        case 421 stays reserved for."""
+        d = verdict_policy.decide(
+            structured("SPAM", 0.65, severity=1.0, category="PROMOTIONAL"), RULES)
+        self.assertEqual(d["disposition"], "421")
+
 
 class AlertTests(unittest.TestCase):
     def test_an_accepted_message_never_pages_whatever_else_is_true(self):
