@@ -194,6 +194,13 @@ SHARED_SECRET = os.environ["MERCURY_SHARED_SECRET"]
 # on. Set MERCURY_SHADOW_MODE=true and restart to go back to report-only
 # without a code change, if a bad disposition needs to be walked back fast.
 SHADOW_MODE = os.environ.get("MERCURY_SHADOW_MODE", "false").lower() == "true"
+# Telegram allows only one long-poll getUpdates holder per bot at a time. When
+# the same bot's receive side is already held elsewhere (Loremaster's gateway),
+# this process must not also poll - a second poller does not queue behind the
+# first, it actively knocks the other one's connection down. Default stays
+# true so a solo deployment (no separate gateway holding the bot) is unaffected.
+TELEGRAM_POLLING_ENABLED = os.environ.get(
+    "MERCURY_TELEGRAM_POLLING_ENABLED", "true").lower() == "true"
 RULES_LEDGER_PATH = Path(os.environ.get("MERCURY_RULES_LEDGER_PATH", "/data/rules_ledger.json"))
 IDENTITIES_PATH = Path(os.environ.get("MERCURY_IDENTITIES_PATH", "/data/identities.json"))
 PENDING_APPROVALS_PATH = Path(os.environ.get("MERCURY_PENDING_APPROVALS_PATH", "/data/pending_approvals.json"))
@@ -232,10 +239,14 @@ telegram_approvals = TelegramApprovals(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    poll_task = asyncio.create_task(telegram_approvals.poll_forever())
+    poll_task = (
+        asyncio.create_task(telegram_approvals.poll_forever())
+        if TELEGRAM_POLLING_ENABLED else None
+    )
     digest_task = asyncio.create_task(digest.run_forever(judge))
     yield
-    poll_task.cancel()
+    if poll_task:
+        poll_task.cancel()
     digest_task.cancel()
 
 
