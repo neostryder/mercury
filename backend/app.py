@@ -1937,3 +1937,21 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
         except Exception:
             pass
         return {"ok": False, "error": str(exc)}
+
+
+@app.post("/telegram/relay")
+async def telegram_relay(request: Request, x_mercury_secret: str | None = Header(None)):
+    """Receives an update forwarded by whichever process actually holds this
+    bot's Telegram getUpdates connection (see MERCURY_TELEGRAM_POLLING_ENABLED
+    - only one process may ever hold that per bot). The body is the same
+    shape as a single Telegram Update object: {"message": {"text": ...,
+    "reply_to_message": {"message_id": ...}}} for a text reply, or
+    {"callback_query": {"id": ..., "data": ...}} for a button tap - trimmed to
+    just the fields Mercury's own correlation logic reads, since the forwarder
+    does not need to reconstruct anything Telegram-specific beyond that.
+    """
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    update = await request.json()
+    await telegram_approvals.handle_relayed_update(update)
+    return {"ok": True}

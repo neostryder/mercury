@@ -265,6 +265,16 @@ class TelegramApprovals:
             except Exception:
                 pass
 
+    async def handle_relayed_update(self, update: dict) -> None:
+        """Entry point for an update Telegram delivered to someone else's
+        getUpdates connection and that process forwarded here instead - the
+        counterpart to poll_forever() when this process must not hold the
+        bot's own receive side (see MERCURY_TELEGRAM_POLLING_ENABLED). Takes
+        the same shape as a single Telegram Update object, trimmed to
+        whichever of `message`/`callback_query` and their fields
+        _handle_update actually reads."""
+        await self._handle_update(update)
+
     async def poll_forever(self) -> None:
         async with httpx.AsyncClient(timeout=40) as client:
             while True:

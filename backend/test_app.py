@@ -642,6 +642,27 @@ CAVEAT: NONE""")
         self.assertIn("no message attached", message_context_arg)
 
 
+class TelegramRelayTests(unittest.TestCase):
+    """The counterpart to poll_forever() when Mercury must not hold the bot's
+    own getUpdates connection - see MERCURY_TELEGRAM_POLLING_ENABLED."""
+
+    def test_forwards_the_update_to_the_approval_handler(self):
+        fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
+        update = {"message": {"text": "yes", "reply_to_message": {"message_id": 42}}}
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(app.telegram_relay(FakeRequest(update), "test-secret"))
+        self.assertTrue(response["ok"])
+        fake_telegram.handle_relayed_update.assert_awaited_once_with(update)
+
+    def test_rejects_a_wrong_secret(self):
+        fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.telegram_relay(FakeRequest({}), "wrong-secret"))
+        self.assertEqual(ctx.exception.status_code, 403)
+        fake_telegram.handle_relayed_update.assert_not_awaited()
+
+
 class UnsubscribeRouteExtractionTests(unittest.TestCase):
     """A sender whose plain-text alternative is a link-stripped rendering of
     the HTML leaves the word "Unsubscribe" and no URL, so the route has to be
