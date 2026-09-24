@@ -126,6 +126,20 @@ export default {
       return proxySynchronously(`${env.BACKEND_BASE_URL}${pathname}`, bodyText, env);
     }
 
+    // The generic catch-all (currently just /rules/propose, from the
+    // Thunderbird extension). thunderbird/README.md has always documented
+    // this header as the caller's own copy of MERCURY_SHARED_SECRET, and the
+    // extension has always sent it (thunderbird/popup.js) - but nothing here
+    // ever checked it before forwarding, since the backend-facing call below
+    // supplies its own copy regardless of what the real caller sent. Any
+    // anonymous request reached the backend fully "authenticated" by the
+    // Worker's own outgoing secret, the same defect just fixed for
+    // /telegram/relay, at lower severity here since a proposal still needs a
+    // human Approve tap in Telegram before anything commits.
+    if (request.headers.get('X-Mercury-Secret') !== env.MERCURY_SHARED_SECRET) {
+      return new Response('forbidden', { status: 403 });
+    }
+
     const backendUrl = `${env.BACKEND_BASE_URL}${pathname}`;
 
     return proxySynchronously(backendUrl, bodyText, env);
