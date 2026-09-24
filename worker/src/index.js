@@ -110,6 +110,22 @@ export default {
       return proxyIngest(`${env.BACKEND_BASE_URL}/ingest`, bodyText, env);
     }
 
+    // Unlike /rules/propose (a proposal still needs a human Approve tap
+    // before anything commits), a relayed callback_query can directly commit
+    // a filtering change with no further human step - the catch-all forward
+    // below stamps its OWN backend-facing secret onto every request
+    // regardless of what the real caller sent, so without this check any
+    // anonymous POST to this path would reach the backend fully
+    // "authenticated". Gated on a secret distinct from MERCURY_SHARED_SECRET
+    // so only the process actually forwarding a real Telegram update (the
+    // gateway holding this bot's getUpdates connection) can reach it.
+    if (pathname === '/telegram/relay') {
+      if (request.headers.get('X-Mercury-Relay-Secret') !== env.MERCURY_RELAY_SECRET) {
+        return new Response('forbidden', { status: 403 });
+      }
+      return proxySynchronously(`${env.BACKEND_BASE_URL}${pathname}`, bodyText, env);
+    }
+
     const backendUrl = `${env.BACKEND_BASE_URL}${pathname}`;
 
     return proxySynchronously(backendUrl, bodyText, env);
