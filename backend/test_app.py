@@ -298,6 +298,29 @@ RULE_MATCH: NONE"""))
         self.assertEqual(response.status_code, 421)
         self.assertEqual(fake_telegram.send_trackable_report.await_count, 1)
 
+    def test_soft_defer_report_carries_the_messages_own_recipient_address(self):
+        """A real incident: this was never threaded through at all, so the
+        later Telegram unsubscribe button always saw mail_delivery.IMAP_USER
+        instead of whichever of the recipient's own aliases the message was
+        actually sent to."""
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
+        )
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""VERDICT: SPAM
+DISPOSITION: 421
+CATEGORY: NEWSLETTER
+ALERT: STANDARD
+REASONING: An ordinary promotional newsletter.
+RULE_MATCH: NONE"""))
+        payload = self._payload()
+        payload["to"] = {"value": [{"address": "aaron-huggingface@rpgm.tools", "name": ""}]}
+        fake_telegram = SimpleNamespace(send_trackable_report=AsyncMock())
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        metadata = fake_telegram.send_trackable_report.await_args.args[2]
+        self.assertEqual(metadata["recipient_email"], "aaron-huggingface@rpgm.tools")
+
     def test_judge_prompt_uses_buckets_and_legitimate_mail_calibration(self):
         captured = []
 
@@ -811,6 +834,68 @@ class RecipientClassificationTests(unittest.TestCase):
         cls, detail = app._classify_recipient({}, None, raw)
         self.assertEqual(cls, "R")
         self.assertEqual(detail, "To: aaron@rpgm.tools")
+
+
+class RecipientEmailFromClassificationTests(unittest.TestCase):
+    """_recipient_email_from_classification() recovers the bare address
+    _classify_recipient() embeds in its human-readable detail string, for
+    the unsubscribe agent - see docs/ARCHITECTURE.md's "sends no address at
+    all rather than guessing one"."""
+
+    def test_recovers_the_address_from_an_R_or_F_detail(self):
+        self.assertEqual(
+            app._recipient_email_from_classification("R", "To: aaron-huggingface@rpgm.tools"),
+            "aaron-huggingface@rpgm.tools",
+        )
+        self.assertEqual(
+            app._recipient_email_from_classification("F", "Cc: someone@personal-example.test"),
+            "someone@personal-example.test",
+        )
+
+    def test_recovers_the_address_from_a_lowercase_r_bcc_detail(self):
+        self.assertEqual(
+            app._recipient_email_from_classification("r", "Bcc: aaron@rpgm.tools"),
+            "aaron@rpgm.tools",
+        )
+
+    def test_lowercase_f_class_has_no_recoverable_address(self):
+        self.assertIsNone(app._recipient_email_from_classification(
+            "f", "Bcc via personal-address forward (original address not visible)"))
+
+    def test_no_classification_at_all_has_no_address(self):
+        self.assertIsNone(app._recipient_email_from_classification(None, None))
+
+
+class ExecuteMessageDecisionUnsubscribeTests(unittest.TestCase):
+    """execute_message_decision's "unsubscribe" branch must use the address
+    the message was actually sent to, not a fixed mailbox-wide default - a
+    real incident found it always passing mail_delivery.IMAP_USER regardless
+    of which of the recipient's aliases the message named, which made the
+    unsubscribe agent see a real, different alias on the confirmation page
+    and correctly (per its own instructions) refuse to click confirm."""
+
+    def test_uses_the_messages_own_recipient_email_when_known(self):
+        with patch.object(
+            app, "execute_unsubscribe_action",
+            AsyncMock(return_value=("done", None)),
+        ) as fake:
+            asyncio.run(app.execute_message_decision(
+                "unsubscribe",
+                {"message_metadata": {"recipient_email": "aaron-huggingface@rpgm.tools"},
+                 "message_context": "..."},
+            ))
+        self.assertEqual(fake.await_args.args[-1], "aaron-huggingface@rpgm.tools")
+
+    def test_passes_none_rather_than_guessing_when_unknown(self):
+        with patch.object(
+            app, "execute_unsubscribe_action",
+            AsyncMock(return_value=("done", None)),
+        ) as fake:
+            asyncio.run(app.execute_message_decision(
+                "unsubscribe",
+                {"message_metadata": {}, "message_context": "..."},
+            ))
+        self.assertIsNone(fake.await_args.args[-1])
 
 
 class ProposeRuleUnsubscribeContextTests(unittest.TestCase):

@@ -415,6 +415,24 @@ def _classify_recipient(
     return None, None
 
 
+def _recipient_email_from_classification(
+    recipient_class: str | None, recipient_detail: str | None
+) -> str | None:
+    """The bare address behind _classify_recipient()'s human-readable detail
+    string (e.g. "To: aaron-huggingface@rpgm.tools" -> the address alone),
+    for anything - like the unsubscribe agent - that needs to know which of
+    the recipient's own addresses a message was actually sent to, rather than
+    the tooltip text describing it. None for the "f" class, which is
+    documented to carry no visible address at all, matching
+    docs/ARCHITECTURE.md's "sends no address at all rather than guessing
+    one" - a wrong address handed to a real unsubscribe form is a wrong
+    action taken silently, not a missing one worth guessing at."""
+    if recipient_class == "f" or not recipient_detail:
+        return None
+    _, _, address = recipient_detail.partition(": ")
+    return address or None
+
+
 def _parse_brief_response(content: str) -> dict:
     def _extract(field: str, later_fields: list[str]) -> str | None:
         if later_fields:
@@ -1137,7 +1155,7 @@ async def execute_message_decision(
             f"Unsubscribe from {sender_domain or 'this sender'}",
             brief["message_context"],
             brief_id,
-            mail_delivery.IMAP_USER,
+            metadata.get("recipient_email"),
         )
         if not followup or followup.get("recommendation") != "hard":
             return outcome, None
@@ -1808,6 +1826,9 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                     "already_delivered": bool(
                         SHADOW_MODE
                         or (delivery_result and delivery_result.startswith("delivered to "))
+                    ),
+                    "recipient_email": _recipient_email_from_classification(
+                        recipient_class, recipient_detail
                     ),
                 },
             )
