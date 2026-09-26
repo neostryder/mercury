@@ -384,6 +384,66 @@ class ReplyToUntrackedMessageFallsBackToOpenBriefTests(unittest.TestCase):
         self.assertEqual(self.advance.await_count, 0)
 
 
+class RelayedUpdateTests(unittest.TestCase):
+    """Updates forwarded by the process holding the bot's getUpdates
+    connection come from every chat the bot is in, and a reply there may be
+    addressed to that process rather than to Mercury."""
+
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-relayed-update-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+        self.advance = AsyncMock(return_value={
+            "question": "Which folder should this go to?",
+            "reply": None,
+            "changes": [],
+            "action": None,
+            "caveat": None,
+        })
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=self.advance,
+            finalize=AsyncMock(),
+            execute_action=AsyncMock(),
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(601, 620))
+        self.telegram._answer_callback = AsyncMock()
+        self.brief_id, _, _ = asyncio.run(
+            self.telegram.propose_new("Flag this", "From: someone@example.com")
+        )
+        self.tracked_message_id = 700
+        self.store.track_message(self.tracked_message_id, self.brief_id)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _relayed(self, update: dict, chat_id="test-chat") -> None:
+        asyncio.run(self.telegram.handle_relayed_update({**update, "chat_id": chat_id}))
+
+    def test_reply_to_a_tracked_message_reaches_its_brief(self):
+        self._relayed(_reply_update(self.tracked_message_id, "Do it"))
+        self.assertEqual(self.advance.await_count, 2)
+
+    def test_reply_to_an_untracked_message_does_not_reach_the_open_brief(self):
+        self._relayed(_reply_update(999999, "yes"))
+        self.assertEqual(self.advance.await_count, 1)
+        self.assertEqual(self.store.get_brief(self.brief_id)["status"], "open")
+
+    def test_update_from_another_chat_is_dropped(self):
+        self._relayed(_reply_update(self.tracked_message_id, "Do it"), chat_id="other-chat")
+        self.assertEqual(self.advance.await_count, 1)
+
+    def test_update_without_a_chat_id_is_dropped(self):
+        asyncio.run(self.telegram.handle_relayed_update(_reply_update(self.tracked_message_id, "Do it")))
+        self.assertEqual(self.advance.await_count, 1)
+
+    def test_button_tap_from_this_chat_is_handled(self):
+        self._relayed({"callback_query": {"id": "cb-1", "data": "decision:dismiss:no-such-brief"}})
+        self.telegram._answer_callback.assert_awaited_once_with("cb-1", "Already handled.")
+
+
 class ApproveActionFailureTests(unittest.TestCase):
     """A failed action used to propagate an exception up into
     poll_forever's blanket try/except, which logged nothing and told the

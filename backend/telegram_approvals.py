@@ -272,8 +272,17 @@ class TelegramApprovals:
         bot's own receive side (see MERCURY_TELEGRAM_POLLING_ENABLED). Takes
         the same shape as a single Telegram Update object, trimmed to
         whichever of `message`/`callback_query` and their fields
-        _handle_update actually reads."""
-        await self._handle_update(update)
+        _handle_update actually reads, plus a top-level `chat_id`.
+
+        The forwarder sees every update in every chat the bot is in, so an
+        update without this chat's id is dropped: Telegram numbers messages
+        per chat, and a reply in some other chat can carry a message_id that
+        Mercury sent here. A relayed reply to a message Mercury never sent is
+        dropped too, since it was addressed to the forwarder, and guessing the
+        newest open brief would turn a "yes" meant for it into an approval."""
+        if str(update.get("chat_id")) != str(self._chat_id):
+            return
+        await self._handle_update(update, fall_back_to_open_brief=False)
 
     async def poll_forever(self) -> None:
         async with httpx.AsyncClient(timeout=40) as client:
@@ -302,7 +311,7 @@ class TelegramApprovals:
                     logger.exception("poll_forever: update handling failed")
                     await asyncio.sleep(5)
 
-    async def _handle_update(self, update: dict) -> None:
+    async def _handle_update(self, update: dict, fall_back_to_open_brief: bool = True) -> None:
         callback = update.get("callback_query")
         if callback:
             await self._handle_callback(callback)
@@ -319,6 +328,8 @@ class TelegramApprovals:
             return
 
         brief_id = self._store.brief_for_message(reply_to["message_id"])
+        if not brief_id and not fall_back_to_open_brief:
+            return
         if not brief_id:
             # A reply to a message Mercury never tracked - too old to still
             # be in the index, or a reply to something Loremaster said

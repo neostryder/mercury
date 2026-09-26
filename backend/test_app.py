@@ -688,7 +688,7 @@ class TelegramRelayTests(unittest.TestCase):
 
     def test_forwards_the_update_to_the_approval_handler(self):
         fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
-        update = {"message": {"text": "yes", "reply_to_message": {"message_id": 42}}}
+        update = {"chat_id": "test-chat", "message": {"text": "yes", "reply_to_message": {"message_id": 42}}}
         with patch.object(app, "telegram_approvals", fake_telegram):
             response = asyncio.run(app.telegram_relay(FakeRequest(update), "test-secret"))
         self.assertTrue(response["ok"])

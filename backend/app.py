@@ -2158,7 +2158,9 @@ async def telegram_relay(request: Request, x_mercury_secret: str | None = Header
     "reply_to_message": {"message_id": ...}}} for a text reply, or
     {"callback_query": {"id": ..., "data": ...}} for a button tap - trimmed to
     just the fields Mercury's own correlation logic reads, since the forwarder
-    does not need to reconstruct anything Telegram-specific beyond that.
+    does not need to reconstruct anything Telegram-specific beyond that. A
+    top-level "chat_id" names the chat the update came from; updates from any
+    chat other than TELEGRAM_CHAT_ID are ignored.
     """
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
