@@ -154,6 +154,8 @@
 
 ### Fixed
 
+- [Visible] [Telegram] A Gandalf handoff that names a hostname blocked by ForwardEmail's link filter is sent again with that hostname written as `host[.]tld`, instead of failing with "Could not reach Gandalf". A failed handoff now logs the SMTP reply. (#64)
+
 - [Visible] [Telegram] Approve, Discard and decision buttons on a Telegram card now take effect. The Hermes gateway holds the bot's only getUpdates connection, and its relay plugin had never forwarded a tap. A relayed update from any other chat is ignored, and so is a relayed reply to a message Mercury did not send, so a reply meant for Loremaster cannot approve an open brief. (#63)
 
 - [Internal] [Filtering] A language-model judge error or timeout no longer discards the structured verdict. The exception used to escape `asyncio.gather()` and fail the whole message open to 250 with a pipeline-error page, even when a confident bounce had already come back. (#61)

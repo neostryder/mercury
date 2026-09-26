@@ -373,6 +373,7 @@ An `ACTION`, when present, is one of:
   `MERCURY_MAILBOX_SMTP_HOST` and `MERCURY_MAILBOX_SMTP_PORT`, and authenticates
   with the mailbox's existing `MERCURY_MAILBOX_IMAP_USER` and
   `MERCURY_MAILBOX_IMAP_PASSWORD` credentials.
+  If ForwardEmail rejects the handoff because a hostname in it is on Cloudflare's Family DNS block list, the relay writes that hostname as `host[.]tld` in the subject and body and sends it again, for up to three hostnames. Every failure is logged with the SMTP reply.
 
 Sent to Telegram (`backend/telegram_approvals.py`), independent of whichever
 `Notifier` provider is configured for one-way alerts, since this needs a
