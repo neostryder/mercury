@@ -1921,20 +1921,15 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             else f"Enforced: {enforced_disposition}"
         )
 
-        # Every message gets logged for the dashboard/daily-summary - the
-        # bulk of traffic (alert level NONE) is never sent to Telegram
-        # individually, since that's exactly what the daily summary and
-        # dashboard are for instead. A hard-bounce recommendation also saves
-        # the full message + reasoning so it can be reviewed (and a rule
-        # reversed) later without having had to catch it live.
+        # Every message gets logged for the dashboard/daily-summary - accepted
+        # mail and hard bounces are not sent individually to Telegram.
+        # A hard-bounce recommendation saves full message + reasoning for
+        # later review even though it does not page.
         is_hard_bounce = verdict["disposition"] == "550"
-        # A message the judge accepts outright (250) never pages Telegram on
-        # its own subjective ALERT call alone - only a soft-defer, a
-        # hard-bounce, or a real injection-classifier hit can still earn one.
-        # A routine LEGIT message (e.g. an account-security login notice)
-        # stays silent regardless of category or how the judge worded its
-        # confidence; the daily summary and dashboard cover it instead.
-        alert_eligible = verdict["disposition"] in ("421", "550") or injection["label"] == "INJECTION"
+        # Only a soft-deferral needs an individual recipient decision.
+        # Accepted mail and hard bounces remain in the dashboard and digest,
+        # regardless of a judge or injection-checker alert recommendation.
+        alert_eligible = enforced_disposition == "421"
         event_log.log_event("messages", {
             "received_at": _now(),
             "from_display": from_display,

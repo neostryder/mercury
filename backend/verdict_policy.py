@@ -167,6 +167,11 @@ def _alert_for(disposition, verdict, verdict_conf, severity, signals, injection_
     if disposition == "250":
         return "NONE"
 
+    # The recipient reviews uncertain mail (421), not mail already rejected.
+    # Even a phishing or injection signal on a 550 belongs in the digest.
+    if disposition == "550":
+        return "NONE"
+
     if injection_signal >= INJECTION_PRESENT:
         return "URGENT"
 
@@ -183,14 +188,8 @@ def _alert_for(disposition, verdict, verdict_conf, severity, signals, injection_
             return "URGENT"
         return "STANDARD"
 
-    # 550 from here. Most hard bounces are routine and the daily summary covers
-    # them; the exception is an active attempt on the recipient's accounts.
-    compromise = (signals.get("requests_credentials_or_payment", 0.0) >= SIGNAL_PRESENT
-                  and signals.get("impersonates_known_party", 0.0) >= SIGNAL_PRESENT)
-    if compromise:
-        return "URGENT"
-    if verdict == "PHISH":
-        return "STANDARD"
+    # Only uncertain mail (421) warrants an individual Telegram report.
+    # Accepted mail and hard bounces remain visible in the dashboard/digest.
     return "NONE"
 
 

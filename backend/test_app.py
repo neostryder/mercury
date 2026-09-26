@@ -281,6 +281,23 @@ RULE_MATCH: NONE"""))
         self.assertEqual(response.status_code, 250)
         self.assertEqual(fake_telegram.send_trackable_report.await_count, 0)
 
+    def test_hard_bounce_never_pages_even_with_injection_and_urgent_judge(self):
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "INJECTION", "score": 0.99})
+        )
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""VERDICT: PHISH
+DISPOSITION: 550
+CATEGORY: PHISHING
+ALERT: URGENT
+REASONING: Impersonation and credential harvesting.
+RULE_MATCH: NONE"""))
+        fake_telegram = SimpleNamespace(send_trackable_report=AsyncMock())
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(response.status_code, 550)
+        fake_telegram.send_trackable_report.assert_not_awaited()
+
     def test_soft_defer_still_pages_telegram_when_the_judge_wants_to(self):
         app.classifier = SimpleNamespace(
             check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
@@ -1383,7 +1400,7 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "PHISH")
         self.assertEqual(result["disposition"], "550")
         self.assertEqual(result["category"], "PHISHING")
-        self.assertEqual(result["alert"], "STANDARD")
+        self.assertEqual(result["alert"], "NONE")
         self.assertTrue(result["reasoning"].startswith("Structured verdict: PHISH"))
         self.assertIn("The language-model judge disagreed (LEGIT, 250): "
                       "An ordinary receipt from a known retailer.", result["reasoning"])

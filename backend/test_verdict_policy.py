@@ -188,21 +188,24 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(d["disposition"], "550")
         self.assertEqual(d["alert"], "NONE")
 
-    def test_a_phishing_bounce_is_worth_same_day_attention(self):
+    def test_a_phishing_bounce_is_silent_for_the_daily_summary(self):
         d = verdict_policy.decide(structured("PHISH", 0.95, severity=3.0), RULES)
-        self.assertEqual(d["alert"], "STANDARD")
+        self.assertEqual(d["disposition"], "550")
+        self.assertEqual(d["alert"], "NONE")
 
-    def test_credential_harvesting_behind_impersonation_is_urgent(self):
+    def test_credential_harvesting_behind_impersonation_is_silent_after_bounce(self):
         d = verdict_policy.decide(
             structured("PHISH", 0.95, severity=3.0,
                        impersonates_known_party=0.95,
                        requests_credentials_or_payment=0.93), RULES)
-        self.assertEqual(d["alert"], "URGENT")
+        self.assertEqual(d["disposition"], "550")
+        self.assertEqual(d["alert"], "NONE")
 
-    def test_an_injection_attempt_is_urgent_even_behind_a_bounce(self):
+    def test_an_injection_attempt_behind_a_bounce_is_silent(self):
         d = verdict_policy.decide(
             structured("SPAM", 0.99, severity=2.5, attempts_injection=0.98), RULES)
-        self.assertEqual(d["alert"], "URGENT")
+        self.assertEqual(d["disposition"], "550")
+        self.assertEqual(d["alert"], "NONE")
 
 
 class DisagreementTests(unittest.TestCase):
@@ -218,7 +221,7 @@ class DisagreementTests(unittest.TestCase):
         d = verdict_policy.decide(structured("PHISH", 0.97, severity=3.0,
                                              category="PHISHING"), RULES)
         diffs = verdict_policy.disagreement(llm, d)
-        self.assertEqual(set(diffs), {"verdict", "disposition", "category", "alert"})
+        self.assertEqual(set(diffs), {"verdict", "disposition", "category"})
         self.assertEqual(diffs["disposition"], {"judge": "250", "structured": "550"})
 
     def test_empty_string_and_none_are_the_same_absent_rule(self):
