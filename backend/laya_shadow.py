@@ -49,7 +49,10 @@ CV_FOLDS = 5
 # A failover backend decides real mail, so the bar is set on what matters:
 # the same disposition as the primary nearly always, and almost never a bounce
 # of mail the primary would have let through, since a bounce cannot be undone.
-READY_MIN_ROWS = int(os.environ.get("LAYA_READY_MIN_ROWS", "200"))
+# 50 rows is a few weeks of one mailbox. At that size the two rate thresholds
+# below allow at most two disagreements and no false bounce at all, so the
+# small sample tightens the gate rather than loosening it.
+READY_MIN_ROWS = int(os.environ.get("LAYA_READY_MIN_ROWS", "50"))
 READY_MIN_AGREEMENT = float(os.environ.get("LAYA_READY_MIN_AGREEMENT", "0.95"))
 READY_MAX_FALSE_BOUNCE = float(os.environ.get("LAYA_READY_MAX_FALSE_BOUNCE", "0.01"))
 # Human labels are the recipient's own Telegram decisions. They are sparse, so

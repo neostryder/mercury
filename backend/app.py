@@ -676,8 +676,14 @@ approval before writing anything.
   express, formatted "<550|421|250> | <standalone rule text>". The bucket is
   the disposition, so the rule text should describe only the matching
   condition and should not add a parenthetical disposition. It will have no
-  access to this conversation later and must stand alone. NONE when there is
-  no semantic standing preference.
+  access to this conversation later and must stand alone. Write it as what a
+  matching message says, asks for, or does, in a full sentence, because a
+  classifier later decides whether each message matches it and a bare label
+  matches poorly: "The message asks the reader to donate money to a political
+  campaign, party or candidate" rather than "Political fundraising". A
+  matching message may never use the rule's key words, so describe the
+  substance rather than the vocabulary. NONE when there is no semantic
+  standing preference.
 - CUSTOM_ACTION: a standing per-sender instruction that is not a disposition,
   formatted "<domain-or-exact-address> | <standalone instruction> |
   FOLDER:<real folder name>" for simple folder routing, or with

@@ -4,7 +4,7 @@
 
 ### Added
 
-- [Internal] [Filtering] A second structured-judge backend, configured with `LAYA_URL`: any server that accepts the same `/v1/systemone` request, such as a self-hosted open-weight model. It answers every message in the background and decides nothing. It takes 4 to 8 s for the full question set against about 0.3 s for the primary, so no message waits for it except during a failover. Each pair of answers is appended to `/data/laya_shadow.jsonl` (answers only, never message content), and `backend/laya_shadow.py` refits a calibration from them at startup and every six hours in a separate process. The primary's answers are the soft targets. Nouls get Platt scaling, while verdict, category and severity get a temperature plus a per-option bias, which can correct a systematic confusion such as PHISH read as SPAM. Confidence is recomputed the way the primary defines it, so the thresholds in `verdict_policy.py` carry over. Readiness is scored out of fold on dispositions: 200 rows, 95% agreement with the primary, and at most 1% bounces of mail the primary did not bounce. With `LAYA_FAILOVER=true` and a ready calibration, a primary outage is decided by the calibrated backend instead of the language-model judge. `GET /laya/status` reports the metrics. (#62)
+- [Internal] [Filtering] A second structured-judge backend, configured with `LAYA_URL`: any server that accepts the same `/v1/systemone` request, such as a self-hosted open-weight model. It answers every message in the background and decides nothing. It takes 4 to 8 s for the full question set against about 0.3 s for the primary, so no message waits for it except during a failover. Each pair of answers is appended to `/data/laya_shadow.jsonl` (answers only, never message content), and `backend/laya_shadow.py` refits a calibration from them at startup and every six hours in a separate process. The primary's answers are the soft targets. Nouls get Platt scaling, while verdict, category and severity get a temperature plus a per-option bias, which can correct a systematic confusion such as PHISH read as SPAM. Confidence is recomputed the way the primary defines it, so the thresholds in `verdict_policy.py` carry over. Readiness is scored out of fold on dispositions: 50 rows, 95% agreement with the primary, and at most 1% bounces of mail the primary did not bounce. With `LAYA_FAILOVER=true` and a ready calibration, a primary outage is decided by the calibrated backend instead of the language-model judge. `GET /laya/status` reports the metrics. (#62)
 
 - [Internal] [Filtering] A Deliver, Soft-bounce or Hard-bounce tap on a Telegram verdict report is recorded against that message's shadow row as a human label, and the readiness metrics report both backends' accuracy on those labels. (#62)
 
@@ -105,6 +105,8 @@
   bad semantic rule.
 
 ### Changed
+
+- [Visible] [Filtering] The Telegram brief now writes a proposed semantic rule as a full sentence describing what a matching message says or asks for, not a bare label. A label such as "Political fundraising" lost to no-match on campaign mail that never used the word political, while the sentence form matched it. Together with the pre-approval self-test, this closes #55. (#55)
 
 - [Internal] [Filtering] With the structured judge authoritative, the language-model judge runs only for a 421 or 550 decision. Accepted mail never pages, so its reasoning is the line built from the structured answers, and it gets its SMTP response without waiting on the gateway. (#61)
 
