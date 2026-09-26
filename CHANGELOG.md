@@ -106,6 +106,8 @@
 
 ### Changed
 
+- [Visible] [Telegram] Only a 421 soft deferral sends an individual Telegram report. Hard bounces and accepted mail show up in the dashboard and the daily digest instead.
+
 - [Visible] [Filtering] The Telegram brief now writes a proposed semantic rule as a full sentence describing what a matching message says or asks for, not a bare label. A label such as "Political fundraising" lost to no-match on campaign mail that never used the word political, while the sentence form matched it. Together with the pre-approval self-test, this closes #55. (#55)
 
 - [Internal] [Filtering] With the structured judge authoritative, the language-model judge runs only for a 421 or 550 decision. Accepted mail never pages, so its reasoning is the line built from the structured answers, and it gets its SMTP response without waiting on the gateway. (#61)
@@ -151,6 +153,8 @@
   a LEGIT verdict and a SAFE injection screen.
 
 ### Fixed
+
+- [Visible] [Telegram] Approve, Discard and decision buttons on a Telegram card now take effect. The Hermes gateway holds the bot's only getUpdates connection, and its relay plugin had never forwarded a tap. A relayed update from any other chat is ignored, and so is a relayed reply to a message Mercury did not send, so a reply meant for Loremaster cannot approve an open brief. (#63)
 
 - [Internal] [Filtering] A language-model judge error or timeout no longer discards the structured verdict. The exception used to escape `asyncio.gather()` and fail the whole message open to 250 with a pipeline-error page, even when a confident bounce had already come back. (#61)
 
