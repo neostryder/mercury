@@ -27,5 +27,9 @@ services:
       - STRUCTURED_JUDGE_ENABLED=${STRUCTURED_JUDGE_ENABLED:-false}
       - STRUCTURED_JUDGE_AUTHORITATIVE=${STRUCTURED_JUDGE_AUTHORITATIVE:-false}
       - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+      # Second structured-judge backend. Unset means no shadow at all; failover
+      # also needs a calibration laya_shadow.py has judged ready.
+      - LAYA_URL=${LAYA_URL:-}
+      - LAYA_FAILOVER=${LAYA_FAILOVER:-false}
     volumes:
       - ./data:/data

@@ -4,6 +4,12 @@
 
 ### Added
 
+- [Internal] [Filtering] A second structured-judge backend, configured with `LAYA_URL`: any server that accepts the same `/v1/systemone` request, such as a self-hosted open-weight model. It answers every message in the background and decides nothing. It takes 4 to 8 s for the full question set against about 0.3 s for the primary, so no message waits for it except during a failover. Each pair of answers is appended to `/data/laya_shadow.jsonl` (answers only, never message content), and `backend/laya_shadow.py` refits a calibration from them at startup and every six hours in a separate process. The primary's answers are the soft targets. Nouls get Platt scaling, while verdict, category and severity get a temperature plus a per-option bias, which can correct a systematic confusion such as PHISH read as SPAM. Confidence is recomputed the way the primary defines it, so the thresholds in `verdict_policy.py` carry over. Readiness is scored out of fold on dispositions: 200 rows, 95% agreement with the primary, and at most 1% bounces of mail the primary did not bounce. With `LAYA_FAILOVER=true` and a ready calibration, a primary outage is decided by the calibrated backend instead of the language-model judge. `GET /laya/status` reports the metrics. (#62)
+
+- [Internal] [Filtering] A Deliver, Soft-bounce or Hard-bounce tap on a Telegram verdict report is recorded against that message's shadow row as a human label, and the readiness metrics report both backends' accuracy on those labels. (#62)
+
+- [Visible] [Filtering] A semantic rule proposed in a Telegram brief is tested against the brief's own message before it is shown for approval, using the pipeline's own rule-match question. A rule that would not fire, that fires below `MERCURY_RULE_CONFIDENCE`, or that loses to an existing rule gets a caveat saying so, with the number. (#55)
+
 - [Internal] [Filtering] A fourth provider seam,
   `backend/providers/structured_judge.py`, answering the judge's
   classification questions as typed values with calibrated probabilities. It
@@ -100,6 +106,10 @@
 
 ### Changed
 
+- [Internal] [Filtering] With the structured judge authoritative, the language-model judge runs only for a 421 or 550 decision. Accepted mail never pages, so its reasoning is the line built from the structured answers, and it gets its SMTP response without waiting on the gateway. (#61)
+
+- [Visible] [Filtering] When the language-model judge's own verdict or disposition disagrees with the enforced one, the report leads with the structured line and quotes the judge's sentence as a dissent. Before, a bounced message could carry a sentence arguing that it was ordinary mail. (#61)
+
 - [Visible] [Dashboard] The browser dashboard no longer authenticates with a
   shared HTTP Basic Auth password. A Cloudflare Access application on
   mercury.rpgm.tools/dashboard* now gates entry by email identity instead,
@@ -139,6 +149,8 @@
   a LEGIT verdict and a SAFE injection screen.
 
 ### Fixed
+
+- [Internal] [Filtering] A language-model judge error or timeout no longer discards the structured verdict. The exception used to escape `asyncio.gather()` and fail the whole message open to 250 with a pipeline-error page, even when a confident bounce had already come back. (#61)
 
 - [Visible] [Pipeline] An accepted message (disposition 250) was being
   reported back to the original sender as a hard bounce, ever since Mercury

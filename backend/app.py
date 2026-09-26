@@ -15,6 +15,7 @@ import credential_prompts
 import digest
 import event_log
 import gandalf_relay
+import laya_shadow
 import mail_delivery
 import sender_facts
 import verdict_policy
@@ -29,7 +30,7 @@ from filtering import (
 from providers.classifier import get_classifier
 from providers.judge import get_judge
 from providers.notifier import get_notifier
-from providers.structured_judge import get_structured_judge
+from providers.structured_judge import get_laya_judge, get_structured_judge
 from telegram_approvals import TelegramApprovals
 
 
@@ -219,6 +220,12 @@ notifier = get_notifier()
 structured_judge = get_structured_judge()
 STRUCTURED_JUDGE_AUTHORITATIVE = os.environ.get(
     "STRUCTURED_JUDGE_AUTHORITATIVE", "false").lower() == "true"
+# A second System One backend (LAYA_URL). It shadows the primary on every
+# message and its answers are paired with the primary's in laya_shadow.py, which
+# calibrates it. LAYA_FAILOVER lets it decide when the primary is unavailable,
+# and even then only once that calibration has been judged ready.
+laya_judge = get_laya_judge()
+LAYA_FAILOVER = os.environ.get("LAYA_FAILOVER", "false").lower() == "true"
 approval_store = ApprovalStore(PENDING_APPROVALS_PATH)
 dedup_store = IngestDedupStore(INGEST_DEDUP_PATH)
 policy_store = FilteringPolicyStore(RULES_LEDGER_PATH)
@@ -244,10 +251,16 @@ async def lifespan(app: FastAPI):
         if TELEGRAM_POLLING_ENABLED else None
     )
     digest_task = asyncio.create_task(digest.run_forever(judge))
+    laya_task = (
+        asyncio.create_task(laya_shadow.run_forever())
+        if laya_judge is not None else None
+    )
     yield
     if poll_task:
         poll_task.cancel()
     digest_task.cancel()
+    if laya_task:
+        laya_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -716,7 +729,66 @@ CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
 ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | GANDALF: ... | NONE>
 CAVEAT: <a direct heads-up per above, or NONE>"""
     content = await judge.ask(prompt)
-    return _parse_brief_response(content)
+    result = _parse_brief_response(content)
+    notes = []
+    for change in result["changes"]:
+        if change["kind"] == "semantic_rule":
+            note = await _rule_self_test(change, message_context)
+            if note:
+                notes.append(note)
+    if notes:
+        result["caveat"] = " ".join(part for part in (result.get("caveat"), *notes) if part)
+    return result
+
+
+RULE_ADVICE = ("Rules match best when they describe what a matching message says "
+               "or asks for, rather than naming a category for it.")
+
+
+async def _rule_self_test(change: dict, message_context: str) -> str | None:
+    """Would this proposed rule actually fire on the message it came from?
+
+    A rule written as a bare label can lose to no-match on the very message
+    that prompted it, and nothing noticed until the next such message slipped
+    through. The live pipeline's own rule-match question is asked here against
+    the brief's message with the proposed rule added, so the recipient learns
+    that before approving rather than after. Silent when the rule works, when
+    there is no message to test against, or when the structured judge is off.
+    """
+    if structured_judge is None or not (message_context or "").strip():
+        return None
+    try:
+        current = policy_store.load()["semantic_rules"]
+    except Exception:
+        return None
+    trial = {d: list(current.get(d, [])) for d in ("550", "421", "250")}
+    bucket = trial.setdefault(change["disposition"], [])
+    bucket.append(change["rule"])
+    new_id = "r{}_{}".format(change["disposition"], len(bucket) - 1)
+    tested = await structured_judge.match_rule(message_context[:6000], trial)
+    if not tested:
+        return None
+    answer = tested["matched_rule"]
+    choice = answer.get("choice")
+    confidence = answer.get("confidence", 0.0)
+    threshold = verdict_policy.RULE_CONFIDENCE
+    if choice == new_id:
+        if confidence >= threshold:
+            return None
+        return ("Tested against the message this brief is about, this rule matches only "
+                "at confidence {:.2f}, below the {:.2f} a rule needs to decide on its "
+                "own. {}".format(confidence, threshold, RULE_ADVICE))
+    if choice and choice != "none" and choice in tested["rule_ids"]:
+        try:
+            other = trial[tested["rule_ids"][choice]][int(choice.rsplit("_", 1)[1])]
+        except (KeyError, ValueError, IndexError):
+            other = None
+        if other:
+            return ('Tested against the message this brief is about, the existing rule '
+                    '"{}" matched it instead of this one, so this rule would not be the '
+                    'one deciding.'.format(other))
+    return ("Tested against the message this brief is about, this rule would not have "
+            "matched it. {}".format(RULE_ADVICE))
 
 
 async def dispatch_action(
@@ -1161,6 +1233,16 @@ async def execute_message_decision(
             return outcome, None
         return outcome, await _sender_list_followup("blacklist", brief)
 
+    if decision in ("soft", "hard", "deliver"):
+        # The recipient overruling or confirming a verdict is the only ground
+        # truth Mercury ever gets, so it is kept as a label for the shadow
+        # backend's calibration.
+        laya_shadow.record_outcome(
+            metadata.get("shadow_id"),
+            {"soft": "421", "hard": "550", "deliver": "250"}[decision],
+            "telegram",
+        )
+
     if decision in ("soft", "hard"):
         list_name = "greylist" if decision == "soft" else "blacklist"
         label = "soft-bounce" if decision == "soft" else "hard-bounce"
@@ -1319,7 +1401,8 @@ def _deterministic_verdict(match) -> tuple[dict, dict]:
 
 
 async def judge_email(redacted_content: str, injection: dict,
-                      rules: dict[str, list[str]], facts: dict | None = None) -> dict:
+                      rules: dict[str, list[str]], facts: dict | None = None,
+                      shadow_id: str | None = None) -> dict:
     def _rule_block(disposition: str) -> str:
         return "\n".join(f"- {rule}" for rule in rules.get(disposition, [])) or "(none yet)"
 
@@ -1395,19 +1478,120 @@ ALERT: <NONE|STANDARD|URGENT>
 REASONING: <reasoning>
 RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 """
-    # Both judges see the same message. They are gathered rather than awaited in
-    # turn because the structured one answers in well under a second and the
-    # judge can take minutes; running them in sequence would make the cheap call
-    # look expensive. A structured-judge failure returns None inside its own
-    # provider, so it cannot fail this gather.
-    if structured_judge is not None:
-        content, structured = await asyncio.gather(
-            judge.ask(prompt),
-            structured_judge.classify(redacted_content, rules, injection, facts),
-        )
-    else:
-        content, structured = await judge.ask(prompt), None
+    if structured_judge is None:
+        result, _ = _parse_judge_reply(await judge.ask(prompt), all_rules)
+        return result
 
+    shadow_task = _start_shadow(redacted_content, rules, injection, facts)
+    primary = structured_judge.classify(redacted_content, rules, injection, facts)
+
+    if not STRUCTURED_JUDGE_AUTHORITATIVE:
+        # Report-only: the judge decides, and both judges run on every message
+        # so the disagreements cover ordinary traffic. They are gathered rather
+        # than awaited in turn because the structured one answers in well under
+        # a second and the judge can take minutes. A structured failure returns
+        # None inside its own provider, so it cannot fail this gather.
+        content, structured = await asyncio.gather(judge.ask(prompt), primary)
+        _pair_when_done(shadow_task, shadow_id, structured)
+        result, _ = _parse_judge_reply(content, all_rules)
+        if structured is not None:
+            _log_comparison(result, verdict_policy.decide(structured, rules), structured)
+        return result
+
+    structured = await primary
+    _pair_when_done(shadow_task, shadow_id, structured)
+    failed_over = False
+    if structured is None and LAYA_FAILOVER and shadow_task is not None:
+        # The one case a message waits on the shadow backend. It is several
+        # seconds slower than the primary, and still far faster than the judge
+        # this replaces.
+        structured = laya_shadow.failover(await shadow_task)
+        failed_over = structured is not None
+        if failed_over:
+            event_log.log_event("admin_log", {
+                "at": _now(),
+                "event": "structured_judge_failover",
+                "detail": "primary unavailable; calibrated shadow backend decided",
+            })
+    if structured is None:
+        # No usable structured answer at all: the judge decides alone, exactly
+        # as it did before the structured judge existed.
+        result, _ = _parse_judge_reply(await judge.ask(prompt), all_rules)
+        return result
+
+    decision = verdict_policy.decide(structured, rules)
+    result = {k: decision[k] for k in
+              ("verdict", "disposition", "category", "alert", "triggered_rule")}
+    result["reasoning"] = verdict_policy.describe(decision, structured)
+    if failed_over:
+        result["reasoning"] += (" Decided by the calibrated failover model because the "
+                                "primary structured judge was unavailable.")
+
+    # Accepted mail never pages, so its reasoning only reaches the dashboard and
+    # the digest, and the line built from the numbers is enough there. Skipping
+    # the judge for it means ordinary mail gets its SMTP answer in well under a
+    # second instead of waiting minutes on a model that decides nothing.
+    if decision["disposition"] == "250":
+        return result
+
+    # A deferral or a bounce is what the recipient actually reads, so it gets
+    # the judge's sentence. A judge outage must not undo a decision that has
+    # already been made, so any failure here keeps the built line instead.
+    try:
+        content = await judge.ask(prompt)
+    except Exception:                                         # noqa: BLE001
+        return result
+    judged, parsed = _parse_judge_reply(content, all_rules)
+    _log_comparison(judged, decision, structured)
+    if not parsed:
+        return result
+    if (judged["verdict"], judged["disposition"]) == (decision["verdict"], decision["disposition"]):
+        result["reasoning"] = judged["reasoning"]
+    else:
+        # The judge argued for a different outcome. Its sentence would read as
+        # the reason for this one, so the enforced decision leads and the judge
+        # is quoted as a dissent.
+        result["reasoning"] += " The language-model judge disagreed ({}, {}): {}".format(
+            judged["verdict"], judged["disposition"], judged["reasoning"])
+    return result
+
+
+# Strong references to shadow calls still running after their message was
+# answered. The event loop only holds tasks weakly, so without this a pending
+# one could be collected mid-flight.
+_shadow_tasks: set = set()
+
+
+def _start_shadow(redacted_content, rules, injection, facts):
+    """Start the shadow backend's call without waiting for it.
+
+    It answers the full question set in 5 to 8 s against about 0.3 s for the
+    primary (measured 2026-09-25), so it must never sit in the SMTP path. Its
+    answer is paired with the primary's whenever it lands.
+    """
+    if laya_judge is None:
+        return None
+    task = asyncio.create_task(laya_judge.classify(redacted_content, rules, injection, facts))
+    _shadow_tasks.add(task)
+    task.add_done_callback(_shadow_tasks.discard)
+    return task
+
+
+def _pair_when_done(task, shadow_id: str | None, structured: dict | None) -> None:
+    if task is None or structured is None:
+        return
+
+    def _record(done):
+        if done.cancelled() or done.exception() is not None:
+            return
+        if done.result() is not None:
+            laya_shadow.record_pair(shadow_id, structured, done.result())
+
+    task.add_done_callback(_record)
+
+
+def _parse_judge_reply(content: str, all_rules: list[str]) -> tuple[dict, bool]:
+    """The judge's free-text reply as fields, and whether any of it parsed."""
     verdict, disposition, reasoning = "UNSURE", "250", content.strip()
     category, alert = "OTHER", "NONE"
     m = re.search(r"VERDICT:\s*(\w+)", content)
@@ -1434,48 +1618,50 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         # fail (or worse, match the wrong entry) when used to reverse a rule.
         if candidate and candidate.upper() != "NONE" and candidate in all_rules:
             triggered_rule = candidate
-    result = {
+    return {
         "verdict": verdict,
         "disposition": disposition,
         "category": category,
         "alert": alert,
         "reasoning": reasoning,
         "triggered_rule": triggered_rule,
-    }
+    }, bool(m)
 
-    if structured is None:
-        return result
 
-    decision = verdict_policy.decide(structured, rules)
-    diffs = verdict_policy.disagreement(result, decision)
+def _log_comparison(judged: dict, decision: dict, structured: dict) -> None:
+    diffs = verdict_policy.disagreement(judged, decision)
     # Agreement is not informative and is not worth a row. Only the cases where
     # the two judges reached different answers are worth tuning thresholds on.
-    if diffs:
-        event_log.log_event("judge_comparisons", {
-            "compared_at": _now(),
-            "authoritative": "structured" if STRUCTURED_JUDGE_AUTHORITATIVE else "judge",
-            "fields": json.dumps(sorted(diffs)),
-            "detail": json.dumps(diffs)[:4000],
-            "structured_confidence": decision["confidence"],
-            "structured_severity": decision["severity"],
-            "structured_why": decision["why"],
-            "latency_ms": structured.get("latency_ms"),
-            "model": structured.get("model"),
-        })
+    if not diffs:
+        return
+    event_log.log_event("judge_comparisons", {
+        "compared_at": _now(),
+        "authoritative": "structured" if STRUCTURED_JUDGE_AUTHORITATIVE else "judge",
+        "fields": json.dumps(sorted(diffs)),
+        "detail": json.dumps(diffs)[:4000],
+        "structured_confidence": decision["confidence"],
+        "structured_severity": decision["severity"],
+        "structured_why": decision["why"],
+        "latency_ms": structured.get("latency_ms"),
+        "model": structured.get("model"),
+    })
 
-    if not STRUCTURED_JUDGE_AUTHORITATIVE:
-        return result
 
-    # The classification comes from the structured judge; the reasoning sentence
-    # stays with the judge, because the structured model does not generate text
-    # at all. When the judge's own parse fell through to its defaults there is no
-    # real sentence to keep, so a line built from the numbers goes in instead.
-    parsed_anything = bool(re.search(r"VERDICT:\s*\w+", content))
-    result.update({k: decision[k] for k in
-                   ("verdict", "disposition", "category", "alert", "triggered_rule")})
-    if not parsed_anything:
-        result["reasoning"] = verdict_policy.describe(decision, structured)
-    return result
+@app.get("/laya/status")
+async def laya_status(x_mercury_secret: str | None = Header(None)):
+    """The shadow backend's current calibration metrics and readiness."""
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    calibration = laya_shadow.load() or {}
+    return {
+        "configured": laya_judge is not None,
+        "failover_enabled": LAYA_FAILOVER,
+        "ready": bool(calibration.get("ready")),
+        "why_not": calibration.get("why_not"),
+        "rows": calibration.get("rows"),
+        "generated": calibration.get("generated"),
+        "metrics": calibration.get("metrics"),
+    }
 
 
 @app.get("/health")
@@ -1717,6 +1903,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             verdict = await judge_email(
                 redacted_content[:6000], injection, policy["semantic_rules"],
                 facts=sender_facts.describe(sender_domain, recipient_class, recipient_detail),
+                shadow_id=laya_shadow.shadow_id(dedup_key),
             )
             if authentication_skip:
                 verdict["reasoning"] = f"{authentication_skip} {verdict['reasoning']}"
@@ -1830,6 +2017,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                     "recipient_email": _recipient_email_from_classification(
                         recipient_class, recipient_detail
                     ),
+                    "shadow_id": laya_shadow.shadow_id(dedup_key),
                 },
             )
 

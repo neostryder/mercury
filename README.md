@@ -101,7 +101,7 @@ it in the matching `get_*()` function to use something else:
 |---|---|---|---|
 | Prompt-injection classifier | `providers/classifier.py` | HTTP call to any classifier server | `POST {"text"} -> {"label": "SAFE"\|"INJECTION", "score"}` |
 | Semantic judge | `providers/judge.py` | HTTP call to an [agent gateway](gateway/README.md) | `POST {"prompt"} -> {"response"}` |
-| Structured judge (optional) | `providers/structured_judge.py` | TypeSafe System One | `classify(content, rules, injection) -> typed answers with probabilities, or None` |
+| Structured judge (optional) | `providers/structured_judge.py` | TypeSafe System One | `classify(content, rules, injection) -> typed answers with probabilities, or None`; a second backend via `LAYA_URL` shadows it |
 | Notifications | `providers/notifier.py` | Telegram bot message | send one plain-text message |
 
 The **structured judge** is off unless `STRUCTURED_JUDGE_ENABLED=true`, and with
@@ -122,6 +122,10 @@ Enabled, it only reports: disagreements between the two judges are written to th
 `judge_comparisons` table and nothing else changes. It decides a disposition only
 once `STRUCTURED_JUDGE_AUTHORITATIVE=true` as well. Apply `worker/schema.sql`
 before enabling either.
+
+Once it is authoritative, the judge runs only for mail the structured decision defers or bounces, since that is the mail a person reads a report about. Accepted mail gets a reasoning line built from the structured answers and its SMTP response in well under a second. A judge error on the deferred or bounced path keeps the structured decision rather than failing the message open.
+
+A second structured backend can shadow the first. Set `LAYA_URL` to any server that accepts the same `/v1/systemone` request, such as a self-hosted open-weight model, and each message is sent to both. The second call runs in the background, so it never delays a message. `backend/laya_shadow.py` pairs the answers (never the message), calibrates the second backend against the first every six hours, and scores it on whether it would have reached the same disposition. `LAYA_FAILOVER=true` lets it decide when the primary is down, but only once that score clears the bar set in the same file. `GET /laya/status` shows where it stands.
 
 The judge in particular is meant to be whatever LLM or agent setup you
 already trust with something like this - a hosted model API called

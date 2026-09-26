@@ -35,6 +35,12 @@ None and lets the existing judge stand alone.
 The built-in implementation calls TypeSafe's System One endpoint. To use
 something else, implement the StructuredJudge protocol and swap the selection in
 get_structured_judge().
+
+A second backend can be configured with LAYA_URL: any server that accepts the
+same /v1/systemone request, such as the open-weight Laya model hosted on the
+local network. It is built by get_laya_judge(), shadows the primary on every
+message, and decides nothing until laya_shadow.py has calibrated it against the
+primary and found it ready (see that file).
 """
 import asyncio
 import os
@@ -133,16 +139,20 @@ class StructuredJudge(Protocol):
 
 
 class SystemOneStructuredJudge:
-    def __init__(self, api_key: str, timeout: float = 15.0):
+    def __init__(self, api_key: str | None, timeout: float = 15.0,
+                 endpoint: str = ENDPOINT, name: str = "jev"):
         self._key = api_key
         self._timeout = timeout
+        self._endpoint = endpoint
+        # Which backend produced an answer, recorded on every result so the
+        # event log and the shadow file never have to infer it from the model
+        # string the server chose to report.
+        self.name = name
 
     def _questions(self, rules: dict[str, list[str]], injection: dict) -> dict:
         ids = rule_ids(rules)
         rule_criteria = {rid: text for rid, (_, text) in ids.items()}
-        rule_criteria["none"] = (
-            "None of the standing rules above describes this message. Choose this "
-            "only when every one of them is clearly wrong for it.")
+        rule_criteria["none"] = NO_RULE_CRITERION
 
         questions = {
             "verdict": {
@@ -169,14 +179,51 @@ class SystemOneStructuredJudge:
             questions[key] = {"type": "noul",
                               "instructions": "In `email`: " + text}
         if ids:
-            questions["matched_rule"] = {
-                "type": "choice",
-                "instructions": (
-                    "Which of the recipient's standing rules, if any, describes the "
-                    "message in `email`?"),
-                "criteria": rule_criteria,
-            }
+            questions["matched_rule"] = _rule_question(rule_criteria)
         return questions
+
+    async def _post(self, payload: dict) -> dict | None:
+        headers = {"Content-Type": "application/json"}
+        if self._key:
+            headers["Authorization"] = "Bearer " + self._key
+        # 429 and 529 are the service saying "later", not "no", and a real 529
+        # was observed during development. Two short retries, because the whole
+        # call is normally under half a second and a message is waiting on it.
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    r = await client.post(self._endpoint, headers=headers, json=payload)
+                if r.status_code in (429, 529) and attempt < 2:
+                    await asyncio.sleep(RETRY_BACKOFF * (2 ** attempt))
+                    continue
+                r.raise_for_status()
+                return r.json()
+            except Exception:                                 # noqa: BLE001
+                # Never let a classifier outage affect the message it was
+                # classifying. The judge still has its own verdict.
+                return None
+        return None
+
+    async def match_rule(self, redacted_content: str,
+                         rules: dict[str, list[str]]) -> dict | None:
+        """Only the rule-match question, for testing a rule before it is saved.
+
+        Asked exactly as classify() asks it, so a rule that passes here is one
+        the live pipeline would recognize on the same message.
+        """
+        ids = rule_ids(rules)
+        if not ids:
+            return None
+        criteria = {rid: text for rid, (_, text) in ids.items()}
+        criteria["none"] = NO_RULE_CRITERION
+        body = await self._post({"model": MODEL,
+                                 "state": {"email": redacted_content},
+                                 "questions": {"matched_rule": _rule_question(criteria)}})
+        answer = ((body or {}).get("answers") or {}).get("matched_rule")
+        if not answer:
+            return None
+        return {"matched_rule": answer,
+                "rule_ids": {rid: disp for rid, (disp, _) in ids.items()}}
 
     async def classify(self, redacted_content, rules, injection, facts=None):
         questions = self._questions(rules, injection)
@@ -200,29 +247,7 @@ class SystemOneStructuredJudge:
             state["observed_facts"] = facts
         payload = {"model": MODEL, "state": state, "questions": questions}
         started = time.monotonic()
-        body = None
-        # 429 and 529 are the service saying "later", not "no", and a real 529
-        # was observed during development. Two short retries, because the whole
-        # call is normally under half a second and a message is waiting on it.
-        for attempt in range(3):
-            try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    r = await client.post(
-                        ENDPOINT,
-                        headers={"Authorization": "Bearer " + self._key,
-                                 "Content-Type": "application/json"},
-                        json=payload,
-                    )
-                if r.status_code in (429, 529) and attempt < 2:
-                    await asyncio.sleep(RETRY_BACKOFF * (2 ** attempt))
-                    continue
-                r.raise_for_status()
-                body = r.json()
-                break
-            except Exception:                                 # noqa: BLE001
-                # Never let a classifier outage affect the message it was
-                # classifying. The judge still has its own verdict.
-                return None
+        body = await self._post(payload)
         if body is None:
             return None
 
@@ -238,9 +263,25 @@ class SystemOneStructuredJudge:
             "rule_ids": {rid: disp for rid, (disp, _) in rule_ids(rules).items()},
             "usage": body.get("usage"),
             "model": body.get("model"),
+            "backend": self.name,
             "latency_ms": int((time.monotonic() - started) * 1000),
         }
         return out
+
+
+NO_RULE_CRITERION = (
+    "None of the standing rules above describes this message. Choose this "
+    "only when every one of them is clearly wrong for it.")
+
+
+def _rule_question(criteria: dict[str, str]) -> dict:
+    return {
+        "type": "choice",
+        "instructions": (
+            "Which of the recipient's standing rules, if any, describes the "
+            "message in `email`?"),
+        "criteria": criteria,
+    }
 
 
 def get_structured_judge() -> StructuredJudge | None:
@@ -256,3 +297,18 @@ def get_structured_judge() -> StructuredJudge | None:
     if not key:
         return None
     return SystemOneStructuredJudge(key)
+
+
+def get_laya_judge() -> StructuredJudge | None:
+    """The shadow backend, or None when LAYA_URL is unset.
+
+    It runs on the local network and needs no key. Its call runs in the
+    background (see app._start_shadow), so the timeout only bounds how long a
+    failover waits for it.
+    """
+    url = os.environ.get("LAYA_URL", "").strip()
+    if not url:
+        return None
+    return SystemOneStructuredJudge(
+        None, timeout=float(os.environ.get("LAYA_TIMEOUT", "20")),
+        endpoint=url, name="laya")

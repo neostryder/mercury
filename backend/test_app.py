@@ -1371,7 +1371,10 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(result["disposition"], "250")
         self.assertEqual([t for t, _ in self.logged], [])
 
-    def test_authoritative_takes_the_classification_and_keeps_the_reasoning(self):
+    def test_authoritative_takes_the_classification_and_quotes_a_dissent(self):
+        """The judge said LEGIT/250 and the enforced decision is PHISH/550. Its
+        sentence argues for the other outcome, so it must not read as the
+        reason for this one."""
         app.structured_judge = SimpleNamespace(
             classify=AsyncMock(return_value=_structured()))
         app.STRUCTURED_JUDGE_AUTHORITATIVE = True
@@ -1381,10 +1384,42 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(result["disposition"], "550")
         self.assertEqual(result["category"], "PHISHING")
         self.assertEqual(result["alert"], "STANDARD")
-        # The structured model does not generate text, so a real parsed sentence
-        # from the judge is kept rather than replaced with a built one.
-        self.assertEqual(result["reasoning"],
-                         "An ordinary receipt from a known retailer.")
+        self.assertTrue(result["reasoning"].startswith("Structured verdict: PHISH"))
+        self.assertIn("The language-model judge disagreed (LEGIT, 250): "
+                      "An ordinary receipt from a known retailer.", result["reasoning"])
+
+    def test_an_agreeing_judge_keeps_its_own_sentence(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value=JUDGE_REPLY.replace(
+            "LEGIT", "PHISH").replace("250", "550").replace(
+            "An ordinary receipt from a known retailer.", "A fake bank login page.")))
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+        self.assertEqual(result["disposition"], "550")
+        self.assertEqual(result["reasoning"], "A fake bank login page.")
+
+    def test_accepted_mail_never_waits_on_the_judge(self):
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured(
+                "LEGIT", 0.95, 0.1, category="TRANSACTIONAL")))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(result["alert"], "NONE")
+        self.assertEqual(app.judge.ask.await_count, 0)
+        self.assertTrue(result["reasoning"].startswith("Structured verdict: LEGIT"))
+
+    def test_a_judge_outage_keeps_the_structured_decision(self):
+        """Before, the exception escaped the gather and the pipeline failed
+        open to 250, discarding a confident bounce that had already come back."""
+        app.judge = SimpleNamespace(ask=AsyncMock(side_effect=RuntimeError("gateway 504")))
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+        self.assertEqual(result["disposition"], "550")
+        self.assertIn("PHISH at 97% confidence", result["reasoning"])
 
     def test_a_structured_failure_never_disturbs_the_verdict(self):
         app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
@@ -1407,6 +1442,66 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertIn("Structured verdict:", result["reasoning"])
         self.assertIn("PHISH at 97% confidence", result["reasoning"])
 
+    def test_shadow_backend_answers_are_paired_with_the_primary(self):
+        primary, shadow = _structured(), _structured("SPAM", 0.6)
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=primary))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        with patch.object(app, "laya_judge",
+                          SimpleNamespace(classify=AsyncMock(return_value=shadow))), \
+                patch.object(app.laya_shadow, "record_pair") as record:
+            async def run():
+                out = await app.judge_email(
+                    "From: a@example.com\n\nMessage", {"label": "SAFE", "score": 0.01},
+                    STRUCTURED_RULES, shadow_id="sid-1")
+                # The shadow call is not awaited by the message; let it land.
+                await asyncio.gather(*app._shadow_tasks)
+                await asyncio.sleep(0)
+                return out
+            result = asyncio.run(run())
+        record.assert_called_once_with("sid-1", primary, shadow)
+        # The shadow decides nothing while the primary answered.
+        self.assertEqual(result["verdict"], "PHISH")
+
+    def test_a_slow_shadow_never_delays_the_message(self):
+        async def slow(*args):
+            await asyncio.sleep(30)
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured("LEGIT", 0.95, 0.1, "TRANSACTIONAL")))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        with patch.object(app, "laya_judge", SimpleNamespace(classify=slow)):
+            async def run():
+                return await asyncio.wait_for(app.judge_email(
+                    "From: a@example.com\n\nMessage", {"label": "SAFE", "score": 0.01},
+                    STRUCTURED_RULES), timeout=1)
+            result = asyncio.run(run())
+        self.assertEqual(result["disposition"], "250")
+
+    def test_failover_decides_only_when_enabled_and_ready(self):
+        shadow = _structured()
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        with patch.object(app, "laya_judge",
+                          SimpleNamespace(classify=AsyncMock(return_value=shadow))), \
+                patch.object(app, "LAYA_FAILOVER", True), \
+                patch.object(app.laya_shadow, "failover", return_value=shadow):
+            result = self._run()
+        self.assertEqual(result["disposition"], "550")
+        self.assertIn("calibrated failover model", result["reasoning"])
+        self.assertIn("structured_judge_failover",
+                      [f.get("event") for t, f in self.logged if t == "admin_log"])
+
+    def test_an_unready_failover_leaves_the_judge_deciding(self):
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        with patch.object(app, "laya_judge",
+                          SimpleNamespace(classify=AsyncMock(return_value=_structured()))), \
+                patch.object(app, "LAYA_FAILOVER", True), \
+                patch.object(app.laya_shadow, "failover", return_value=None):
+            result = self._run()
+        self.assertEqual(result["verdict"], "LEGIT")
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(app.judge.ask.await_count, 1)
+
     def test_both_judges_see_the_same_message_and_rules(self):
         classify = AsyncMock(return_value=_structured())
         app.structured_judge = SimpleNamespace(classify=classify)
@@ -1416,6 +1511,60 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(args[0], "From: a@example.com\n\nMessage")
         self.assertEqual(args[1], STRUCTURED_RULES)
         self.assertEqual(args[2], {"label": "SAFE", "score": 0.01})
+
+
+class RuleSelfTestTests(unittest.TestCase):
+    CHANGE = {"kind": "semantic_rule", "disposition": "550",
+              "rule": "The message solicits donations for a campaign."}
+
+    def setUp(self):
+        self.original = app.structured_judge
+        self.policy = patch.object(app.policy_store, "load",
+                                   return_value={"semantic_rules": dict(STRUCTURED_RULES)})
+        self.policy.start()
+
+    def tearDown(self):
+        self.policy.stop()
+        app.structured_judge = self.original
+
+    def _run(self, choice, confidence, context="From: x@y.com\n\nDonate now"):
+        app.structured_judge = SimpleNamespace(match_rule=AsyncMock(return_value={
+            "matched_rule": {"choice": choice, "confidence": confidence},
+            "rule_ids": {"r550_0": "550", "r550_1": "550"},
+        }))
+        return asyncio.run(app._rule_self_test(self.CHANGE, context))
+
+    def test_a_rule_that_fires_says_nothing(self):
+        # The new rule is appended after the one already in the 550 bucket.
+        self.assertIsNone(self._run("r550_1", 0.9))
+
+    def test_a_weak_match_is_reported_with_its_number(self):
+        note = self._run("r550_1", 0.45)
+        self.assertIn("0.45", note)
+        self.assertIn("0.70", note)
+
+    def test_an_existing_rule_winning_is_named(self):
+        note = self._run("r550_0", 0.9)
+        self.assertIn(STRUCTURED_RULES["550"][0], note)
+
+    def test_no_match_is_reported(self):
+        self.assertIn("would not have matched", self._run("none", 0.8))
+
+    def test_nothing_to_test_against_is_silent(self):
+        self.assertIsNone(self._run("none", 0.8, context="   "))
+        self.assertEqual(app.structured_judge.match_rule.await_count, 0)
+
+
+class MessageDecisionLabelTests(unittest.TestCase):
+    def test_a_telegram_decision_is_kept_as_a_label(self):
+        brief = {"message_metadata": {"shadow_id": "sid-9", "sender_domain": "x.com",
+                                      "disposition": "550"},
+                 "message_context": "ctx"}
+        with patch.object(app.laya_shadow, "record_outcome") as record, \
+                patch.object(app.event_log, "log_event"), \
+                patch.object(app, "_sender_list_followup", AsyncMock(return_value=None)):
+            asyncio.run(app.execute_message_decision("soft", brief))
+        record.assert_called_once_with("sid-9", "421", "telegram")
 
 
 if __name__ == "__main__":
