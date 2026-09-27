@@ -106,7 +106,20 @@ export default {
     // than assuming the configured URL matched. Treated identically to
     // /ingest here (backendUrl is normalized to the real route) rather than
     // requiring a ForwardEmail-side change to fix.
-    if (pathname === '/ingest' || pathname === '/webhook' || pathname === '/webhook-test') {
+    const ingestMatch = pathname.match(/^\/(?:ingest|webhook|webhook-test)(?:\/([A-Za-z0-9_-]+))?$/);
+    if (ingestMatch) {
+      // The backend trusts whatever this route forwards, since the Worker
+      // attaches the backend secret itself - including the payload's own
+      // `dmarc` result, which gates deterministic sender-list matches. So the
+      // caller has to prove it is the mail host: the webhook URL configured
+      // at ForwardEmail ends in MERCURY_WEBHOOK_TOKEN, and nothing else gets
+      // through. WEBHOOK_ALLOW_TOKENLESS keeps the bare paths open only while
+      // the mail host's configured URL is being switched over.
+      const token = ingestMatch[1];
+      const tokenOk = token ? await tokenMatches(token, env.MERCURY_WEBHOOK_TOKEN) : env.WEBHOOK_ALLOW_TOKENLESS === 'true';
+      if (!tokenOk) {
+        return new Response('not found', { status: 404 });
+      }
       return proxyIngest(`${env.BACKEND_BASE_URL}/ingest`, bodyText, env);
     }
 
@@ -593,12 +606,25 @@ async function handleLog(request, env) {
 const ACCEPT_DISPOSITION = 250;
 const ACCEPT_HTTP_STATUS = 200;
 
+async function tokenMatches(given, expected) {
+  if (!expected) return false;
+  const encoder = new TextEncoder();
+  const a = encoder.encode(given);
+  const b = encoder.encode(expected);
+  if (a.byteLength !== b.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
 // Enforcement now depends on this call completing, but a self-hosted outage
 // or a slow backend must still never itself cause a bounce of legitimate
 // mail - see docs/ARCHITECTURE.md. Anything short of a clean, recognized
-// disposition from the backend fails open (accept) rather than risking a
-// false bounce.
+// disposition from the backend is never a 550. When the mailbox is a
+// recipient of its own, it resolves to an accept, since the message still
+// arrives there. When the backend is the only path into the mailbox
+// (CUSTODY_REQUIRED, set alongside MERCURY_DELIVER_ACCEPTED_MAIL), an accept
+// would lose the message, so it resolves to 421 and the mail host retries.
 async function proxyIngest(backendUrl, bodyText, env) {
+  const failureStatus = env.CUSTODY_REQUIRED === 'true' ? 421 : ACCEPT_HTTP_STATUS;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), INGEST_TIMEOUT_MS);
   try {
@@ -616,10 +642,10 @@ async function proxyIngest(backendUrl, bodyText, env) {
       const webhookStatus = resp.status === ACCEPT_DISPOSITION ? ACCEPT_HTTP_STATUS : resp.status;
       return new Response(text, { status: webhookStatus, headers: { 'Content-Type': 'application/json' } });
     }
-    return new Response(text || 'OK', { status: ACCEPT_HTTP_STATUS });
+    return new Response(text || 'OK', { status: failureStatus });
   } catch (err) {
-    // Backend unreachable, slow, or errored - accept rather than guess.
-    return new Response('OK', { status: ACCEPT_HTTP_STATUS });
+    // Backend unreachable, slow, or errored - never guess a bounce.
+    return new Response('OK', { status: failureStatus });
   } finally {
     clearTimeout(timeout);
   }

@@ -11,10 +11,12 @@ a repeat was not guaranteed to reach the same disposition as the first call
 - a message already delivered could come back recorded as bounced.
 
 Persisted to a small JSON file, same shape as approvals.py, so a backend
-restart doesn't reopen the dedup window. A key passes through two states:
+restart doesn't reopen the dedup window. A key normally passes through two states:
 "pending" while the first call is still being processed (so a concurrent
 duplicate arriving before the first call finishes is caught too, not just a
-later retry), then "done" once a disposition is recorded. Entries past
+later retry), then "done" once a disposition is recorded. An accepted message whose
+delivery into the mailbox did not complete is recorded as "undelivered"
+instead, so the mail host's retry repeats only the delivery. Entries past
 DEDUP_RETENTION_SECONDS are dropped on the next load so the file does not
 grow without bound; a mail host retrying long after that window is treated
 as a new message rather than matched against stale state.
@@ -56,13 +58,19 @@ class IngestDedupStore:
     def claim(self, key: str) -> dict | None:
         """None means this is the first call seen for key - the key is now
         marked pending and the caller should run the pipeline. A non-None
-        return is an existing entry (status "pending" or "done") that the
-        caller must not re-run the pipeline for."""
+        return is an existing entry (status "pending", "done" or
+        "undelivered") that the caller must not re-run the pipeline for.
+
+        An "undelivered" entry is handed back once and flipped to pending in
+        the same step, so two retries arriving together cannot both append
+        the message: the second one sees "pending"."""
         now = self._clock()
         data = self._load()
         self._prune(data, now)
         entry = data["seen"].get(key)
         if entry is not None:
+            if entry.get("status") == "undelivered":
+                data["seen"][key] = {**entry, "status": "pending", "at": now}
             self._save(data)
             return entry
         data["seen"][key] = {"status": "pending", "at": now}
@@ -78,6 +86,21 @@ class IngestDedupStore:
             "at": now,
             "disposition": disposition,
             "content": content,
+        }
+        self._save(data)
+
+    def record_undelivered(self, key: str, verdict: str, category: str) -> None:
+        """Marks an accepted message whose delivery did not complete. The
+        mail host was told 421, so it will retry; the retry reuses this
+        verdict and only repeats the delivery step."""
+        now = self._clock()
+        data = self._load()
+        self._prune(data, now)
+        data["seen"][key] = {
+            "status": "undelivered",
+            "at": now,
+            "verdict": verdict,
+            "category": category,
         }
         self._save(data)
 

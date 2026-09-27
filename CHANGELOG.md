@@ -154,6 +154,10 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] Accepted mail that Mercury cannot deliver is deferred instead of lost. With `MERCURY_DELIVER_ACCEPTED_MAIL` on, a failed IMAP APPEND, a payload with no raw message, a repeat call while the first is still running, a pipeline error, and an unreachable backend now answer 421, so the mail host retries. All of these answered 250 before, which ended delivery with nothing in the mailbox. The retry repeats only the APPEND, and a message appended before a later step failed is not appended again. Set `CUSTODY_REQUIRED=true` on the Worker alongside the backend flag.
+
+- [Visible] [Pipeline] The webhook URL now ends in a secret token, `MERCURY_WEBHOOK_TOKEN`, and a call without it gets a 404. Set the token as a Worker secret and change the webhook URL at the mail host; `WEBHOOK_ALLOW_TOKENLESS=true` keeps the old path open during the switch.
+
 - [Visible] [Telegram] A Gandalf handoff that names a hostname blocked by ForwardEmail's link filter is sent again with that hostname written as `host[.]tld`, instead of failing with "Could not reach Gandalf". A failed handoff now logs the SMTP reply. (#64)
 
 - [Visible] [Telegram] Approve, Discard and decision buttons on a Telegram card now take effect. The Hermes gateway holds the bot's only getUpdates connection, and its relay plugin had never forwarded a tap. A relayed update from any other chat is ignored, and so is a relayed reply to a message Mercury did not send, so a reply meant for Loremaster cannot approve an open brief. (#63)

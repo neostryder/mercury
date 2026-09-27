@@ -1825,6 +1825,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
     payload = await request.json()
     subject = payload.get("subject", "")
     dedup_key = None
+    delivered = False
 
     try:
         text_body = payload.get("text") or payload.get("html", "")
@@ -1866,9 +1867,12 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # A repeat call for the same message - a retried webhook after a slow
         # response, or two independent deliveries of it - must never re-run
         # the pipeline: see dedup.py. A "done" repeat replays the disposition
-        # already recorded; a "pending" repeat (the first call is still being
-        # processed) fails open without touching delivery, the same way any
-        # other pipeline ambiguity does.
+        # already recorded. An "undelivered" repeat is the mail host retrying
+        # after a 421 for a failed delivery, so only the delivery runs again.
+        # A "pending" repeat (the first call is still being processed) gets
+        # a 421 when Mercury itself delivers accepted mail, since accepting it
+        # here would stop the retries before the first call has put anything
+        # in the mailbox.
         dedup_key = _dedup_key(raw_message, raw_content)
         existing = dedup_store.claim(dedup_key)
         if existing is not None:
@@ -1882,8 +1886,13 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 pass
             if existing["status"] == "done":
                 return JSONResponse(status_code=existing["disposition"], content=existing["content"])
+            if existing["status"] == "undelivered":
+                return await _redeliver(
+                    dedup_key, existing, raw_message, sender_address, sender_domain,
+                    subject, action_content,
+                )
             return JSONResponse(
-                status_code=250,
+                status_code=421 if _custody_required() else 250,
                 content={"ok": True, "duplicate": True, "note": "repeat ingest call while the original was still processing"},
             )
 
@@ -1952,41 +1961,18 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         })
 
         delivery_result = None
-        custom_action = policy_store.match_custom_action(sender_address, policy)
         if enforced_disposition == "250" and not SHADOW_MODE:
-            target_folder = "INBOX"
-            if custom_action and custom_action.get("native", {}).get("kind") == "folder":
-                target_folder = custom_action["native"]["folder"]
-            if raw_message:
-                delivery_result = await asyncio.to_thread(
-                    mail_delivery.deliver_accepted_message,
-                    raw_message, verdict["verdict"], verdict["category"], enforced_disposition,
-                    target_folder,
+            delivery_result, custom_action = await _deliver_accepted(
+                raw_message, verdict["verdict"], verdict["category"],
+                sender_address, sender_domain, subject, action_content, policy,
+            )
+            if _delivered(delivery_result):
+                delivered = True
+                await _run_custom_action(custom_action, delivery_result, action_content)
+            elif _custody_required():
+                return await _defer_undelivered(
+                    dedup_key, verdict["verdict"], verdict["category"], subject, delivery_result,
                 )
-            else:
-                delivery_result = "skipped (no raw message in payload)"
-            if mail_delivery.DELIVER_ACCEPTED_MAIL:
-                event_log.log_event("actions", {
-                    "executed_at": _now(),
-                    "kind": "DELIVER",
-                    "details": subject,
-                    "outcome_summary": delivery_result,
-                    "result": delivery_result,
-                    "domain": sender_domain,
-                })
-            if custom_action and delivery_result.startswith("delivered to "):
-                native = custom_action.get("native")
-                if native:
-                    event_log.log_event("actions", {
-                        "executed_at": _now(),
-                        "kind": "CUSTOM_ACTION",
-                        "details": custom_action["instruction"],
-                        "outcome_summary": delivery_result,
-                        "result": "ROUTED",
-                        "domain": custom_action["selector"],
-                    })
-                else:
-                    await execute_standing_custom_action(custom_action, action_content[:8000])
 
         if alert_eligible and verdict["alert"] in ("STANDARD", "URGENT"):
             prefix = "\U0001f6a8 URGENT" if verdict["alert"] == "URGENT" else "Mercury report"
@@ -2011,10 +1997,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                     "category": verdict["category"],
                     "disposition": verdict["disposition"],
                     "enforced_disposition": enforced_disposition,
-                    "already_delivered": bool(
-                        SHADOW_MODE
-                        or (delivery_result and delivery_result.startswith("delivered to "))
-                    ),
+                    "already_delivered": bool(SHADOW_MODE or _delivered(delivery_result)),
                     "recipient_email": _recipient_email_from_classification(
                         recipient_class, recipient_detail
                     ),
@@ -2036,17 +2019,28 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         return JSONResponse(status_code=int(enforced_disposition), content=response_content)
     except Exception as exc:
         # The pipeline itself failed (classifier down, model call failed, etc).
-        # This must fail open (accept) regardless of enforcement - a broken
-        # classifier or a slow model call must never itself cause a bounce of
-        # legitimate mail. It also must not fail silently - the whole point of
-        # the report is that every message gets a signal. Best-effort alert
-        # even though the thing that just broke might be the same call this
-        # now retries.
-        # The claim is released (not recorded as done) so a genuine retry of
-        # a call that failed before reaching a disposition still runs the
-        # pipeline, rather than being matched against a stale pending marker.
-        if dedup_key is not None:
-            dedup_store.release(dedup_key)
+        # A broken classifier or a slow model call must never itself cause a
+        # bounce of legitimate mail. When the mailbox is a recipient of its
+        # own, the message still arrives there, so accepting is safe. When
+        # Mercury is the only path into the mailbox, accepting would lose the
+        # message, so it gets a 421 and the mail host retries - unless it was
+        # already delivered before the failure, which is recorded as done so
+        # the retry cannot append it twice. It also must not fail silently -
+        # the whole point of the report is that every message gets a signal.
+        # Best-effort alert even though the thing that just broke might be
+        # the same call this now retries.
+        # Otherwise the claim is released (not recorded as done) so a genuine
+        # retry of a call that failed before reaching a disposition still
+        # runs the pipeline, rather than being matched against a stale
+        # pending marker.
+        status = 250
+        if delivered:
+            dedup_store.record(dedup_key, 250, {"ok": True, "delivered": True})
+        else:
+            if dedup_key is not None:
+                dedup_store.release(dedup_key)
+            if _custody_required():
+                status = 421
         alert = (
             "\U0001f6a8 Mercury pipeline error\n"
             f"Subject: {subject}\n"
@@ -2056,7 +2050,125 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             await notifier.send(alert[:4000])
         except Exception:
             pass
-        return JSONResponse(status_code=250, content={"ok": False, "error": str(exc)})
+        return JSONResponse(status_code=status, content={"ok": False, "error": str(exc)})
+
+
+def _custody_required() -> bool:
+    """Whether Mercury itself delivers accepted mail. The webhook is then the
+    only path into the mailbox, so a message that was not appended must get a
+    421 (the mail host retries) rather than an accept (the message is lost)."""
+    return mail_delivery.DELIVER_ACCEPTED_MAIL and not SHADOW_MODE
+
+
+def _delivered(delivery_result: str | None) -> bool:
+    return bool(delivery_result) and delivery_result.startswith("delivered to ")
+
+
+async def _deliver_accepted(
+    raw_message: str | None,
+    verdict: str,
+    category: str,
+    sender_address: str | None,
+    sender_domain: str | None,
+    subject: str,
+    action_content: str,
+    policy: dict,
+) -> tuple[str, dict | None]:
+    """Appends an accepted message to the mailbox and logs the attempt.
+    Returns the delivery result and the sender's standing custom action, which
+    the caller runs only after recording that the message is in place."""
+    target_folder = "INBOX"
+    custom_action = policy_store.match_custom_action(sender_address, policy)
+    if custom_action and custom_action.get("native", {}).get("kind") == "folder":
+        target_folder = custom_action["native"]["folder"]
+    if raw_message:
+        delivery_result = await asyncio.to_thread(
+            mail_delivery.deliver_accepted_message,
+            raw_message, verdict, category, "250", target_folder,
+        )
+    else:
+        delivery_result = "skipped (no raw message in payload)"
+    if mail_delivery.DELIVER_ACCEPTED_MAIL:
+        event_log.log_event("actions", {
+            "executed_at": _now(),
+            "kind": "DELIVER",
+            "details": subject,
+            "outcome_summary": delivery_result,
+            "result": delivery_result,
+            "domain": sender_domain,
+        })
+    return delivery_result, custom_action
+
+
+async def _run_custom_action(
+    custom_action: dict | None, delivery_result: str, action_content: str,
+) -> None:
+    if custom_action:
+        native = custom_action.get("native")
+        if native:
+            event_log.log_event("actions", {
+                "executed_at": _now(),
+                "kind": "CUSTOM_ACTION",
+                "details": custom_action["instruction"],
+                "outcome_summary": delivery_result,
+                "result": "ROUTED",
+                "domain": custom_action["selector"],
+            })
+        else:
+            await execute_standing_custom_action(custom_action, action_content[:8000])
+
+
+async def _defer_undelivered(
+    dedup_key: str, verdict: str, category: str, subject: str, delivery_result: str,
+) -> JSONResponse:
+    """Answers 421 for an accepted message that is not in the mailbox, keeping
+    its verdict so the retry only repeats the delivery."""
+    dedup_store.record_undelivered(dedup_key, verdict, category)
+    alert = (
+        "\U0001f6a8 Mercury could not deliver an accepted message\n"
+        f"Subject: {subject}\n"
+        f"{delivery_result}\n"
+        "The mail host was told 421 and will retry."
+    )
+    try:
+        await notifier.send(alert[:4000])
+    except Exception:
+        pass
+    return JSONResponse(
+        status_code=421,
+        content={"ok": False, "verdict": verdict, "undelivered": delivery_result},
+    )
+
+
+async def _redeliver(
+    dedup_key: str,
+    existing: dict,
+    raw_message: str | None,
+    sender_address: str | None,
+    sender_domain: str | None,
+    subject: str,
+    action_content: str,
+) -> JSONResponse:
+    """A mail host retry after a failed delivery: the verdict is already
+    decided, so only the delivery runs again."""
+    verdict, category = existing.get("verdict", "UNSURE"), existing.get("category", "OTHER")
+    delivery_result, custom_action = await _deliver_accepted(
+        raw_message, verdict, category, sender_address, sender_domain,
+        subject, action_content, policy_store.load(),
+    )
+    if _delivered(delivery_result):
+        content = {"ok": True, "verdict": verdict, "enforced": "250", "redelivered": True}
+        dedup_store.record(dedup_key, 250, content)
+        try:
+            await _run_custom_action(custom_action, delivery_result, action_content)
+        except Exception:
+            pass
+        return JSONResponse(status_code=250, content=content)
+    dedup_store.record_undelivered(dedup_key, verdict, category)
+    return JSONResponse(
+        status_code=421,
+        content={"ok": False, "verdict": verdict, "undelivered": delivery_result},
+    )
 
 
 @app.post("/rules/reverse")

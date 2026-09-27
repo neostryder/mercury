@@ -23,7 +23,7 @@ purpose; Cloudflare Workers is what I already had DNS on.
 
 ## Pipeline
 
-1. Your mail host POSTs the parsed message to the Worker's public hostname.
+1. Your mail host POSTs the parsed message to the Worker's public hostname, at a path ending in the `MERCURY_WEBHOOK_TOKEN` secret (`/webhook/<token>`). The backend trusts whatever the Worker forwards, including the payload's own `dmarc` result, so a request without the token gets a 404. `WEBHOOK_ALLOW_TOKENLESS=true` keeps the bare path open while a mail host's configured URL is being switched over.
 2. **If the path is `/ingest`** (the mail-webhook path): the Worker waits
    on the backend's response and returns its disposition as the webhook's
    own HTTP status, since ForwardEmail's own error-code translation
@@ -34,11 +34,8 @@ purpose; Cloudflare Workers is what I already had DNS on.
    fall in that range, so it is translated to a literal HTTP 200 rather
    than passed through raw - passing 250 through was silently miscoded by
    that same fallback into a hard-bounce reported to the sender for an
-   accepted message (see neostryder/mercury#53). A backend that's
-   unreachable, slow past a fixed timeout, or returns anything other than
-   one of the three recognized codes must still resolve to "accept" - sent
-   as that same literal HTTP 200 - since infrastructure trouble is never
-   itself a legitimate reason to bounce a message.
+   accepted message (see neostryder/mercury#53).
+   A backend that is unreachable, slower than a fixed timeout, or returns anything but those three codes never produces a bounce, since infrastructure trouble is not a reason to reject a message. When the mailbox is also a recipient on the alias, the Worker accepts with a literal HTTP 200 and the message still arrives there. When Mercury is the only path into the mailbox (`CUSTODY_REQUIRED` on the Worker, set alongside `MERCURY_DELIVER_ACCEPTED_MAIL` on the backend), an accept would lose the message, so the Worker answers 421 and the mail host retries.
 3. **Any other path** (e.g. `/rules/propose`, used by the Thunderbird
    extension) is proxied synchronously - the caller is a direct,
    interactive user action, not something under SMTP bounce-risk, so the
@@ -101,6 +98,8 @@ Gated by
 `MERCURY_DELIVER_ACCEPTED_MAIL` (default off) - turning it on must happen
 in lockstep with removing the mailbox's own address from every affected
 alias, never independently, or a message would be delivered twice.
+
+The backend also answers 421 for an accepted message that is not in the mailbox yet: a failed APPEND, a payload with no raw message, a repeat of a message whose first call is still running, or a pipeline error before delivery. The mail host retries. `backend/dedup.py` keeps the verdict of a failed delivery, so the retry repeats only the APPEND. A message appended before a later step failed is recorded as delivered, so a retry cannot add it twice.
 
 ## Event log
 

@@ -450,6 +450,94 @@ RULE_MATCH: A concrete scam condition"""
         self.assertEqual(second.status_code, 250)
         self.assertEqual(len(deliveries), 2)
 
+    def _whitelisted_delivery_setup(self):
+        self.store.put_sender("whitelist", "example.com")
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(side_effect=AssertionError("classifier must be skipped"))
+        )
+        app.judge = SimpleNamespace(
+            ask=AsyncMock(side_effect=AssertionError("judge must be skipped"))
+        )
+        app.notifier = SimpleNamespace(send=AsyncMock())
+        app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
+
+    def test_failed_delivery_defers_and_the_retry_only_redelivers(self):
+        self._whitelisted_delivery_setup()
+        results = iter(["failed: OSError: mailbox unreachable", "delivered to INBOX"])
+        deliveries = []
+
+        def deliver(*args):
+            deliveries.append(args)
+            return next(results)
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
+            patch.object(app.event_log, "log_event"),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            third = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(first.status_code, 421)
+        self.assertEqual(second.status_code, 250)
+        self.assertEqual(third.status_code, 250)
+        self.assertEqual(len(deliveries), 2)
+        app.notifier.send.assert_awaited_once()
+
+    def test_accepted_message_without_raw_is_deferred_when_mercury_delivers(self):
+        self._whitelisted_delivery_setup()
+        payload = self._payload()
+        del payload["raw"]
+
+        with patch.object(app.event_log, "log_event"):
+            response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        self.assertEqual(response.status_code, 421)
+
+    def test_duplicate_of_a_message_still_processing_is_deferred_when_mercury_delivers(self):
+        self._whitelisted_delivery_setup()
+        payload = self._payload()
+        app.dedup_store.claim(app._dedup_key(payload["raw"], ""))
+
+        with patch.object(app.event_log, "log_event"):
+            response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        self.assertEqual(response.status_code, 421)
+
+    def test_pipeline_error_defers_only_when_mercury_is_the_delivery_path(self):
+        app.classifier = SimpleNamespace(check=AsyncMock(side_effect=RuntimeError("classifier down")))
+        app.notifier = SimpleNamespace(send=AsyncMock())
+
+        with patch.object(app.event_log, "log_event"):
+            app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
+            delivering = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            app.mail_delivery.DELIVER_ACCEPTED_MAIL = False
+            parallel = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(delivering.status_code, 421)
+        self.assertEqual(parallel.status_code, 250)
+
+    def test_error_after_delivery_is_recorded_so_the_retry_does_not_append_twice(self):
+        self._whitelisted_delivery_setup()
+        self.store.put_custom_action("example.com", "Summarize it", None)
+        deliveries = []
+
+        def deliver(*args):
+            deliveries.append(args)
+            return "delivered to INBOX"
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
+            patch.object(app, "execute_standing_custom_action", AsyncMock(side_effect=RuntimeError("agent down"))),
+            patch.object(app.event_log, "log_event"),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(first.status_code, 250)
+        self.assertEqual(second.status_code, 250)
+        self.assertEqual(len(deliveries), 1)
+
     def test_brief_parser_returns_typed_changes(self):
         parsed = app._parse_brief_response("""QUESTION: NONE
 SENDER_LIST: BLACKLIST | example.com

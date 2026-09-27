@@ -43,12 +43,7 @@ ForwardEmail -> Worker gate -> backend -> authenticated sender lists
    and hard-bounces mail that was never actually spam. Putting an
    effectively-always-up edge Worker in front of your self-hosted backend
    removes your own uptime from that failure path entirely.
-2. The Worker waits on your self-hosted **backend**'s real verdict and
-   returns its disposition as the webhook response - but only when that
-   disposition is a clean, recognized one; a backend that's slow,
-   unreachable, or errors out still fails open (accept) rather than ever
-   risking a bounce caused by infrastructure rather than the message
-   itself.
+2. The Worker forwards a call only when its URL ends in the secret webhook token, so nothing but your mail host can submit mail. It then waits on your self-hosted **backend**'s verdict and returns that disposition as the webhook response. A backend that is slow, unreachable, or returns something unexpected never causes a bounce: the Worker accepts the message, or answers 421 so the mail host retries when the backend is the only path into your mailbox (`CUSTODY_REQUIRED`).
 3. The backend checks the normalized sender against deterministic
    **blacklist** (550), **greylist** (421), and **whitelist** (250) entries,
    then against **blacklist regex patterns** matched full-string against the

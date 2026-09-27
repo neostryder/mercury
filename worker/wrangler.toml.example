@@ -13,6 +13,10 @@ compatibility_date = "2026-08-01"
 [vars]
 BACKEND_BASE_URL = "https://your-backend-host.example.com"
 LOG_RETENTION_DAYS = "365"
+# Set to "true" when the backend delivers accepted mail itself (MERCURY_DELIVER_ACCEPTED_MAIL). The webhook is then the only path into the mailbox, so a backend outage answers 421 and the mail host retries, where an accept would lose the message.
+CUSTODY_REQUIRED = "false"
+# The webhook URL at your mail host ends in the MERCURY_WEBHOOK_TOKEN secret (wrangler secret put MERCURY_WEBHOOK_TOKEN), for example https://mercury.example.com/webhook/<token>. Set this to "true" only while switching the mail host's URL over; otherwise the bare /webhook path gets a 404.
+WEBHOOK_ALLOW_TOKENLESS = "false"
 
 [[routes]]
 pattern = "mercury.example.com"
