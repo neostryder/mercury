@@ -6,7 +6,7 @@
 // Thunderbird extension) straight to the backend and returns its real
 // response - that call is a direct, synchronous user action, not something
 // arriving under SMTP bounce-risk, so there is nothing to protect it from.
-import { DASHBOARD_HTML, lastNDays, renderStackedBarSVG, CHART_COLORS } from './dashboard.js';
+import { DASHBOARD_HTML, lastNDays, renderStackedBarSVG, categoryClass } from './dashboard.js';
 
 const INGEST_TIMEOUT_MS = 20000;
 const MAX_CREDENTIAL_BODY_BYTES = 4096;
@@ -404,7 +404,7 @@ async function handleDashboard(pathname, search, env, request) {
     headers: DASHBOARD_JSON_HEADERS,
   });
 
-  const hardBounceDetailMatch = pathname.match(/^\/dashboard\/api\/hard-bounces\/(\d+)$/);
+  const messageDetailMatch = pathname.match(/^\/dashboard\/api\/messages\/(\d+)$/);
   const actionItemCompleteMatch = pathname.match(/^\/dashboard\/api\/action-items\/(\d+)\/complete$/);
 
   try {
@@ -441,11 +441,14 @@ async function handleDashboard(pathname, search, env, request) {
       for (const r of volumeRows.results ?? []) {
         byDayVolume[r.day] = { accepted: r.accepted, deferred: r.deferred, bounced: r.bounced };
       }
-      const volumeSvg = renderStackedBarSVG(days, [
-        { key: 'accepted', label: 'Accepted', color: CHART_COLORS.good },
-        { key: 'deferred', label: 'Soft-deferred', color: CHART_COLORS.warn },
-        { key: 'bounced', label: 'Hard-bounced', color: CHART_COLORS.bad },
-      ], byDayVolume);
+      const volumeSeries = [
+        { key: 'accepted', label: 'Accepted', cls: 's-250' },
+        { key: 'deferred', label: 'Deferred', cls: 's-421' },
+        { key: 'bounced', label: 'Rejected', cls: 's-550' },
+      ];
+      const volumeSvg = renderStackedBarSVG(days, volumeSeries, byDayVolume, { label: 'Messages per day by outcome, last 30 days' });
+      const seriesTotal = (key, byDay) => days.reduce((sum, d) => sum + ((byDay[d] || {})[key] || 0), 0);
+      const volumeLegend = volumeSeries.map((s) => ({ label: s.label, cls: s.cls, total: seriesTotal(s.key, byDayVolume) }));
 
       const totalsByCategory = {};
       for (const r of categoryRows.results ?? []) {
@@ -456,8 +459,8 @@ async function handleDashboard(pathname, search, env, request) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 6)
         .map(([c]) => c);
-      const categorySeries = topCategories.map((c, i) => ({ key: c, label: c, color: CHART_COLORS.extra[i % CHART_COLORS.extra.length] }));
-      categorySeries.push({ key: '__other', label: 'Other', color: CHART_COLORS.muted });
+      const categorySeries = topCategories.map((c) => ({ key: c, label: c, cls: categoryClass(c) }));
+      categorySeries.push({ key: '__other', label: 'Everything else', cls: 'cat-other' });
 
       const byDayCategory = {};
       for (const r of categoryRows.results ?? []) {
@@ -466,25 +469,41 @@ async function handleDashboard(pathname, search, env, request) {
         byDayCategory[r.day] = byDayCategory[r.day] || {};
         byDayCategory[r.day][key] = (byDayCategory[r.day][key] || 0) + r.count;
       }
-      const categorySvg = renderStackedBarSVG(days, categorySeries, byDayCategory);
+      const categorySvg = renderStackedBarSVG(days, categorySeries, byDayCategory, { label: 'Messages per day by category, last 30 days' });
+      const categoryLegend = categorySeries
+        .map((s) => ({ label: s.label, cls: s.cls, total: seriesTotal(s.key, byDayCategory) }))
+        .filter((s) => s.total > 0);
 
-      return json({ volumeSvg, categorySvg });
+      return json({ volumeSvg, categorySvg, volumeLegend, categoryLegend });
     }
 
-    if (pathname === '/dashboard/api/hard-bounces') {
-      const { limit, offset } = pageParams(params);
-      const result = await env.MERCURY_LOG.prepare(
-        "SELECT id, received_at, from_display, from_domain, subject, category, verdict, triggered_rule, recipient_class, recipient_detail FROM messages WHERE enforced_disposition = '550' ORDER BY id DESC LIMIT ? OFFSET ?"
-      ).bind(limit + 1, offset).all();
-      return json(paginate(result.results ?? [], limit));
-    }
-
-    if (hardBounceDetailMatch) {
-      const row = await env.MERCURY_LOG.prepare(
-        "SELECT * FROM messages WHERE id = ? AND enforced_disposition = '550'"
-      ).bind(Number(hardBounceDetailMatch[1])).first();
-      if (!row) return new Response('not found', { status: 404 });
+    if (messageDetailMatch) {
+      const row = await env.MERCURY_LOG.prepare('SELECT * FROM messages WHERE id = ?')
+        .bind(Number(messageDetailMatch[1])).first();
+      if (!row) return json({ ok: false, error: 'no message with that id' }, 404);
       return json(row);
+    }
+
+    if (pathname === '/dashboard/api/health') {
+      const db = env.MERCURY_LOG;
+      const [latestMessage, latestEvent, sweep, delivered, failed, count] = await Promise.all([
+        db.prepare('SELECT MAX(received_at) AS at FROM messages').first(),
+        db.prepare('SELECT MAX(at) AS at FROM admin_log').first(),
+        db.prepare("SELECT at, detail FROM admin_log WHERE event = 'log_retention_sweep' ORDER BY id DESC LIMIT 1").first(),
+        db.prepare("SELECT MAX(executed_at) AS at FROM actions WHERE kind = 'DELIVER' AND result LIKE 'delivered to %'").first(),
+        db.prepare("SELECT executed_at AS at, result FROM actions WHERE kind = 'DELIVER' AND result LIKE 'failed%' ORDER BY id DESC LIMIT 1").first(),
+        db.prepare('SELECT COUNT(*) AS n FROM messages').first(),
+      ]);
+      return json({
+        latestMessageAt: latestMessage?.at ?? null,
+        latestEventAt: latestEvent?.at ?? null,
+        lastRetentionSweepAt: sweep?.at ?? null,
+        lastRetentionSweep: sweep?.detail ?? null,
+        lastDeliveredAt: delivered?.at ?? null,
+        lastDeliveryFailedAt: failed?.at ?? null,
+        lastDeliveryFailure: failed?.result ?? null,
+        messageCount: count?.n ?? 0,
+      });
     }
 
     if (pathname === '/dashboard/api/rules/reverse') {
@@ -527,33 +546,63 @@ async function handleDashboard(pathname, search, env, request) {
 
     if (pathname === '/dashboard/api/summary') {
       const db = env.MERCURY_LOG;
-      const [last24h, hardBounces24h, urgent24h, actions24h, ruleChanges7d, categories7d] = await Promise.all([
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day')").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day') AND enforced_disposition = '550'").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day') AND alert_level = 'URGENT'").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM actions WHERE executed_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day')").first(),
+      const since24h = "strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day')";
+      const [last24h, actions24h, ruleChanges7d, categories7d, openItems] = await Promise.all([
+        db.prepare(`
+          SELECT COUNT(*) AS total,
+            SUM(CASE WHEN enforced_disposition = '250' THEN 1 ELSE 0 END) AS accepted,
+            SUM(CASE WHEN enforced_disposition = '421' THEN 1 ELSE 0 END) AS deferred,
+            SUM(CASE WHEN enforced_disposition = '550' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN alert_level = 'URGENT' THEN 1 ELSE 0 END) AS urgent
+          FROM messages WHERE received_at >= ${since24h}
+        `).first(),
+        db.prepare(`
+          SELECT COUNT(*) AS total,
+            SUM(CASE WHEN kind = 'DELIVER' AND result LIKE 'delivered to %' THEN 1 ELSE 0 END) AS delivered,
+            SUM(CASE WHEN kind = 'DELIVER' AND result LIKE 'failed%' THEN 1 ELSE 0 END) AS failed
+          FROM actions WHERE executed_at >= ${since24h}
+        `).first(),
         db.prepare("SELECT COUNT(*) AS n FROM rule_changes WHERE changed_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day')").first(),
         db.prepare("SELECT category, COUNT(*) AS count FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day') GROUP BY category ORDER BY count DESC").all(),
+        db.prepare('SELECT COUNT(*) AS n FROM action_items WHERE completed_at IS NULL').first(),
       ]);
       return json({
         last24h: {
-          total: last24h?.n ?? 0,
-          hardBounces: hardBounces24h?.n ?? 0,
-          urgent: urgent24h?.n ?? 0,
-          actions: actions24h?.n ?? 0,
+          total: last24h?.total ?? 0,
+          accepted: last24h?.accepted ?? 0,
+          deferred: last24h?.deferred ?? 0,
+          hardBounces: last24h?.rejected ?? 0,
+          urgent: last24h?.urgent ?? 0,
+          actions: actions24h?.total ?? 0,
+          delivered: actions24h?.delivered ?? 0,
+          deliveryFailed: actions24h?.failed ?? 0,
         },
         last7d: { ruleChanges: ruleChanges7d?.n ?? 0 },
-        categories: categories7d?.results ?? [],
+        openActionItems: openItems?.n ?? 0,
+        categories: (categories7d?.results ?? []).map((c) => ({ ...c, cls: categoryClass(c.category) })),
       });
     }
 
     if (pathname === '/dashboard/api/messages') {
       const disposition = params.get('disposition');
+      const q = (params.get('q') || '').trim().slice(0, 200);
       const { limit, offset } = pageParams(params);
-      const stmt = disposition
-        ? env.MERCURY_LOG.prepare(`SELECT ${MESSAGE_LIST_COLUMNS} FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT ? OFFSET ?`).bind(disposition, limit + 1, offset)
-        : env.MERCURY_LOG.prepare(`SELECT ${MESSAGE_LIST_COLUMNS} FROM messages ORDER BY id DESC LIMIT ? OFFSET ?`).bind(limit + 1, offset);
-      const result = await stmt.all();
+      const where = [];
+      const binds = [];
+      if (disposition) {
+        where.push('enforced_disposition = ?');
+        binds.push(disposition);
+      }
+      if (q) {
+        // LIKE wildcards typed into the search box match literally.
+        const pattern = '%' + q.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+        where.push("(from_display LIKE ? ESCAPE '\\' OR from_domain LIKE ? ESCAPE '\\' OR subject LIKE ? ESCAPE '\\')");
+        binds.push(pattern, pattern, pattern);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const result = await env.MERCURY_LOG.prepare(
+        `SELECT ${MESSAGE_LIST_COLUMNS} FROM messages ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`
+      ).bind(...binds, limit + 1, offset).all();
       return json(paginate(result.results ?? [], limit));
     }
 
@@ -681,7 +730,7 @@ async function proxyIngest(backendUrl, bodyText, env) {
   }
 }
 
-// Called from the dashboard's hard-bounce detail view. The rules ledger
+// Called from the dashboard message inspector. The rules ledger
 // lives only on the backend's filesystem (see backend/app.py), not in D1, so
 // reversing a rule means a real Worker-to-backend call - authenticated the
 // same way the backend's own calls into this Worker's /log route are

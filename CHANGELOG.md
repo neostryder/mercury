@@ -4,6 +4,10 @@
 
 ### Added
 
+- [Visible] [Dashboard] Activity has a search box for sender and subject, which the / key jumps to, plus buttons that filter by outcome. A percent sign or underscore in a search matches literally.
+
+- [Visible] [Dashboard] A pill in the header says whether mail is flowing and turns red when the latest delivery to the mailbox failed. The System view lists when the last message arrived, the last delivery, the last failed delivery with its error, and the last retention sweep. The Overview splits the last 24 hours into accepted, deferred and rejected mail and counts failed deliveries.
+
 - [Internal] [Filtering] A second structured-judge backend, configured with `LAYA_URL`: any server that accepts the same `/v1/systemone` request, such as a self-hosted open-weight model. It answers every message in the background and decides nothing. It takes 4 to 8 s for the full question set against about 0.3 s for the primary, so no message waits for it except during a failover. Each pair of answers is appended to `/data/laya_shadow.jsonl` (answers only, never message content), and `backend/laya_shadow.py` refits a calibration from them at startup and every six hours in a separate process. The primary's answers are the soft targets. Nouls get Platt scaling, while verdict, category and severity get a temperature plus a per-option bias, which can correct a systematic confusion such as PHISH read as SPAM. Confidence is recomputed the way the primary defines it, so the thresholds in `verdict_policy.py` carry over. Readiness is scored out of fold on dispositions: 50 rows, 95% agreement with the primary, and at most 1% bounces of mail the primary did not bounce. With `LAYA_FAILOVER=true` and a ready calibration, a primary outage is decided by the calibrated backend instead of the language-model judge. `GET /laya/status` reports the metrics. (#62)
 
 - [Internal] [Filtering] A Deliver, Soft-bounce or Hard-bounce tap on a Telegram verdict report is recorded against that message's shadow row as a human label, and the readiness metrics report both backends' accuracy on those labels. (#62)
@@ -106,9 +110,15 @@
 
 ### Changed
 
+- [Visible] [Dashboard] The dashboard is split into five views: Overview, Activity, Policy, Audit and System. The view and any Activity filter are kept in the address, so a link or a reload returns to the same place. It follows the system light or dark theme unless one is picked in the header, and it refreshes every minute while the tab is visible.
+
+- [Visible] [Dashboard] Any message opens in a side panel showing its verdict, reasoning, recipient, injection check, saved content and the rule that decided it, with a button that removes that rule. Before, only hard bounces could be opened.
+
+- [Visible] [Dashboard] Removing a policy entry asks first in a dialog that names the list. A search box above the policy filters every list at once. The sender lists are now called Always accept, Always defer and Always reject, with their SMTP codes beside them.
+
 - [Visible] [Thunderbird] The extension signs in with its own secret, `MERCURY_EXTENSION_SECRET`, which the Worker accepts only for rule proposals, instead of the backend's `MERCURY_SHARED_SECRET`. Set the new secret on the Worker and paste it into the extension's options. Until then, the old shared secret keeps working there.
 
-- [Internal] [Dashboard] Dashboard pages are no longer cached, can't be framed by another site, and carry a Content Security Policy. A POST whose Origin is not the dashboard's own gets a 403. The message list no longer sends the saved body and analysis of hard bounces, which only the bounce detail view reads.
+- [Internal] [Dashboard] Dashboard pages are no longer cached, can't be framed by another site, and carry a Content Security Policy. A POST whose Origin is not the dashboard's own gets a 403. The message list no longer sends the saved body and analysis of hard bounces, which only the message panel reads.
 
 - [Visible] [Telegram] Only a 421 soft deferral sends an individual Telegram report. Hard bounces and accepted mail show up in the dashboard and the daily digest instead.
 
@@ -155,6 +165,10 @@
   a recurring false-alarm pattern where routine account-security
   notifications (e.g. a legitimate "new login" email) paged Telegram despite
   a LEGIT verdict and a SAFE injection screen.
+
+### Removed
+
+- [Visible] [Dashboard] The Hard bounces table and its API are gone. Rejected mail is one filter on Activity, listed in order with everything else. (#65)
 
 ### Fixed
 

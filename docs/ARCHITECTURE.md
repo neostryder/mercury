@@ -118,7 +118,7 @@ A hard-bounce recommendation also saves the message's full content and
 reasoning so it can be reviewed later.
 
 Each logged message also gets a `recipient_class` (`backend/app.py`'s
-`_classify_recipient()`), shown as a badge in the dashboard: `R` when an
+`_classify_recipient()`), shown in the dashboard's message panel: `R` when an
 rpgm.tools address is visibly in To/Cc, `F` when one of the personal
 addresses in `identities.json` (the same gitignored list `redact()` uses -
 see above) is visibly in To/Cc, `r` when neither is visible but
@@ -126,8 +126,8 @@ ForwardEmail's own webhook session recipient shows a direct rpgm.tools
 address (a Bcc straight to rpgm.tools), or `f` when the session recipient is
 the personal-address forwarding alias instead (a Bcc on a message sent to a
 personal address, before it was forwarded in). `recipient_detail` carries
-the specific matched address and field (or envelope alias) for the
-dashboard's tooltip. Only
+the specific matched address and field (or envelope alias), shown beneath
+it. Only
 computed going forward - it relies on To/Cc and session data that was never
 persisted before this existed, so older rows carry neither column.
 
@@ -223,10 +223,10 @@ false-positive bounce is recoverable by the sender while a false-positive
 pattern match against the whitelist would hand a spammer full bypass trust.
 A pattern match's reasoning names the pattern that fired, not just the
 disposition, and the matched pattern text is saved as the message's
-`triggered_rule` - the same dashboard "Reverse this rule" button that undoes
+`triggered_rule` - the same dashboard "Remove this rule" button that undoes
 a bad semantic rule also removes a blacklist pattern this way, so a pattern
 broad enough to catch a real sender is one click to walk back from the
-bounced message's own detail view.
+bounced message's own panel.
 
 Sender authentication uses ForwardEmail's own `dmarc` webhook field
 (`backend/filtering.py`'s `sender_domain_is_authenticated()`) rather than
