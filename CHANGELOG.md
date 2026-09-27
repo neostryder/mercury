@@ -106,6 +106,10 @@
 
 ### Changed
 
+- [Visible] [Thunderbird] The extension signs in with its own secret, `MERCURY_EXTENSION_SECRET`, which the Worker accepts only for rule proposals, instead of the backend's `MERCURY_SHARED_SECRET`. Set the new secret on the Worker and paste it into the extension's options. Until then, the old shared secret keeps working there.
+
+- [Internal] [Dashboard] Dashboard pages are no longer cached, can't be framed by another site, and carry a Content Security Policy. A POST whose Origin is not the dashboard's own gets a 403. The message list no longer sends the saved body and analysis of hard bounces, which only the bounce detail view reads.
+
 - [Visible] [Telegram] Only a 421 soft deferral sends an individual Telegram report. Hard bounces and accepted mail show up in the dashboard and the daily digest instead.
 
 - [Visible] [Filtering] The Telegram brief now writes a proposed semantic rule as a full sentence describing what a matching message says or asks for, not a bare label. A label such as "Political fundraising" lost to no-match on campaign mail that never used the word political, while the sentence form matched it. Together with the pre-approval self-test, this closes #55. (#55)
@@ -154,9 +158,17 @@
 
 ### Fixed
 
+- [Visible] [Dashboard] The counts and charts for the last day, the last week and the last 30 days now cover exactly that span. Stored timestamps were compared as text against a different format, so every message from the whole cutoff date was counted, and the daily message card could show nearly twice the real number. Retention deletes were off by the same day.
+
+- [Visible] [Dashboard] A panel whose data fails to load says so, instead of showing an empty table or "No open action items". Dashboard API errors now return HTTP 500, and a failed Complete on an action item shows why.
+
+- [Visible] [Dashboard] Standing rules counts the rules in the live policy. It was rebuilt from the change log, where an add and its dashboard reversal were logged under different text, so the count only grew.
+
+- [Visible] [Digest] The daily digest builds again. It read the paginated dashboard endpoints as plain lists and failed on every run once pagination landed. It now pages through each one until it covers the last 24 hours, and takes the standing rule count from the live policy. (#66)
+
 - [Visible] [Pipeline] Accepted mail that Mercury cannot deliver is deferred instead of lost. With `MERCURY_DELIVER_ACCEPTED_MAIL` on, a failed IMAP APPEND, a payload with no raw message, a repeat call while the first is still running, a pipeline error, and an unreachable backend now answer 421, so the mail host retries. All of these answered 250 before, which ended delivery with nothing in the mailbox. The retry repeats only the APPEND, and a message appended before a later step failed is not appended again. Set `CUSTODY_REQUIRED=true` on the Worker alongside the backend flag.
 
-- [Visible] [Pipeline] The webhook URL now ends in a secret token, `MERCURY_WEBHOOK_TOKEN`, and a call without it gets a 404. Set the token as a Worker secret and change the webhook URL at the mail host; `WEBHOOK_ALLOW_TOKENLESS=true` keeps the old path open during the switch.
+- [Visible] [Pipeline] The webhook URL now ends in a secret token, `MERCURY_WEBHOOK_TOKEN`, and a call without it gets a 421, so a mistyped URL defers mail rather than bouncing it. Set the token as a Worker secret and change the webhook URL at the mail host; `WEBHOOK_ALLOW_TOKENLESS=true` keeps the old path open during the switch.
 
 - [Visible] [Telegram] A Gandalf handoff that names a hostname blocked by ForwardEmail's link filter is sent again with that hostname written as `host[.]tld`, instead of failing with "Could not reach Gandalf". A failed handoff now logs the SMTP reply. (#64)
 

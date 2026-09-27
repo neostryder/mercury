@@ -33,8 +33,7 @@ for your profile:
 5. Open the extension's options (from the Add-ons Manager) and set:
    - **Mercury URL** - your Worker gate's public hostname (the same one
      ForwardEmail's webhook calls), e.g. `https://mercury.example.com`.
-   - **Shared secret** - the same value as your backend's
-     `MERCURY_SHARED_SECRET`.
+   - **Extension secret** - the value of `MERCURY_EXTENSION_SECRET` on your Worker (`wrangler secret put MERCURY_EXTENSION_SECRET`). The Worker accepts it only for rule proposals.
 
 From then on it checks `thunderbird/updates.json` in this repo for new
 versions on Thunderbird's own schedule (or via Add-ons Manager -> gear

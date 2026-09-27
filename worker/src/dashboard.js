@@ -220,6 +220,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   .bar-row .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
   .bar-row .bar-count { width: 36px; text-align: right; }
   .empty { padding: 32px; text-align: center; color: var(--muted); }
+  .load-error { color: var(--bad); }
   .pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--muted); }
   .pager select {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
@@ -369,6 +370,31 @@ export const DASHBOARD_HTML = `<!doctype html>
 function esc(s) {
   return (s ?? '').toString().replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+  if (!res.ok || data === null || data.ok === false) {
+    throw new Error((data && (data.error || data.detail)) || ('HTTP ' + res.status));
+  }
+  return data;
+}
+function loadFailed(what, err) {
+  return '<div class="empty load-error">Could not load ' + esc(what) + ': ' + esc(err.message || err) + '. Reload the page to try again.</div>';
+}
+function loadFailedRow(what, err, colspan) {
+  return '<tr><td colspan="' + colspan + '">' + loadFailed(what, err) + '</td></tr>';
+}
+function standingRuleCount(policy) {
+  if (!policy) return null;
+  const count = (lists) => Object.values(lists || {}).reduce((n, list) => n + list.length, 0);
+  return count(policy.sender_lists) + (policy.blacklist_patterns || []).length +
+    count(policy.semantic_rules) + (policy.custom_actions || []).length;
+}
 function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -388,9 +414,17 @@ function recipCell(cls, detail) {
 }
 
 async function loadSummary() {
-  const res = await fetch('/dashboard/api/summary');
-  const data = await res.json();
+  let data;
+  try {
+    data = await fetchJson('/dashboard/api/summary');
+  } catch (err) {
+    document.getElementById('asof').textContent = 'summary unavailable';
+    document.getElementById('cards').innerHTML = loadFailed('the summary', err);
+    document.getElementById('categoryBars').innerHTML = loadFailed('the category breakdown', err);
+    return;
+  }
   document.getElementById('asof').textContent = 'as of ' + new Date().toLocaleString();
+  const ruleCount = standingRuleCount(filteringPolicy);
 
   const cards = [
     { label: 'Messages (24h)', value: data.last24h.total, cls: '' },
@@ -398,10 +432,10 @@ async function loadSummary() {
     { label: 'Urgent alerts (24h)', value: data.last24h.urgent, cls: data.last24h.urgent > 0 ? 'bad' : 'good' },
     { label: 'Actions taken (24h)', value: data.last24h.actions, cls: '' },
     { label: 'Rule changes (7d)', value: data.last7d.ruleChanges, cls: '' },
-    { label: 'Standing rules', value: data.ruleCount, cls: '' },
+    { label: 'Standing rules', value: ruleCount === null ? '-' : ruleCount, cls: '', id: 'ruleCountValue' },
   ];
   document.getElementById('cards').innerHTML = cards.map(c =>
-    \`<div class="card \${c.cls}"><div class="label">\${esc(c.label)}</div><div class="value">\${c.value}</div></div>\`
+    \`<div class="card \${c.cls}"><div class="label">\${esc(c.label)}</div><div class="value"\${c.id ? \` id="\${c.id}"\` : ''}>\${c.value}</div></div>\`
   ).join('');
 
   const maxCount = Math.max(1, ...data.categories.map(c => c.count));
@@ -440,6 +474,8 @@ function policyEntry(primary, detail, kind, group, index) {
 
 function renderFilteringPolicy() {
   if (!filteringPolicy) return;
+  const ruleCountEl = document.getElementById('ruleCountValue');
+  if (ruleCountEl) ruleCountEl.textContent = standingRuleCount(filteringPolicy);
   const warnings = filteringPolicy.migration_warnings || [];
   document.getElementById('filteringWarnings').innerHTML = warnings.length
     ? '<div class="policy-warning"><strong>Unmapped legacy rules need review.</strong><br>' +
@@ -658,9 +694,14 @@ async function loadMessages(filter) {
   messagesFilter = filter || '';
   const url = '/dashboard/api/messages?' + pagerQuery('messages') +
     (messagesFilter ? '&disposition=' + messagesFilter : '');
-  const res = await fetch(url);
-  const { rows, hasMore } = await res.json();
   const tbody = document.querySelector('#messagesTable tbody');
+  let rows, hasMore;
+  try {
+    ({ rows, hasMore } = await fetchJson(url));
+  } catch (err) {
+    tbody.innerHTML = loadFailedRow('recent activity', err, 8);
+    return;
+  }
   tbody.innerHTML = rows.length ? rows.map(r => \`
     <tr class="disp-\${esc(r.enforced_disposition)}">
       <td>\${esc(fmtTime(r.received_at))}</td>
@@ -676,8 +717,13 @@ async function loadMessages(filter) {
 }
 
 async function loadRules() {
-  const res = await fetch('/dashboard/api/rules?' + pagerQuery('rules'));
-  const { rows, hasMore } = await res.json();
+  let rows, hasMore;
+  try {
+    ({ rows, hasMore } = await fetchJson('/dashboard/api/rules?' + pagerQuery('rules')));
+  } catch (err) {
+    document.querySelector('#rulesTable tbody').innerHTML = loadFailedRow('rule changes', err, 4);
+    return;
+  }
   document.querySelector('#rulesTable tbody').innerHTML = rows.length ? rows.map(r => \`
     <tr>
       <td>\${esc(fmtTime(r.changed_at))}</td>
@@ -689,8 +735,13 @@ async function loadRules() {
 }
 
 async function loadActions() {
-  const res = await fetch('/dashboard/api/actions?' + pagerQuery('actions'));
-  const { rows, hasMore } = await res.json();
+  let rows, hasMore;
+  try {
+    ({ rows, hasMore } = await fetchJson('/dashboard/api/actions?' + pagerQuery('actions')));
+  } catch (err) {
+    document.querySelector('#actionsTable tbody').innerHTML = loadFailedRow('actions', err, 5);
+    return;
+  }
   document.querySelector('#actionsTable tbody').innerHTML = rows.length ? rows.map(r => \`
     <tr>
       <td>\${esc(fmtTime(r.executed_at))}</td>
@@ -712,8 +763,14 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 });
 
 async function loadTrends() {
-  const res = await fetch('/dashboard/api/trends');
-  const data = await res.json();
+  let data;
+  try {
+    data = await fetchJson('/dashboard/api/trends');
+  } catch (err) {
+    document.getElementById('volumeTrend').innerHTML = loadFailed('the volume trend', err);
+    document.getElementById('categoryTrend').innerHTML = loadFailed('the category trend', err);
+    return;
+  }
   document.getElementById('volumeTrend').innerHTML = data.volumeSvg || '<div class="empty">No data yet.</div>';
   document.getElementById('categoryTrend').innerHTML = data.categorySvg || '<div class="empty">No data yet.</div>';
 }
@@ -721,9 +778,14 @@ async function loadTrends() {
 const bounceDetailCache = {};
 
 async function loadHardBounces() {
-  const res = await fetch('/dashboard/api/hard-bounces?' + pagerQuery('bounces'));
-  const { rows, hasMore } = await res.json();
   const tbody = document.querySelector('#bouncesTable tbody');
+  let rows, hasMore;
+  try {
+    ({ rows, hasMore } = await fetchJson('/dashboard/api/hard-bounces?' + pagerQuery('bounces')));
+  } catch (err) {
+    tbody.innerHTML = loadFailedRow('hard bounces', err, 7);
+    return;
+  }
   tbody.innerHTML = rows.length ? rows.map(r => \`
     <tr class="bounce-row" data-id="\${r.id}">
       <td><span class="caret">&#9656;</span></td>
@@ -819,9 +881,14 @@ document.getElementById('bouncesTable').addEventListener('click', (e) => {
 });
 
 async function loadActionItems() {
-  const res = await fetch('/dashboard/api/action-items');
-  const rows = await res.json();
   const panel = document.getElementById('actionItemsPanel');
+  let rows;
+  try {
+    rows = await fetchJson('/dashboard/api/action-items');
+  } catch (err) {
+    panel.innerHTML = loadFailed('action items', err);
+    return;
+  }
   panel.innerHTML = rows.length ? rows.map(r => \`
     <div class="action-item-row" data-id="\${r.id}">
       <input type="checkbox" data-complete-id="\${r.id}">
@@ -838,18 +905,21 @@ document.getElementById('actionItemsPanel').addEventListener('change', async (e)
   const id = box.dataset.completeId;
   const row = box.closest('.action-item-row');
   box.disabled = true;
-  try {
-    const res = await fetch('/dashboard/api/action-items/' + id + '/complete', { method: 'POST' });
-    const data = await res.json();
-    if (data.ok && data.completed) {
-      row.classList.add('done');
-    } else {
-      box.checked = false;
-      box.disabled = false;
-    }
-  } catch (err) {
+  const meta = row.querySelector('.action-item-meta');
+  const failed = (reason) => {
     box.checked = false;
     box.disabled = false;
+    meta.insertAdjacentHTML('beforeend', '<div class="load-error">Could not mark this done: ' + esc(reason) + '. Try again.</div>');
+  };
+  try {
+    const data = await fetchJson('/dashboard/api/action-items/' + id + '/complete', { method: 'POST' });
+    if (data.completed) {
+      row.classList.add('done');
+    } else {
+      failed('it was already completed or no longer exists');
+    }
+  } catch (err) {
+    failed(err.message || err);
   }
 });
 

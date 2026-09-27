@@ -23,7 +23,7 @@ purpose; Cloudflare Workers is what I already had DNS on.
 
 ## Pipeline
 
-1. Your mail host POSTs the parsed message to the Worker's public hostname, at a path ending in the `MERCURY_WEBHOOK_TOKEN` secret (`/webhook/<token>`). The backend trusts whatever the Worker forwards, including the payload's own `dmarc` result, so a request without the token gets a 404. `WEBHOOK_ALLOW_TOKENLESS=true` keeps the bare path open while a mail host's configured URL is being switched over.
+1. Your mail host POSTs the parsed message to the Worker's public hostname, at a path ending in the `MERCURY_WEBHOOK_TOKEN` secret (`/webhook/<token>`). The backend trusts whatever the Worker forwards, including the payload's own `dmarc` result, so a request without the token gets a 421, which defers mail from a misconfigured mail host instead of bouncing it. `WEBHOOK_ALLOW_TOKENLESS=true` keeps the bare path open while a mail host's configured URL is being switched over.
 2. **If the path is `/ingest`** (the mail-webhook path): the Worker waits
    on the backend's response and returns its disposition as the webhook's
    own HTTP status, since ForwardEmail's own error-code translation

@@ -15,11 +15,11 @@ introducing a redundant env var for the same host.
 The insights paragraph reuses the judge provider seam (providers/judge.py)
 with the aggregate stats as context, rather than a separate LLM integration.
 
-The /dashboard/api/messages, /rules, and /actions routes each cap out at
-their own fixed row limit (100/50/50 respectively, most recent first) - the
-same limit the dashboard UI itself is bound by. On a day with unusually high
-volume the last-24h breakdown below may undercount; render_html() notes this
-inline only when the cap was actually reached.
+The /dashboard/api/messages, /rules, and /actions routes are paginated, so
+each is read page by page until the rows are older than the 24-hour window.
+Reading stops after MAX_PAGES pages; render_html() notes it inline when that
+limit cut the window short. The standing rule count comes from the live
+policy at /dashboard/api/filtering.
 """
 import asyncio
 import html
@@ -53,7 +53,8 @@ SMTP_PORT = 465
 DIGEST_FROM = "gandalf@rpgm.tools"
 DIGEST_TO = "aaron@rpgm.tools"
 DASHBOARD_LINK = "https://mercury.rpgm.tools/dashboard"
-MESSAGES_ROW_CAP = 100
+PAGE_SIZE = 100
+MAX_PAGES = 20
 LOOKBACK = timedelta(hours=24)
 
 
@@ -116,21 +117,52 @@ async def _get(client: httpx.AsyncClient, base_url: str, path: str) -> object:
     return r.json()
 
 
+async def _get_window(
+    client: httpx.AsyncClient, base_url: str, path: str, field: str, cutoff: datetime,
+) -> tuple[list[dict], bool]:
+    """Pages through one of the paginated dashboard tables, newest first,
+    until a row falls before cutoff. Returns the rows and whether MAX_PAGES
+    ran out before the window was covered."""
+    rows: list[dict] = []
+    for page in range(MAX_PAGES):
+        data = await _get(client, base_url, f"{path}?limit={PAGE_SIZE}&offset={page * PAGE_SIZE}")
+        batch = data.get("rows", []) if isinstance(data, dict) else []
+        rows.extend(batch)
+        oldest = _parse_ts(batch[-1].get(field)) if batch else None
+        if not data.get("hasMore") or (oldest and oldest < cutoff):
+            return rows, False
+    return rows, True
+
+
+def _standing_rule_count(policy: object) -> int:
+    if not isinstance(policy, dict):
+        return 0
+    sender_lists = policy.get("sender_lists") or {}
+    semantic_rules = policy.get("semantic_rules") or {}
+    return (
+        sum(len(v) for v in sender_lists.values())
+        + len(policy.get("blacklist_patterns") or [])
+        + sum(len(v) for v in semantic_rules.values())
+        + len(policy.get("custom_actions") or [])
+    )
+
+
 async def gather_stats() -> dict:
     base_url = _dashboard_base_url()
     headers = {
         "CF-Access-Client-Id": CF_ACCESS_CLIENT_ID,
         "CF-Access-Client-Secret": CF_ACCESS_CLIENT_SECRET,
     }
+    cutoff = datetime.now(timezone.utc) - LOOKBACK
     async with httpx.AsyncClient(headers=headers, timeout=30) as client:
-        summary, messages, rules, actions = await asyncio.gather(
+        summary, policy, (messages, messages_capped), (rules, _), (actions, _) = await asyncio.gather(
             _get(client, base_url, "/dashboard/api/summary"),
-            _get(client, base_url, "/dashboard/api/messages"),
-            _get(client, base_url, "/dashboard/api/rules"),
-            _get(client, base_url, "/dashboard/api/actions"),
+            _get(client, base_url, "/dashboard/api/filtering"),
+            _get_window(client, base_url, "/dashboard/api/messages", "received_at", cutoff),
+            _get_window(client, base_url, "/dashboard/api/rules", "changed_at", cutoff),
+            _get_window(client, base_url, "/dashboard/api/actions", "executed_at", cutoff),
         )
 
-    cutoff = datetime.now(timezone.utc) - LOOKBACK
     recent_messages = _since(messages, "received_at", cutoff)
     recent_rules = _since(rules, "changed_at", cutoff)
     recent_actions = _since(actions, "executed_at", cutoff)
@@ -168,7 +200,8 @@ async def gather_stats() -> dict:
     return {
         "summary": summary or {},
         "recent_messages": recent_messages,
-        "messages_capped": len(messages) >= MESSAGES_ROW_CAP,
+        "messages_capped": messages_capped,
+        "rule_count": _standing_rule_count(policy),
         "verdict_counts": verdict_counts,
         "category_counts": category_counts,
         "hard_bounces": hard_bounces,
@@ -187,7 +220,7 @@ async def build_insights(stats: dict, judge: Judge) -> str:
         f"Urgent alerts: {last24h.get('urgent', 0)}",
         f"Actions taken: {last24h.get('actions', 0)}",
         f"Rule changes in the last 7 days: {summary.get('last7d', {}).get('ruleChanges', 0)}",
-        f"Standing rule count: {summary.get('ruleCount', 0)}",
+        f"Standing rule count: {stats['rule_count']}",
         "Verdict breakdown, last 24 hours: "
         + (", ".join(f"{k}={v}" for k, v in stats["verdict_counts"].items()) or "none"),
         "Category breakdown, last 24 hours: "
@@ -309,8 +342,7 @@ def render_html(stats: dict, insights: str) -> str:
     generated = stats["generated_at"].strftime("%B %d, %Y %I:%M %p %Z")
     cap_note = (
         '<p style="font-size:12px;color:#9aa3ad;margin-top:4px;">'
-        f"The dashboard API returns at most {MESSAGES_ROW_CAP} recent messages - "
-        "today's breakdown may undercount if more than that arrived.</p>"
+        f"More than {MAX_PAGES * PAGE_SIZE} messages arrived today, and this breakdown covers the newest {MAX_PAGES * PAGE_SIZE}.</p>"
         if stats["messages_capped"]
         else ""
     )

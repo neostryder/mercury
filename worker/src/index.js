@@ -14,6 +14,9 @@ const KNOWN_DISPOSITIONS = [250, 421, 550];
 const PAGE_SIZES = [20, 50, 100];
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_RETENTION_DAYS = 365;
+// Everything a message row carries except the saved body and analysis of a
+// hard bounce, which only the bounce detail view reads.
+const MESSAGE_LIST_COLUMNS = 'id, received_at, from_display, from_domain, subject, injection_label, injection_score, verdict, disposition, enforced_disposition, category, alert_level, reasoning, shadow_mode, triggered_rule, recipient_class, recipient_detail';
 
 // Shared limit/offset parsing for the paginated dashboard table endpoints.
 // limit is restricted to PAGE_SIZES rather than accepting any number, since
@@ -114,11 +117,14 @@ export default {
       // caller has to prove it is the mail host: the webhook URL configured
       // at ForwardEmail ends in MERCURY_WEBHOOK_TOKEN, and nothing else gets
       // through. WEBHOOK_ALLOW_TOKENLESS keeps the bare paths open only while
-      // the mail host's configured URL is being switched over.
+      // the mail host's configured URL is being switched over. A refused call
+      // gets 421 rather than a 4xx, because ForwardEmail turns a 4xx webhook
+      // reply into an SMTP error: a mistyped token defers real mail instead of
+      // bouncing it.
       const token = ingestMatch[1];
       const tokenOk = token ? await tokenMatches(token, env.MERCURY_WEBHOOK_TOKEN) : env.WEBHOOK_ALLOW_TOKENLESS === 'true';
       if (!tokenOk) {
-        return new Response('not found', { status: 404 });
+        return new Response('unavailable', { status: 421 });
       }
       return proxyIngest(`${env.BACKEND_BASE_URL}/ingest`, bodyText, env);
     }
@@ -140,16 +146,16 @@ export default {
     }
 
     // The generic catch-all (currently just /rules/propose, from the
-    // Thunderbird extension). thunderbird/README.md has always documented
-    // this header as the caller's own copy of MERCURY_SHARED_SECRET, and the
-    // extension has always sent it (thunderbird/popup.js) - but nothing here
-    // ever checked it before forwarding, since the backend-facing call below
-    // supplies its own copy regardless of what the real caller sent. Any
-    // anonymous request reached the backend fully "authenticated" by the
-    // Worker's own outgoing secret, the same defect just fixed for
-    // /telegram/relay, at lower severity here since a proposal still needs a
-    // human Approve tap in Telegram before anything commits.
-    if (request.headers.get('X-Mercury-Secret') !== env.MERCURY_SHARED_SECRET) {
+    // Thunderbird extension). The call below supplies the Worker's own backend
+    // secret, so the caller's X-Mercury-Secret is checked here first. The
+    // extension holds MERCURY_EXTENSION_SECRET, which is good for
+    // /rules/propose and nothing else, so a copy lifted from a mail profile
+    // cannot write to the event log or reach any other backend route.
+    const callerSecret = request.headers.get('X-Mercury-Secret');
+    const extensionCall = pathname === '/rules/propose'
+      && env.MERCURY_EXTENSION_SECRET
+      && await tokenMatches(callerSecret || '', env.MERCURY_EXTENSION_SECRET);
+    if (!extensionCall && callerSecret !== env.MERCURY_SHARED_SECRET) {
       return new Response('forbidden', { status: 403 });
     }
 
@@ -168,17 +174,21 @@ export default {
   },
 };
 
+// Every timestamp is stored as ISO 8601 text with a T separator, so time
+// windows here and in the dashboard queries compare against strftime() output
+// in that same format. datetime() writes a space instead, which sorts before
+// T and pulls every row from the cutoff date into the window.
 async function purgeExpiredLogs(env) {
   const days = Number(env.LOG_RETENTION_DAYS) || DEFAULT_RETENTION_DAYS;
   const cutoffModifier = `-${days} day`;
   const db = env.MERCURY_LOG;
   const results = await db.batch([
-    db.prepare("DELETE FROM messages WHERE received_at < datetime('now', ?)").bind(cutoffModifier),
-    db.prepare("DELETE FROM judge_comparisons WHERE compared_at < datetime('now', ?)").bind(cutoffModifier),
-    db.prepare("DELETE FROM rule_changes WHERE changed_at < datetime('now', ?)").bind(cutoffModifier),
-    db.prepare("DELETE FROM actions WHERE executed_at < datetime('now', ?)").bind(cutoffModifier),
-    db.prepare("DELETE FROM admin_log WHERE at < datetime('now', ?)").bind(cutoffModifier),
-    db.prepare("DELETE FROM action_items WHERE completed_at IS NOT NULL AND completed_at < datetime('now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM messages WHERE received_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM judge_comparisons WHERE compared_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM rule_changes WHERE changed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM actions WHERE executed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM admin_log WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM action_items WHERE completed_at IS NOT NULL AND completed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
   ]);
   const totalDeleted = results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
   await db.prepare(
@@ -187,6 +197,22 @@ async function purgeExpiredLogs(env) {
 }
 
 const HSTS = 'max-age=31536000; includeSubDomains';
+
+const DASHBOARD_PAGE_HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'Referrer-Policy': 'no-referrer',
+  'Strict-Transport-Security': HSTS,
+  'X-Content-Type-Options': 'nosniff',
+};
+
+const DASHBOARD_JSON_HEADERS = {
+  'Content-Type': 'application/json',
+  'Cache-Control': 'no-store',
+  'Strict-Transport-Security': HSTS,
+  'X-Content-Type-Options': 'nosniff',
+};
 
 const CREDENTIAL_PAGE_HEADERS = {
   'Content-Type': 'text/html; charset=utf-8',
@@ -362,14 +388,20 @@ async function handleCredentialPrompt(request, token, env) {
 
 async function handleDashboard(pathname, search, env, request) {
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
-    return new Response(DASHBOARD_HTML, {
-      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Strict-Transport-Security': HSTS },
-    });
+    return new Response(DASHBOARD_HTML, { headers: DASHBOARD_PAGE_HEADERS });
+  }
+
+  // A state-changing call must come from the dashboard page itself. The
+  // browser always sends Origin on a POST, and a cross-site form or fetch
+  // carries its own site there.
+  if (request.method === 'POST' && request.headers.get('Origin') !== new URL(request.url).origin) {
+    return new Response('forbidden', { status: 403, headers: DASHBOARD_JSON_HEADERS });
   }
 
   const params = new URLSearchParams(search);
-  const json = (data) => new Response(JSON.stringify(data), {
-    headers: { 'Content-Type': 'application/json', 'Strict-Transport-Security': HSTS },
+  const json = (data, status = 200) => new Response(JSON.stringify(data), {
+    status,
+    headers: DASHBOARD_JSON_HEADERS,
   });
 
   const hardBounceDetailMatch = pathname.match(/^\/dashboard\/api\/hard-bounces\/(\d+)$/);
@@ -392,13 +424,13 @@ async function handleDashboard(pathname, search, env, request) {
             SUM(CASE WHEN enforced_disposition = '421' THEN 1 ELSE 0 END) AS deferred,
             SUM(CASE WHEN enforced_disposition = '550' THEN 1 ELSE 0 END) AS bounced
           FROM messages
-          WHERE received_at >= datetime('now', '-30 day')
+          WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-30 day')
           GROUP BY day
         `).all(),
         db.prepare(`
           SELECT date(received_at, '-7 hours') AS day, category, COUNT(*) AS count
           FROM messages
-          WHERE received_at >= datetime('now', '-30 day')
+          WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-30 day')
           GROUP BY day, category
         `).all(),
       ]);
@@ -465,7 +497,7 @@ async function handleDashboard(pathname, search, env, request) {
       }
       const rule = body?.rule;
       if (!rule || typeof rule !== 'string') {
-        return json({ ok: false, error: 'missing rule' });
+        return json({ ok: false, error: 'missing rule' }, 400);
       }
       return reverseRule(rule, env);
     }
@@ -495,14 +527,13 @@ async function handleDashboard(pathname, search, env, request) {
 
     if (pathname === '/dashboard/api/summary') {
       const db = env.MERCURY_LOG;
-      const [last24h, hardBounces24h, urgent24h, actions24h, ruleChanges7d, ruleCountRow, categories7d] = await Promise.all([
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day')").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day') AND enforced_disposition = '550'").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= datetime('now', '-1 day') AND alert_level = 'URGENT'").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM actions WHERE executed_at >= datetime('now', '-1 day')").first(),
-        db.prepare("SELECT COUNT(*) AS n FROM rule_changes WHERE changed_at >= datetime('now', '-7 day')").first(),
-        db.prepare('SELECT COUNT(*) AS n FROM (SELECT rule_text FROM rule_changes GROUP BY rule_text HAVING SUM(CASE WHEN action = \'added\' THEN 1 ELSE -1 END) > 0)').first(),
-        db.prepare("SELECT category, COUNT(*) AS count FROM messages WHERE received_at >= datetime('now', '-7 day') GROUP BY category ORDER BY count DESC").all(),
+      const [last24h, hardBounces24h, urgent24h, actions24h, ruleChanges7d, categories7d] = await Promise.all([
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day')").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day') AND enforced_disposition = '550'").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day') AND alert_level = 'URGENT'").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM actions WHERE executed_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-1 day')").first(),
+        db.prepare("SELECT COUNT(*) AS n FROM rule_changes WHERE changed_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day')").first(),
+        db.prepare("SELECT category, COUNT(*) AS count FROM messages WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day') GROUP BY category ORDER BY count DESC").all(),
       ]);
       return json({
         last24h: {
@@ -512,7 +543,6 @@ async function handleDashboard(pathname, search, env, request) {
           actions: actions24h?.n ?? 0,
         },
         last7d: { ruleChanges: ruleChanges7d?.n ?? 0 },
-        ruleCount: ruleCountRow?.n ?? 0,
         categories: categories7d?.results ?? [],
       });
     }
@@ -521,8 +551,8 @@ async function handleDashboard(pathname, search, env, request) {
       const disposition = params.get('disposition');
       const { limit, offset } = pageParams(params);
       const stmt = disposition
-        ? env.MERCURY_LOG.prepare('SELECT * FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT ? OFFSET ?').bind(disposition, limit + 1, offset)
-        : env.MERCURY_LOG.prepare('SELECT * FROM messages ORDER BY id DESC LIMIT ? OFFSET ?').bind(limit + 1, offset);
+        ? env.MERCURY_LOG.prepare(`SELECT ${MESSAGE_LIST_COLUMNS} FROM messages WHERE enforced_disposition = ? ORDER BY id DESC LIMIT ? OFFSET ?`).bind(disposition, limit + 1, offset)
+        : env.MERCURY_LOG.prepare(`SELECT ${MESSAGE_LIST_COLUMNS} FROM messages ORDER BY id DESC LIMIT ? OFFSET ?`).bind(limit + 1, offset);
       const result = await stmt.all();
       return json(paginate(result.results ?? [], limit));
     }
@@ -539,7 +569,7 @@ async function handleDashboard(pathname, search, env, request) {
       return json(paginate(result.results ?? [], limit));
     }
   } catch (err) {
-    return json({ ok: false, error: String(err) });
+    return json({ ok: false, error: String(err) }, 500);
   }
 
   return new Response('not found', { status: 404 });

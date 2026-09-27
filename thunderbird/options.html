@@ -124,13 +124,11 @@
     <h1>Mercury connection</h1>
   </header>
   <p class="lede">
-    Point this at your own Mercury deployment's public URL (the Worker gate's
-    hostname - the same one your ForwardEmail webhook uses) and the value
-    configured as <code>MERCURY_SHARED_SECRET</code> on your backend.
+    Enter your Mercury deployment's public URL (the Worker gate's hostname, the one your mail host's webhook calls) and the value of <code>MERCURY_EXTENSION_SECRET</code> set on that Worker.
   </p>
   <label for="url">Mercury URL</label>
   <input id="url" type="text" placeholder="https://mercury.example.com">
-  <label for="secret">Shared secret</label>
+  <label for="secret">Extension secret</label>
   <input id="secret" type="password">
   <div>
     <button id="save">Save</button>
