@@ -214,11 +214,7 @@ def describe(decision: dict, structured: dict) -> str:
 
 
 def disagreement(llm_verdict: dict, decision: dict) -> dict | None:
-    """What the two judges disagreed about, or None when they did not.
-
-    Shadow mode exists to collect exactly these. Agreement is not informative
-    and is not worth a row.
-    """
+    """What the two judges disagreed about, or None when they did not."""
     diffs = {}
     for field in ("verdict", "disposition", "category", "alert"):
         if llm_verdict.get(field) != decision.get(field):

@@ -189,6 +189,11 @@ def migrate_legacy_rules(rules: list[str]) -> dict:
 
 
 class FilteringPolicyStore:
+    """Every mutation loads, changes and saves the file with no await in
+    between, and the backend runs one worker process, so two edits cannot
+    interleave. Running more than one process against the same file would
+    need a file lock around each mutation."""
+
     def __init__(self, path: Path):
         self.path = path
 

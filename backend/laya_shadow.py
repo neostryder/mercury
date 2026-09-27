@@ -54,7 +54,11 @@ CV_FOLDS = 5
 # small sample tightens the gate rather than loosening it.
 READY_MIN_ROWS = int(os.environ.get("LAYA_READY_MIN_ROWS", "50"))
 READY_MIN_AGREEMENT = float(os.environ.get("LAYA_READY_MIN_AGREEMENT", "0.95"))
-READY_MAX_FALSE_BOUNCE = float(os.environ.get("LAYA_READY_MAX_FALSE_BOUNCE", "0.01"))
+# Bounces the calibrated backend adds where the primary did not bounce. This
+# measures disagreement with the primary, not mistakes; human labels carry the
+# real false-bounce rate once there are enough of them.
+READY_MAX_EXTRA_BOUNCE = float(os.environ.get(
+    "LAYA_READY_MAX_EXTRA_BOUNCE", os.environ.get("LAYA_READY_MAX_FALSE_BOUNCE", "0.01")))
 # Human labels are the recipient's own Telegram decisions. They are sparse, so
 # they only gate once there are enough of them to mean something.
 READY_MIN_HUMAN_LABELS = int(os.environ.get("LAYA_READY_MIN_HUMAN_LABELS", "10"))
@@ -355,26 +359,35 @@ def refit() -> dict:
             "agreement_after": _agreement([(cal, r["primary"]) for r, cal in held], q),
         }
 
-    agree = false_bounce = 0
-    human = {"n": 0, "primary_correct": 0, "laya_correct": 0}
+    agree = extra_bounce = 0
+    human = {"n": 0, "primary_correct": 0, "laya_correct": 0,
+             "not_bounce": 0, "primary_bounced": 0, "laya_bounced": 0}
     for r, cal in held:
         primary_disp = disposition_of(r["primary"])
         laya_disp = disposition_of(cal)
         agree += laya_disp == primary_disp
-        false_bounce += laya_disp == "550" and primary_disp != "550"
+        extra_bounce += laya_disp == "550" and primary_disp != "550"
         label = outcomes.get(r["id"])
         if label:
             human["n"] += 1
             human["primary_correct"] += primary_disp == label
             human["laya_correct"] += laya_disp == label
+            if label != "550":
+                human["not_bounce"] += 1
+                human["primary_bounced"] += primary_disp == "550"
+                human["laya_bounced"] += laya_disp == "550"
     n_held = len(held)
     metrics = {
         "held_out_rows": n_held,
         "disposition_agreement": round(agree / n_held, 4) if n_held else None,
-        "false_bounce_rate": round(false_bounce / n_held, 4) if n_held else None,
+        "extra_bounce_rate": round(extra_bounce / n_held, 4) if n_held else None,
         "human_labels": human["n"],
         "human_accuracy_primary": round(human["primary_correct"] / human["n"], 4) if human["n"] else None,
         "human_accuracy_laya": round(human["laya_correct"] / human["n"], 4) if human["n"] else None,
+        # Of the labeled messages that should not have bounced, the share each
+        # backend bounced.
+        "human_false_bounce_primary": round(human["primary_bounced"] / human["not_bounce"], 4) if human["not_bounce"] else None,
+        "human_false_bounce_laya": round(human["laya_bounced"] / human["not_bounce"], 4) if human["not_bounce"] else None,
         "questions": per_question,
     }
 
@@ -384,9 +397,9 @@ def refit() -> dict:
     if (metrics["disposition_agreement"] or 0) < READY_MIN_AGREEMENT:
         why_not.append("disposition agreement {} below {}".format(
             metrics["disposition_agreement"], READY_MIN_AGREEMENT))
-    if metrics["false_bounce_rate"] is None or metrics["false_bounce_rate"] > READY_MAX_FALSE_BOUNCE:
-        why_not.append("false-bounce rate {} above {}".format(
-            metrics["false_bounce_rate"], READY_MAX_FALSE_BOUNCE))
+    if metrics["extra_bounce_rate"] is None or metrics["extra_bounce_rate"] > READY_MAX_EXTRA_BOUNCE:
+        why_not.append("bounces the primary did not make {} above {}".format(
+            metrics["extra_bounce_rate"], READY_MAX_EXTRA_BOUNCE))
     if human["n"] >= READY_MIN_HUMAN_LABELS:
         gap = metrics["human_accuracy_primary"] - metrics["human_accuracy_laya"]
         if gap > READY_MAX_HUMAN_GAP:

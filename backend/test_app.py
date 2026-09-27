@@ -1482,14 +1482,15 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(detail["disposition"], {"judge": "250", "structured": "550"})
         self.assertEqual(fields["latency_ms"], 310)
 
-    def test_agreement_is_not_logged(self):
+    def test_agreement_is_logged_with_no_fields(self):
         app.structured_judge = SimpleNamespace(
             classify=AsyncMock(return_value=_structured(
                 "LEGIT", 0.95, 0.1, category="TRANSACTIONAL")))
         app.STRUCTURED_JUDGE_AUTHORITATIVE = False
         result = self._run()
         self.assertEqual(result["disposition"], "250")
-        self.assertEqual([t for t, _ in self.logged], [])
+        self.assertEqual([t for t, _ in self.logged], ["judge_comparisons"])
+        self.assertEqual(json.loads(self.logged[0][1]["fields"]), [])
 
     def test_authoritative_takes_the_classification_and_quotes_a_dissent(self):
         """The judge said LEGIT/250 and the enforced decision is PHISH/550. Its

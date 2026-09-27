@@ -1646,11 +1646,9 @@ def _parse_judge_reply(content: str, all_rules: list[str]) -> tuple[dict, bool]:
 
 
 def _log_comparison(judged: dict, decision: dict, structured: dict) -> None:
-    diffs = verdict_policy.disagreement(judged, decision)
-    # Agreement is not informative and is not worth a row. Only the cases where
-    # the two judges reached different answers are worth tuning thresholds on.
-    if not diffs:
-        return
+    diffs = verdict_policy.disagreement(judged, decision) or {}
+    # Agreements are logged too, with an empty field list, so the share of
+    # messages where the judges disagree can be computed.
     event_log.log_event("judge_comparisons", {
         "compared_at": _now(),
         "authoritative": "structured" if STRUCTURED_JUDGE_AUTHORITATIVE else "judge",

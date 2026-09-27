@@ -96,6 +96,23 @@ CREATE TABLE IF NOT EXISTS judge_comparisons (
 CREATE INDEX IF NOT EXISTS idx_judge_comparisons_compared_at
   ON judge_comparisons (compared_at);
 
+-- A person's call on one message's outcome. `source` is 'sample' for a
+-- message drawn by the review queue, whose labels give unbiased error rates
+-- per outcome, or 'reversal' for a message whose deciding rule was removed
+-- from the dashboard, which counts as wrong but is not a random sample.
+CREATE TABLE IF NOT EXISTS review_labels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL UNIQUE,
+  outcome TEXT,
+  verdict TEXT NOT NULL,
+  correct_disposition TEXT,
+  source TEXT NOT NULL,
+  labeled_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_labels_labeled_at
+  ON review_labels (labeled_at);
+
 -- Migration, apply once against an existing remote database (CREATE TABLE
 -- IF NOT EXISTS above is safe to re-run; ALTER TABLE ADD COLUMN is not -
 -- SQLite has no IF NOT EXISTS form for it, so re-running this against a

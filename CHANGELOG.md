@@ -4,6 +4,12 @@
 
 ### Added
 
+- [Visible] [Dashboard] Each sender-list entry, pattern and content rule on the Policy view shows how many messages it decided in the last 90 days and when it last did. An entry with no hits is marked, so a rule that no longer fires is easy to spot. (#75)
+
+- [Visible] [Dashboard] A Preview button on the sender-list and pattern forms runs the entry against the last 90 days of mail before it is added, and says how many messages it covers and how many would have been decided differently. Content rules are not previewed, since only the judge can say whether one applies. (#75)
+
+- [Visible] [Dashboard] A Review view draws a random sample of recent accepted, deferred and rejected mail for marking right or wrong, and shows the error rate for each outcome from those labels. Removing a rule from a message's panel also marks that message wrong, counted apart from the sample. Apply `worker/schema.sql` for the new `review_labels` table. (#75)
+
 - [Visible] [Dashboard] Activity has a search box for sender and subject, which the / key jumps to, plus buttons that filter by outcome. A percent sign or underscore in a search matches literally.
 
 - [Visible] [Dashboard] A pill in the header says whether mail is flowing and turns red when the latest delivery to the mailbox failed. The System view lists when the last message arrived, the last delivery, the last failed delivery with its error, and the last retention sweep. The Overview splits the last 24 hours into accepted, deferred and rejected mail and counts failed deliveries.
@@ -109,6 +115,10 @@
   bad semantic rule.
 
 ### Changed
+
+- [Internal] [Filtering] `judge_comparisons` gets a row when the two judges agree too, with an empty field list, so the System view can show how often they disagree. (#75)
+
+- [Internal] [Filtering] Laya's readiness metric `false_bounce_rate` is renamed `extra_bounce_rate`, since it counts bounces the primary did not make rather than mistakes. `/laya/status` also reports the false-bounce rate of each backend on human labels. `LAYA_READY_MAX_EXTRA_BOUNCE` sets the threshold, and the old variable name still works. (#75)
 
 - [Internal] [Dashboard] The Worker checks the token Cloudflare Access attaches to every dashboard request: its signature against the team's published keys, the application's audience tag, the issuer and the expiry. A request that reaches the Worker without passing Access, or before `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set, gets 403. (#73)
 

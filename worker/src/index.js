@@ -51,9 +51,8 @@ const LOG_TABLES = {
     'category', 'alert_level', 'reasoning', 'shadow_mode', 'full_content', 'analysis',
     'triggered_rule', 'recipient_class', 'recipient_detail',
   ],
-  // Only rows where the two judges disagreed. Agreement is not informative and
-  // is never written, so this table is a tuning record rather than a second
-  // copy of `messages`.
+  // One row per message both judges answered. `fields` lists what they
+  // disagreed on and is "[]" when they agreed.
   judge_comparisons: [
     'compared_at', 'authoritative', 'fields', 'detail', 'structured_confidence',
     'structured_severity', 'structured_why', 'latency_ms', 'model',
@@ -190,6 +189,7 @@ async function purgeExpiredLogs(env) {
     db.prepare("DELETE FROM rule_changes WHERE changed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM actions WHERE executed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM admin_log WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
+    db.prepare("DELETE FROM review_labels WHERE labeled_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
     db.prepare("DELETE FROM action_items WHERE completed_at IS NOT NULL AND completed_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)").bind(cutoffModifier),
   ]);
   const totalDeleted = results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
@@ -490,6 +490,15 @@ async function handleDashboard(pathname, search, env, request) {
 
   const messageDetailMatch = pathname.match(/^\/dashboard\/api\/messages\/(\d+)$/);
   const actionItemCompleteMatch = pathname.match(/^\/dashboard\/api\/action-items\/(\d+)\/complete$/);
+  const readBody = async () => {
+    try {
+      const text = await request.text();
+      if (text.length > 16384) return null;
+      return JSON.parse(text);
+    } catch (err) {
+      return null;
+    }
+  };
 
   try {
     if (pathname === '/dashboard/api/filtering') {
@@ -568,15 +577,135 @@ async function handleDashboard(pathname, search, env, request) {
       return json(row);
     }
 
+    if (pathname === '/dashboard/api/rule-stats') {
+      const result = await env.MERCURY_LOG.prepare(`
+        SELECT triggered_rule, reasoning, category, received_at FROM messages
+        WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-${RULE_STATS_DAYS} day')
+          AND (triggered_rule IS NOT NULL OR category = 'SENDER_LIST')
+      `).all();
+      const rules = {};
+      const senders = {};
+      const bump = (table, key, at) => {
+        const entry = table[key] || (table[key] = { hits: 0, last: null });
+        entry.hits += 1;
+        if (!entry.last || at > entry.last) entry.last = at;
+      };
+      for (const row of result.results ?? []) {
+        if (row.triggered_rule) {
+          bump(rules, row.triggered_rule, row.received_at);
+          continue;
+        }
+        // The backend names the list entry that matched in this sentence;
+        // see _deterministic_verdict in backend/app.py.
+        const m = /^Matched sender (\S+) on the deterministic (whitelist|greylist|blacklist)\b/.exec(row.reasoning || '');
+        if (m) bump(senders, m[1], row.received_at);
+      }
+      return json({ days: RULE_STATS_DAYS, rules, senders });
+    }
+
+    if (pathname === '/dashboard/api/simulate') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      const body = await readBody();
+      if (!body) return json({ ok: false, error: 'bad request body' }, 400);
+      let matches;
+      let target;
+      if (body.kind === 'sender_list') {
+        target = SENDER_LIST_DISPOSITIONS[body.list];
+        const selector = String(body.selector || '').trim().toLowerCase().replace(/^@/, '').replace(/\.$/, '');
+        if (!target || !selector || selector.length > 320) return json({ ok: false, error: 'a list and an address or domain are needed' }, 400);
+        matches = selector.includes('@')
+          ? (row) => senderAddress(row.from_display) === selector
+          : (row) => {
+            const domain = (row.from_domain || '').toLowerCase();
+            return domain === selector || domain.endsWith('.' + selector);
+          };
+      } else if (body.kind === 'blacklist_pattern') {
+        target = '550';
+        let compiled;
+        try {
+          compiled = new RegExp('^(?:' + String(body.pattern || '') + ')$', 'i');
+        } catch (err) {
+          return json({ ok: false, error: 'that pattern is not a valid regular expression' }, 400);
+        }
+        if (!body.pattern || String(body.pattern).length > 500) return json({ ok: false, error: 'a pattern is needed' }, 400);
+        matches = (row) => compiled.test((row.from_domain || '').toLowerCase());
+      } else {
+        return json({ ok: false, error: 'only sender lists and patterns can be previewed' }, 400);
+      }
+      const result = await env.MERCURY_LOG.prepare(`
+        SELECT id, received_at, from_display, from_domain, subject, enforced_disposition, category
+        FROM messages
+        WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-${RULE_STATS_DAYS} day')
+        ORDER BY id DESC
+      `).all();
+      const hit = (result.results ?? []).filter(matches);
+      const byOutcome = { 250: 0, 421: 0, 550: 0 };
+      for (const row of hit) byOutcome[row.enforced_disposition] = (byOutcome[row.enforced_disposition] || 0) + 1;
+      return json({
+        days: RULE_STATS_DAYS,
+        target,
+        total: hit.length,
+        byOutcome,
+        wouldChange: hit.filter((row) => row.enforced_disposition !== target).length,
+        samples: hit.slice(0, 8).map(({ id, received_at, from_domain, subject, enforced_disposition }) => ({ id, received_at, from_domain, subject, enforced_disposition })),
+      });
+    }
+
+    if (pathname === '/dashboard/api/review') {
+      if (request.method === 'POST') {
+        const body = await readBody();
+        const messageId = Number(body?.message_id);
+        const verdict = body?.verdict;
+        const correct = body?.correct_disposition ?? null;
+        if (!Number.isInteger(messageId) || messageId <= 0 || !['right', 'wrong'].includes(verdict)
+          || (correct !== null && !['250', '421', '550'].includes(correct))) {
+          return json({ ok: false, error: 'a message id and a verdict of right or wrong are needed' }, 400);
+        }
+        const stored = await recordReviewLabel(env, messageId, verdict, verdict === 'wrong' ? correct : null, 'sample');
+        if (!stored) return json({ ok: false, error: 'no message with that id' }, 404);
+        return json({ ok: true });
+      }
+      // A fixed pseudo-random order per outcome, so each outcome's sample is
+      // an unbiased draw from that outcome and the queue is stable between
+      // loads. Quotas lean toward rejections, the costliest mistakes.
+      const draw = async (outcome, quota) => (await env.MERCURY_LOG.prepare(`
+        SELECT m.id, m.received_at, m.from_display, m.from_domain, m.subject, m.enforced_disposition,
+          m.category, m.verdict, m.reasoning, m.triggered_rule
+        FROM messages m LEFT JOIN review_labels l ON l.message_id = m.id
+        WHERE l.id IS NULL AND m.enforced_disposition = ?
+          AND m.received_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-${REVIEW_WINDOW_DAYS} day')
+        ORDER BY (m.id * 2654435761) % 4294967296
+        LIMIT ?
+      `).bind(outcome, quota).all()).results ?? [];
+      const [accepted, deferred, rejected] = await Promise.all([draw('250', 8), draw('421', 4), draw('550', 8)]);
+      return json({ days: REVIEW_WINDOW_DAYS, rows: [...rejected, ...accepted, ...deferred] });
+    }
+
+    if (pathname === '/dashboard/api/review/metrics') {
+      const result = await env.MERCURY_LOG.prepare(`
+        SELECT outcome, source,
+          COUNT(*) AS labeled,
+          SUM(CASE WHEN verdict = 'wrong' THEN 1 ELSE 0 END) AS wrong
+        FROM review_labels
+        WHERE labeled_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-${RULE_STATS_DAYS} day')
+        GROUP BY outcome, source
+      `).all();
+      return json({ days: RULE_STATS_DAYS, rows: result.results ?? [] });
+    }
+
     if (pathname === '/dashboard/api/health') {
       const db = env.MERCURY_LOG;
-      const [latestMessage, latestEvent, sweep, delivered, failed, count] = await Promise.all([
+      const [latestMessage, latestEvent, sweep, delivered, failed, count, judges] = await Promise.all([
         db.prepare('SELECT MAX(received_at) AS at FROM messages').first(),
         db.prepare('SELECT MAX(at) AS at FROM admin_log').first(),
         db.prepare("SELECT at, detail FROM admin_log WHERE event = 'log_retention_sweep' ORDER BY id DESC LIMIT 1").first(),
         db.prepare("SELECT MAX(executed_at) AS at FROM actions WHERE kind = 'DELIVER' AND result LIKE 'delivered to %'").first(),
         db.prepare("SELECT executed_at AS at, result FROM actions WHERE kind = 'DELIVER' AND result LIKE 'failed%' ORDER BY id DESC LIMIT 1").first(),
         db.prepare('SELECT COUNT(*) AS n FROM messages').first(),
+        db.prepare(`
+          SELECT COUNT(*) AS total, SUM(CASE WHEN fields != '[]' THEN 1 ELSE 0 END) AS disagreed
+          FROM judge_comparisons WHERE compared_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day')
+        `).first(),
       ]);
       return json({
         latestMessageAt: latestMessage?.at ?? null,
@@ -587,6 +716,8 @@ async function handleDashboard(pathname, search, env, request) {
         lastDeliveryFailedAt: failed?.at ?? null,
         lastDeliveryFailure: failed?.result ?? null,
         messageCount: count?.n ?? 0,
+        judgeComparisons: judges?.total ?? 0,
+        judgeDisagreements: judges?.disagreed ?? 0,
       });
     }
 
@@ -602,7 +733,13 @@ async function handleDashboard(pathname, search, env, request) {
       if (!rule || typeof rule !== 'string') {
         return json({ ok: false, error: 'missing rule' }, 400);
       }
-      return reverseRule(rule, env);
+      const response = await reverseRule(rule, env);
+      // Removing the rule that decided a message says that outcome was wrong.
+      const messageId = Number(body?.message_id);
+      if (response.ok && Number.isInteger(messageId) && messageId > 0) {
+        await recordReviewLabel(env, messageId, 'wrong', null, 'reversal');
+      }
+      return response;
     }
 
     if (pathname === '/dashboard/api/action-items') {
@@ -812,6 +949,32 @@ async function proxyIngest(backendUrl, bodyText, env) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+const RULE_STATS_DAYS = 90;
+const REVIEW_WINDOW_DAYS = 14;
+const SENDER_LIST_DISPOSITIONS = { whitelist: '250', greylist: '421', blacklist: '550' };
+
+function senderAddress(fromDisplay) {
+  const text = (fromDisplay || '').trim();
+  const bracketed = /<([^<>\s]+@[^<>\s]+)>/.exec(text);
+  const address = bracketed ? bracketed[1] : (/^[^\s<>]+@[^\s<>]+$/.test(text) ? text : '');
+  return address.toLowerCase();
+}
+
+// Stores or replaces the label for one message, keeping its outcome at the
+// time of labeling. Returns false when the message does not exist.
+async function recordReviewLabel(env, messageId, verdict, correctDisposition, source) {
+  const message = await env.MERCURY_LOG.prepare('SELECT enforced_disposition FROM messages WHERE id = ?')
+    .bind(messageId).first();
+  if (!message) return false;
+  await env.MERCURY_LOG.prepare(`
+    INSERT INTO review_labels (message_id, outcome, verdict, correct_disposition, source, labeled_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (message_id) DO UPDATE SET outcome = excluded.outcome, verdict = excluded.verdict,
+      correct_disposition = excluded.correct_disposition, source = excluded.source, labeled_at = excluded.labeled_at
+  `).bind(messageId, message.enforced_disposition, verdict, correctDisposition, source, new Date().toISOString()).run();
+  return true;
 }
 
 // Called from the dashboard message inspector. The rules ledger

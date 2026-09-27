@@ -131,6 +131,12 @@ it. Only
 computed going forward - it relies on To/Cc and session data that was never
 persisted before this existed, so older rows carry neither column.
 
+### Measuring filtering quality
+
+The dashboard reads rule hit counts from the log. A content rule or pattern is counted from the message's `triggered_rule`, and a sender-list entry from the `Matched sender <entry> on the deterministic <list>` sentence the backend writes as its reasoning. An edited rule is a new string, so its count starts over.
+
+`review_labels` holds a person's call on single messages. The Review view draws each outcome's sample in a fixed pseudo-random order over the last 14 days, so the share marked wrong within an outcome estimates that outcome's error rate. Labels from removing a rule in the message panel are stored with `source = 'reversal'` and kept out of that rate, because those messages were chosen rather than sampled.
+
 ## Providers
 
 `backend/providers/` holds three seams, each a small `Protocol` plus one

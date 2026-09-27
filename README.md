@@ -113,8 +113,8 @@ does not generate text at all. Thresholds turning those answers into a
 disposition and an alert level live in `backend/verdict_policy.py` rather than in
 prose inside a prompt, and each is overridable by environment variable.
 
-Enabled, it only reports: disagreements between the two judges are written to the
-`judge_comparisons` table and nothing else changes. It decides a disposition only
+Enabled, it only reports: every message both judges answered gets a row in the
+`judge_comparisons` table, naming the fields they disagreed on (none when they agree), and nothing else changes. It decides a disposition only
 once `STRUCTURED_JUDGE_AUTHORITATIVE=true` as well. Apply `worker/schema.sql`
 before enabling either.
 

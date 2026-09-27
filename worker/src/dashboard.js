@@ -241,6 +241,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   tbody tr.row-open { cursor: pointer; }
   tbody tr.row-open:hover td { background: var(--panel-2); }
   .subject { max-width: 440px; }
+  .linkish { all: unset; cursor: pointer; color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+  .linkish:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .policy-entry-detail.stale { color: var(--warn-text); }
   .subject button { all: unset; cursor: pointer; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .subject button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   .sender { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -330,6 +333,15 @@ export const DASHBOARD_HTML = `<!doctype html>
   .policy-form .btn { align-self: flex-start; }
   .policy-warning { border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) var(--tint), var(--panel)); color: var(--warn-text); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
 
+  .review-list { display: flex; flex-direction: column; gap: 12px; }
+  .review-card { padding: 12px 16px; display: grid; gap: 6px; }
+  .review-card .review-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+  .review-card .review-why { color: var(--muted); font-size: 13px; }
+  .review-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .review-card.done { opacity: .55; }
+  output.preview { display: block; font-size: 12px; color: var(--muted); }
+  output.preview:empty { display: none; }
+  output.preview ul { margin: 4px 0 0; padding-left: 18px; }
   dl.facts { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 6px 16px; margin: 0; }
   dl.facts dt { color: var(--muted); }
   dl.facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -370,6 +382,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <li><a href="#activity" data-nav="activity">Activity</a></li>
         <li><a href="#policy" data-nav="policy">Policy</a></li>
         <li><a href="#audit" data-nav="audit">Audit</a></li>
+        <li><a href="#review" data-nav="review">Review</a></li>
         <li><a href="#system" data-nav="system">System</a></li>
       </ul>
     </nav>
@@ -480,6 +493,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       </table></div>
       <div class="pager" data-pager="actions"></div>
     </div>
+  </section>
+
+  <section data-view="review" aria-labelledby="h-review" hidden>
+    <div class="view-head"><h2 id="h-review">Review</h2><p>A random sample of recent decisions from each outcome. Marking them gives a real error rate per outcome.</p></div>
+    <div class="panel" style="margin-bottom:16px"><h3>Error rates, last 90 days</h3><div class="panel-body"><dl class="facts" id="review-metrics"><dt>Loading</dt><dd>...</dd></dl></div></div>
+    <div class="review-list" id="review-list"><div class="empty">Loading...</div></div>
   </section>
 
   <section data-view="system" aria-labelledby="h-system" hidden>
@@ -770,6 +789,7 @@ async function loadHealth() {
     '<dt>Last failed delivery</dt><dd>' + (h.lastDeliveryFailedAt ? timeTag(h.lastDeliveryFailedAt, 'relative') + ': ' + esc(h.lastDeliveryFailure) : 'None on record') + '</dd>' +
     '<dt>Last event-log write</dt><dd>' + timeTag(h.latestEventAt, 'relative') + '</dd>' +
     '<dt>Last retention sweep</dt><dd>' + (h.lastRetentionSweepAt ? timeTag(h.lastRetentionSweepAt, 'relative') + ', ' + esc(h.lastRetentionSweep) : 'Never') + '</dd>' +
+    (h.judgeComparisons ? '<dt>Judges disagree</dt><dd>' + esc(h.judgeDisagreements) + ' of ' + esc(h.judgeComparisons) + ' messages in 7 days (' + Math.round(h.judgeDisagreements / h.judgeComparisons * 100) + '%)</dd>' : '') +
     '<dt>Messages on record</dt><dd class="num">' + esc(h.messageCount) + '</dd>' +
     '<dt>Times shown in</dt><dd>Phoenix (MST, UTC-7, no daylight saving)</dd>';
 }
@@ -880,7 +900,7 @@ async function openMessage(id) {
   }
   if (m.triggered_rule) {
     html += '<div class="detail-block"><h3>Rule that decided this</h3><pre class="detail-box">' + esc(m.triggered_rule) + '</pre>' +
-      '<p><button type="button" class="btn danger" data-reverse-rule="' + esc(m.triggered_rule) + '">Remove this rule</button></p></div>';
+      '<p><button type="button" class="btn danger" data-reverse-rule="' + esc(m.triggered_rule) + '" data-message-id="' + esc(m.id) + '">Remove this rule</button></p></div>';
   }
   html += '<p class="muted" style="margin-top:16px"><button type="button" class="btn secondary small" data-copy="' + esc(m.from_domain || '') + '">Copy sender domain</button> ' +
     '<a href="#activity?q=' + encodeURIComponent(m.from_domain || '') + '" data-close-inspector>All mail from this domain</a></p>';
@@ -919,7 +939,7 @@ async function reverseRule(btn) {
   if (!ok) return;
   btn.disabled = true;
   try {
-    await fetchJson('/dashboard/api/rules/reverse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule: rule }) });
+    await fetchJson('/dashboard/api/rules/reverse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule: rule, message_id: Number(btn.dataset.messageId) || null }) });
     toast('Rule removed.');
     btn.textContent = 'Removed';
     loadFilteringPolicy();
@@ -940,9 +960,20 @@ var SEMANTIC = [
   ['421', 'Defer when'],
   ['550', 'Reject when'],
 ];
+var ruleStats = null;
+function hitsLine(stat) {
+  if (!ruleStats) return '';
+  if (!stat) return 'No hits in ' + ruleStats.days + ' days';
+  return stat.hits + (stat.hits === 1 ? ' hit' : ' hits') + ' in ' + ruleStats.days + ' days, last ' + relative(new Date(stat.last));
+}
 function policyEntry(primary, detail, kind, group, index, cardLabel) {
+  var stat = null;
+  if (ruleStats && kind === 'sender_list') stat = ruleStats.senders[primary];
+  else if (ruleStats && (kind === 'semantic_rule' || kind === 'blacklist_pattern')) stat = ruleStats.rules[primary];
+  var hits = kind === 'custom_action' ? '' : hitsLine(stat);
   return '<div class="policy-entry" data-search="' + esc((primary + ' ' + (detail || '')).toLowerCase()) + '">' +
-    '<div><div>' + esc(primary) + '</div>' + (detail ? '<div class="policy-entry-detail">' + esc(detail) + '</div>' : '') + '</div>' +
+    '<div><div>' + esc(primary) + '</div>' + (detail ? '<div class="policy-entry-detail">' + esc(detail) + '</div>' : '') +
+    (hits ? '<div class="policy-entry-detail' + (stat ? '' : ' stale') + '">' + esc(hits) + '</div>' : '') + '</div>' +
     '<button type="button" class="btn secondary small" data-policy-remove="' + esc(kind) + '" data-policy-group="' + esc(group) + '" data-policy-index="' + index + '" data-policy-list="' + esc(cardLabel) + '" aria-label="Remove ' + esc(primary) + ' from ' + esc(cardLabel) + '">Remove</button>' +
     '</div>';
 }
@@ -970,14 +1001,14 @@ function renderFilteringPolicy() {
     var entries = (filteringPolicy.sender_lists[s[0]] || []).map(function (sel, i) { return policyEntry(sel, '', 'sender_list', s[0], i, s[1]); });
     var form = '<form class="policy-form" data-policy-form="sender_list" data-policy-group="' + s[0] + '">' +
       field('Add an address or domain', '<input id="ID" name="selector" required placeholder="person@example.com or example.com" autocomplete="off">') +
-      '<button class="btn" type="submit">Add</button></form>';
+      '<div class="review-actions"><button class="btn" type="submit">Add</button><button class="btn secondary" type="button" data-preview>Preview</button></div><output class="preview" aria-live="polite"></output></form>';
     return policyCard(s[1], s[2], entries, form);
   }).join('');
   var patterns = (filteringPolicy.blacklist_patterns || []).map(function (p, i) { return policyEntry(p, '', 'blacklist_pattern', 'blacklist_patterns', i, 'Reject patterns'); });
   var patternCard = policyCard('Reject patterns', '550', patterns,
     '<form class="policy-form" data-policy-form="blacklist_pattern" data-policy-group="blacklist_patterns">' +
       field('Add a pattern, matched against the whole sender domain', '<input id="ID" name="pattern" required placeholder="(spam|promo)[0-9]+[.]example" autocomplete="off">') +
-      '<button class="btn" type="submit">Add</button></form>');
+      '<div class="review-actions"><button class="btn" type="submit">Add</button><button class="btn secondary" type="button" data-preview>Preview</button></div><output class="preview" aria-live="polite"></output></form>');
   var semanticCards = SEMANTIC.map(function (s) {
     var entries = (filteringPolicy.semantic_rules[s[0]] || []).map(function (rule, i) { return policyEntry(rule, '', 'semantic_rule', s[0], i, s[1]); });
     var form = '<form class="policy-form" data-policy-form="semantic_rule" data-policy-group="' + s[0] + '">' +
@@ -1009,7 +1040,12 @@ byId('policy-filter').addEventListener('input', applyPolicyFilter);
 
 async function loadFilteringPolicy() {
   try {
-    filteringPolicy = await fetchJson('/dashboard/api/filtering');
+    var both = await Promise.all([
+      fetchJson('/dashboard/api/filtering'),
+      fetchJson('/dashboard/api/rule-stats').catch(function () { return null; }),
+    ]);
+    filteringPolicy = both[0];
+    ruleStats = both[1];
     renderFilteringPolicy();
   } catch (err) {
     byId('filteringPolicy').innerHTML = loadFailed('the filtering policy', err);
@@ -1042,6 +1078,8 @@ byId('filteringPolicy').addEventListener('submit', async function (event) {
   }
 });
 byId('filteringPolicy').addEventListener('click', async function (event) {
+  var preview = event.target.closest('[data-preview]');
+  if (preview) { previewPolicyChange(preview); return; }
   var button = event.target.closest('[data-policy-remove]');
   if (!button || !filteringPolicy) return;
   var kind = button.dataset.policyRemove;
@@ -1061,6 +1099,81 @@ byId('filteringPolicy').addEventListener('click', async function (event) {
   } catch (err) {
     toast('Remove failed: ' + (err.message || err));
     button.disabled = false;
+  }
+});
+
+var TARGET_WORD = { '250': 'accepted', '421': 'deferred', '550': 'rejected' };
+async function previewPolicyChange(button) {
+  var form = button.closest('[data-policy-form]');
+  var out = form.querySelector('output.preview');
+  var values = new FormData(form);
+  var payload = { kind: form.dataset.policyForm };
+  if (payload.kind === 'sender_list') { payload.list = form.dataset.policyGroup; payload.selector = values.get('selector'); }
+  else { payload.pattern = values.get('pattern'); }
+  if (!(payload.selector || payload.pattern)) { out.textContent = 'Type an entry first.'; return; }
+  out.textContent = 'Checking recent mail...';
+  try {
+    var r = await fetchJson('/dashboard/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.total) { out.textContent = 'No mail in the last ' + r.days + ' days came from a sender this covers.'; return; }
+    var parts = ['250', '421', '550'].filter(function (k) { return r.byOutcome[k]; }).map(function (k) { return r.byOutcome[k] + ' ' + TARGET_WORD[k]; });
+    out.innerHTML = esc(r.total + (r.total === 1 ? ' message' : ' messages') + ' in the last ' + r.days + ' days (' + parts.join(', ') + '). ' +
+      (r.wouldChange ? r.wouldChange + ' would have been ' + TARGET_WORD[r.target] + ' instead.' : 'None would have changed.') +
+      ' A more specific entry, and the DMARC check, can still decide otherwise.') +
+      '<ul>' + r.samples.map(function (m) { return '<li><button type="button" class="linkish" data-open-message="' + esc(m.id) + '">' + esc(m.from_domain) + ': ' + esc(m.subject || '(no subject)') + '</button> ' + outcomeTag(m.enforced_disposition) + '</li>'; }).join('') + '</ul>';
+  } catch (err) {
+    out.textContent = 'Preview failed: ' + (err.message || err);
+  }
+}
+
+// ---- review ----
+var OUTCOME_LABEL = { '250': 'Accepted', '421': 'Deferred', '550': 'Rejected' };
+async function loadReview() {
+  var list = byId('review-list');
+  var metrics = byId('review-metrics');
+  var both;
+  try {
+    both = await Promise.all([fetchJson('/dashboard/api/review'), fetchJson('/dashboard/api/review/metrics')]);
+  } catch (err) {
+    list.innerHTML = loadFailed('the review sample', err);
+    metrics.innerHTML = '';
+    return;
+  }
+  var byOutcome = {};
+  both[1].rows.forEach(function (r) {
+    var o = byOutcome[r.outcome] || (byOutcome[r.outcome] = { sample: null, reversal: 0 });
+    if (r.source === 'sample') o.sample = r; else o.reversal += r.labeled;
+  });
+  metrics.innerHTML = ['250', '421', '550'].map(function (k) {
+    var o = byOutcome[k] || {};
+    var line = o.sample ? o.sample.wrong + ' wrong of ' + o.sample.labeled + ' reviewed (' + Math.round(o.sample.wrong / o.sample.labeled * 100) + '%)' : 'None reviewed yet';
+    if (o.reversal) line += '; ' + o.reversal + ' more marked wrong by removing their rule';
+    return '<dt>' + OUTCOME_LABEL[k] + '</dt><dd>' + esc(line) + '</dd>';
+  }).join('');
+  var rows = both[0].rows;
+  list.innerHTML = rows.length ? rows.map(function (m) {
+    var others = ['250', '421', '550'].filter(function (k) { return k !== m.enforced_disposition; });
+    return '<div class="panel review-card" data-review-id="' + esc(m.id) + '">' +
+      '<div class="review-head">' + outcomeTag(m.enforced_disposition) + '<strong>' + esc(m.from_domain || m.from_display || '-') + '</strong>' + timeTag(m.received_at, 'relative') + '<span class="tag">' + esc(m.category) + '</span></div>' +
+      '<div><button type="button" class="linkish" data-open-message="' + esc(m.id) + '">' + esc(m.subject || '(no subject)') + '</button></div>' +
+      '<div class="review-why">' + esc((m.reasoning || '').slice(0, 280)) + '</div>' +
+      '<div class="review-actions"><button type="button" class="btn secondary small" data-review="right">Right</button>' +
+      others.map(function (k) { return '<button type="button" class="btn secondary small" data-review="wrong" data-correct="' + k + '">Should be ' + OUTCOME_LABEL[k].toLowerCase() + '</button>'; }).join('') +
+      '</div></div>';
+  }).join('') : '<div class="empty">Every recent message in the sample is reviewed.</div>';
+}
+byId('review-list').addEventListener('click', async function (e) {
+  var btn = e.target.closest('[data-review]');
+  if (!btn) return;
+  var card = btn.closest('[data-review-id]');
+  card.querySelectorAll('button[data-review]').forEach(function (b) { b.disabled = true; });
+  try {
+    await fetchJson('/dashboard/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message_id: Number(card.dataset.reviewId), verdict: btn.dataset.review, correct_disposition: btn.dataset.correct || null }) });
+    card.classList.add('done');
+    btn.textContent = btn.dataset.review === 'right' ? 'Marked right' : 'Marked wrong';
+  } catch (err) {
+    card.querySelectorAll('button[data-review]').forEach(function (b) { b.disabled = false; });
+    toast('The label was not saved: ' + (err.message || err));
   }
 });
 
@@ -1113,6 +1226,7 @@ function loadView() {
   else if (state.view === 'activity') loadMessages();
   else if (state.view === 'policy') loadFilteringPolicy();
   else if (state.view === 'audit') { if (state.audit === 'rules') loadRules(); else loadActions(); }
+  else if (state.view === 'review') loadReview();
   state.loadedAt = Date.now();
   tick();
 }
