@@ -484,15 +484,30 @@ RULE_MATCH: A concrete scam condition"""
         self.assertEqual(len(deliveries), 2)
         app.notifier.send.assert_awaited_once()
 
-    def test_accepted_message_without_raw_is_deferred_when_mercury_delivers(self):
+    def test_payload_without_raw_is_accepted_since_a_retry_cannot_deliver_it(self):
         self._whitelisted_delivery_setup()
         payload = self._payload()
         del payload["raw"]
 
         with patch.object(app.event_log, "log_event"):
-            response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+            first = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+            app.dedup_store.record_undelivered(app._dedup_key(None, "From: Example News <news@example.com>\nSubject: A routine update\n\nYour order has shipped."), "LEGIT", "OTHER")
+            retry = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
 
-        self.assertEqual(response.status_code, 421)
+        self.assertEqual(first.status_code, 250)
+        self.assertEqual(retry.status_code, 250)
+        app.notifier.send.assert_awaited_once()
+
+    def test_empty_payload_without_raw_is_accepted_without_an_alert(self):
+        self._whitelisted_delivery_setup()
+        app.classifier = SimpleNamespace(check=AsyncMock(return_value={"label": "SAFE", "score": 0.0}))
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="VERDICT: UNSURE\nDISPOSITION: 250\nCATEGORY: OTHER\nALERT: NONE\nREASONING: empty"))
+
+        with patch.object(app.event_log, "log_event"):
+            response = asyncio.run(app.ingest(FakeRequest({}), "test-secret"))
+
+        self.assertEqual(response.status_code, 250)
+        app.notifier.send.assert_not_awaited()
 
     def test_duplicate_of_a_message_still_processing_is_deferred_when_mercury_delivers(self):
         self._whitelisted_delivery_setup()

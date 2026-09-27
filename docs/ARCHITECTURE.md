@@ -99,7 +99,7 @@ Gated by
 in lockstep with removing the mailbox's own address from every affected
 alias, never independently, or a message would be delivered twice.
 
-The backend also answers 421 for an accepted message that is not in the mailbox yet: a failed APPEND, a payload with no raw message, a repeat of a message whose first call is still running, or a pipeline error before delivery. The mail host retries. `backend/dedup.py` keeps the verdict of a failed delivery, so the retry repeats only the APPEND. A message appended before a later step failed is recorded as delivered, so a retry cannot add it twice.
+The backend also answers 421 for an accepted message that is not in the mailbox yet: a failed APPEND, a repeat of a message whose first call is still running, or a pipeline error before delivery. The mail host retries. A payload with no raw message is still accepted, since a retry could not deliver it either, and a Telegram alert names its sender and subject so the message can be asked for again. `backend/dedup.py` keeps the verdict of a failed delivery, so the retry repeats only the APPEND. A message appended before a later step failed is recorded as delivered, so a retry cannot add it twice.
 
 ## Event log
 

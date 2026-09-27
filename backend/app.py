@@ -1969,10 +1969,24 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             if _delivered(delivery_result):
                 delivered = True
                 await _run_custom_action(custom_action, delivery_result, action_content)
-            elif _custody_required():
+            elif _custody_required() and raw_message:
                 return await _defer_undelivered(
                     dedup_key, verdict["verdict"], verdict["category"], subject, delivery_result,
                 )
+            # A payload with no raw message can never be appended, so a retry
+            # would not help. It is accepted, and an alert names it unless it
+            # has no sender and no subject, which is not a message at all.
+            elif _custody_required() and (from_display or subject):
+                alert = (
+                    "\U0001f6a8 Mercury accepted a message it could not deliver\n"
+                    f"From: {redact(from_display)}\n"
+                    f"Subject: {subject}\n"
+                    "The webhook payload had no raw message to append."
+                )
+                try:
+                    await notifier.send(alert[:4000])
+                except Exception:
+                    pass
 
         if alert_eligible and verdict["alert"] in ("STANDARD", "URGENT"):
             prefix = "\U0001f6a8 URGENT" if verdict["alert"] == "URGENT" else "Mercury report"
@@ -2152,6 +2166,10 @@ async def _redeliver(
     """A mail host retry after a failed delivery: the verdict is already
     decided, so only the delivery runs again."""
     verdict, category = existing.get("verdict", "UNSURE"), existing.get("category", "OTHER")
+    if not raw_message:
+        content = {"ok": True, "verdict": verdict, "enforced": "250", "delivered": False}
+        dedup_store.record(dedup_key, 250, content)
+        return JSONResponse(status_code=250, content=content)
     delivery_result, custom_action = await _deliver_accepted(
         raw_message, verdict, category, sender_address, sender_domain,
         subject, action_content, policy_store.load(),
