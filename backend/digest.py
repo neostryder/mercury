@@ -25,6 +25,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 import smtplib
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -42,9 +43,19 @@ logger = logging.getLogger(__name__)
 # so "next 7am Phoenix time" is always UTC-7 with no seasonal adjustment.
 PHOENIX_TZ = timezone(timedelta(hours=-7), name="MST")
 
+def _access_credential(name: str) -> str | None:
+    """A service-token value, without the header label Cloudflare shows beside
+    it on the token page ("CF-Access-Client-Id: ..."), which is easy to copy
+    along with the value and makes Access reject the token."""
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    return re.sub(r"^\s*CF-Access-Client-(Id|Secret)\s*:\s*", "", value, flags=re.IGNORECASE).strip()
+
+
 WORKER_LOG_URL = os.environ.get("MERCURY_WORKER_LOG_URL")
-CF_ACCESS_CLIENT_ID = os.environ.get("MERCURY_DIGEST_ID")
-CF_ACCESS_CLIENT_SECRET = os.environ.get("MERCURY_DIGEST_SECRET")
+CF_ACCESS_CLIENT_ID = _access_credential("MERCURY_DIGEST_ID")
+CF_ACCESS_CLIENT_SECRET = _access_credential("MERCURY_DIGEST_SECRET")
 SMTP_USER = os.environ.get("MERCURY_DIGEST_SMTP_USER")
 SMTP_PASSWORD = os.environ.get("MERCURY_DIGEST_SMTP_PASSWORD")
 

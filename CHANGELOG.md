@@ -184,6 +184,8 @@
 
 ### Fixed
 
+- [Internal] [Digest] The digest reads its Access service-token values without the `CF-Access-Client-Id:` or `CF-Access-Client-Secret:` label that Cloudflare shows beside them. The stored values carried that label, so Access never accepted the token and the digest could not read the dashboard API. (#74)
+
 - [Internal] [Pipeline] The agent gateway listens on 127.0.0.1 unless `AGENT_GATEWAY_HOST` is set, and the backend reaches it through host.docker.internal. It refuses a request body over 1 MB, and a command that exits non-zero or prints nothing gets 502. Before, an empty reply reached the judge parser and was accepted. (#71)
 
 - [Visible] [Filtering] When the free-text judge names a verdict other than LEGIT but gives no disposition, the message is deferred with 421. It was accepted before. (#70)

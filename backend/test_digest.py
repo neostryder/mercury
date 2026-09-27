@@ -74,5 +74,22 @@ class DigestGatherTests(unittest.TestCase):
         self.assertEqual(len(stats["recent_messages"]), 6)
 
 
+
+class AccessCredentialTests(unittest.TestCase):
+    def test_strips_the_header_label_copied_with_the_value(self):
+        cases = {
+            "CF-Access-Client-Id: abc.access": "abc.access",
+            "cf-access-client-secret:xyz": "xyz",
+            "  plain-value \t": "plain-value",
+        }
+        for raw, want in cases.items():
+            with self.subTest(raw=raw), patch.dict("os.environ", {"MERCURY_DIGEST_TEST": raw}):
+                self.assertEqual(digest._access_credential("MERCURY_DIGEST_TEST"), want)
+
+    def test_missing_stays_missing(self):
+        with patch.dict("os.environ", {}, clear=False):
+            self.assertIsNone(digest._access_credential("MERCURY_DIGEST_UNSET_NAME"))
+
+
 if __name__ == "__main__":
     unittest.main()
