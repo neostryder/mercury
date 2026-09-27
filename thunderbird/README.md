@@ -44,10 +44,7 @@ For development instead of a real install, **Debug Add-ons -> Load
 Temporary Add-on** and select this directory's `manifest.json` works as
 before, but a temporary add-on doesn't persist or auto-update.
 
-Releasing a new version (for anyone maintaining a fork): bump the
-`version` in `manifest.json`, then push a `thunderbird-vX.Y.Z` tag
-matching it - `.github/workflows/release-thunderbird.yml` builds the
-`.xpi`, attaches it to a GitHub Release, and points `updates.json` at it.
+Mercury has one version for the whole product. To release, date the changelog's Unreleased section with the new version, set `version` in `manifest.json` to match, and push a `vX.Y.Z` tag. `.github/workflows/release-thunderbird.yml` builds the `.xpi`, attaches it to a GitHub Release with that version's changelog section as the notes, and points `updates.json` at it.
 
 ## Using it
 

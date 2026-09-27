@@ -1,9 +1,9 @@
-name: Release Thunderbird extension
+name: Release Mercury
 
 on:
   push:
     tags:
-      - 'thunderbird-v*'
+      - 'v*'
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
       - name: Derive version from tag
         id: version
         run: |
-          TAG="${GITHUB_REF#refs/tags/thunderbird-v}"
+          TAG="${GITHUB_REF#refs/tags/v}"
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Verify manifest.json version matches the tag
@@ -33,13 +33,32 @@ jobs:
           cd thunderbird
           zip -r -X ../mercury-rule-flagger.xpi manifest.json background.js popup.html popup.js options.html options.js identity-prompt.html identity-prompt.js icons
 
+      - name: Take this version's section from the changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re
+          version = os.environ["VERSION"]
+          heading = re.compile(r"^##\s+\[?" + re.escape(version) + r"\]?(\s|$)")
+          lines = open("CHANGELOG.md", encoding="utf-8").read().splitlines()
+          start = next((i for i, line in enumerate(lines) if heading.match(line)), None)
+          if start is None:
+              raise SystemExit(f"CHANGELOG.md has no section for {version}")
+          end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+          notes = "\n".join(lines[start + 1:end]).strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG.md section for {version} is empty")
+          open("release-notes.md", "w", encoding="utf-8").write(notes + "\n")
+          PYEOF
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" mercury-rule-flagger.xpi \
-            --title "Thunderbird extension v${{ steps.version.outputs.version }}" \
-            --notes "See CHANGELOG.md for what changed in this version."
+            --title "Mercury v${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md
 
       - name: Point the update manifest at this release
         run: |

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.0.0] - 2026-09-27
+
 ### Added
 
 - [Visible] [Dashboard] Each sender-list entry, pattern and content rule on the Policy view shows how many messages it decided in the last 90 days and when it last did. An entry with no hits is marked, so a rule that no longer fires is easy to spot. (#75)
@@ -115,6 +117,8 @@
   bad semantic rule.
 
 ### Changed
+
+- [Internal] [Thunderbird] Mercury has one version for the backend, the Worker, the gateway and the Thunderbird extension, starting at 1.0.0. Releases are tagged vX.Y.Z, and the extension's version matches the product's. Each GitHub Release carries that version's changelog section as its notes. The older thunderbird-vX.Y.Z tags remain as the extension's history.
 
 - [Internal] [Filtering] `judge_comparisons` gets a row when the two judges agree too, with an empty field list, so the System view can show how often they disagree. (#75)
 
