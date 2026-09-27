@@ -704,7 +704,13 @@ async function handleDashboard(pathname, search, env, request) {
         db.prepare('SELECT COUNT(*) AS n FROM messages').first(),
         db.prepare(`
           SELECT COUNT(*) AS total, SUM(CASE WHEN fields != '[]' THEN 1 ELSE 0 END) AS disagreed
-          FROM judge_comparisons WHERE compared_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day')
+          FROM judge_comparisons
+          -- Agreements have been logged only since the first row with no
+          -- fields; counting from before then would show only disagreements.
+          WHERE compared_at >= MAX(
+            strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 day'),
+            COALESCE((SELECT MIN(compared_at) FROM judge_comparisons WHERE fields = '[]'), '9999')
+          )
         `).first(),
       ]);
       return json({
