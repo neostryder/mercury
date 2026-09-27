@@ -110,6 +110,8 @@
 
 ### Changed
 
+- [Internal] [Dashboard] The Worker checks the token Cloudflare Access attaches to every dashboard request: its signature against the team's published keys, the application's audience tag, the issuer and the expiry. A request that reaches the Worker without passing Access, or before `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set, gets 403. (#73)
+
 - [Visible] [Dashboard] The dashboard is split into five views: Overview, Activity, Policy, Audit and System. The view and any Activity filter are kept in the address, so a link or a reload returns to the same place. It follows the system light or dark theme unless one is picked in the header, and it refreshes every minute while the tab is visible.
 
 - [Visible] [Dashboard] Any message opens in a side panel showing its verdict, reasoning, recipient, injection check, saved content and the rule that decided it, with a button that removes that rule. Before, only hard bounces could be opened.
@@ -171,6 +173,12 @@
 - [Visible] [Dashboard] The Hard bounces table and its API are gone. Rejected mail is one filter on Activity, listed in order with everything else. (#65)
 
 ### Fixed
+
+- [Internal] [Pipeline] The agent gateway listens on 127.0.0.1 unless `AGENT_GATEWAY_HOST` is set, and the backend reaches it through host.docker.internal. It refuses a request body over 1 MB, and a command that exits non-zero or prints nothing gets 502. Before, an empty reply reached the judge parser and was accepted. (#71)
+
+- [Visible] [Filtering] When the free-text judge names a verdict other than LEGIT but gives no disposition, the message is deferred with 421. It was accepted before. (#70)
+
+- [Internal] [Telegram] The raw message an open Telegram brief keeps for a Deliver decision is encrypted in `pending_approvals.json`, dropped after seven days, and the file is written owner-only. An existing plaintext copy is encrypted the next time the file is written. (#72)
 
 - [Visible] [Dashboard] The counts and charts for the last day, the last week and the last 30 days now cover exactly that span. Stored timestamps were compared as text against a different format, so every message from the whole cutoff date was counted, and the daily message card could show nearly twice the real number. Retention deletes were off by the same day.
 

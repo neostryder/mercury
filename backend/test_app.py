@@ -1687,5 +1687,30 @@ class MessageDecisionLabelTests(unittest.TestCase):
         record.assert_called_once_with("sid-9", "421", "telegram")
 
 
+
+class JudgeReplyParsingTests(unittest.TestCase):
+    def test_a_verdict_without_a_disposition_is_deferred(self):
+        for verdict in ("PHISH", "SPAM", "UNSURE"):
+            with self.subTest(verdict=verdict):
+                result, parsed = app._parse_judge_reply(f"VERDICT: {verdict}\nREASONING: odd", [])
+                self.assertTrue(parsed)
+                self.assertEqual(result["disposition"], "421")
+
+    def test_legit_without_a_disposition_is_accepted(self):
+        result, _ = app._parse_judge_reply("VERDICT: LEGIT\nREASONING: fine", [])
+        self.assertEqual(result["disposition"], "250")
+
+    def test_an_explicit_disposition_is_kept(self):
+        result, _ = app._parse_judge_reply("VERDICT: PHISH\nDISPOSITION: 550\n", [])
+        self.assertEqual(result["disposition"], "550")
+        result, _ = app._parse_judge_reply("VERDICT: SPAM\nDISPOSITION: 250\n", [])
+        self.assertEqual(result["disposition"], "250")
+
+    def test_an_unparseable_reply_is_unchanged(self):
+        result, parsed = app._parse_judge_reply("I could not comply.", [])
+        self.assertFalse(parsed)
+        self.assertEqual((result["verdict"], result["disposition"]), ("UNSURE", "250"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,16 +16,32 @@ answered from its full history rather than silently dropped.
 
 Persisted to a small JSON file so a backend restart doesn't strand an
 in-flight brief or lose the message-to-brief index a reply depends on.
+
+A brief may carry the original raw message, so a Deliver decision can
+append it to the mailbox. That copy is encrypted in the file when the store
+has a key, readable only through `get_brief`, and dropped once the brief is
+decided, resolved, or older than `RAW_MESSAGE_TTL_SECONDS`. The file itself
+is written owner-only.
 """
 import json
+import os
 import secrets
 import time
 from pathlib import Path
 
+from cryptography.fernet import Fernet, InvalidToken
+
+# A deferred message is retried by the sending side for about five days, so a
+# raw copy older than a week can no longer be delivered usefully anyway.
+RAW_MESSAGE_TTL_SECONDS = 7 * 24 * 3600
+
 
 class ApprovalStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, key: bytes | None = None):
+        """`key` is a Fernet key (see `Fernet.generate_key`). Without one, a
+        raw message is kept in plaintext, which only tests should do."""
         self.path = path
+        self._fernet = Fernet(key) if key else None
 
     def _load(self) -> dict:
         if not self.path.exists():
@@ -36,16 +52,36 @@ class ApprovalStore:
             return {"briefs": {}, "message_index": {}}
         data.setdefault("briefs", {})
         data.setdefault("message_index", {})
+        now = time.time()
         for brief in data["briefs"].values():
-            brief.setdefault("message_metadata", {})
+            metadata = brief.setdefault("message_metadata", {})
             brief.setdefault("changes", [])
             brief.setdefault("message_decision", None)
             brief.setdefault("created_at", 0.0)
+            if now - brief["created_at"] > RAW_MESSAGE_TTL_SECONDS:
+                metadata.pop("raw_message", None)
+                metadata.pop("raw_message_sealed", None)
+            elif self._fernet and "raw_message" in metadata:
+                # A file written before encryption existed.
+                metadata["raw_message_sealed"] = self._seal(metadata.pop("raw_message"))
         return data
 
     def _save(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2))
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2))
+        os.replace(tmp, self.path)
+
+    def _seal(self, raw: str) -> str:
+        return self._fernet.encrypt(raw.encode("utf-8")).decode("ascii")
+
+    def _open(self, sealed: str) -> str | None:
+        try:
+            return self._fernet.decrypt(sealed.encode("ascii")).decode("utf-8")
+        except (InvalidToken, ValueError):
+            return None
 
     def create_brief(
         self,
@@ -55,11 +91,16 @@ class ApprovalStore:
     ) -> str:
         brief_id = secrets.token_hex(4)
         data = self._load()
+        metadata = dict(message_metadata or {})
+        if self._fernet and metadata.get("raw_message"):
+            metadata["raw_message_sealed"] = self._seal(metadata.pop("raw_message"))
+        elif not metadata.get("raw_message"):
+            metadata.pop("raw_message", None)
         data["briefs"][brief_id] = {
             "status": "open",
             "message_context": message_context,
             "via_dictation": via_dictation,
-            "message_metadata": message_metadata or {},
+            "message_metadata": metadata,
             "history": [],
             "changes": [],
             "action": None,
@@ -72,7 +113,18 @@ class ApprovalStore:
         return brief_id
 
     def get_brief(self, brief_id: str) -> dict | None:
-        return self._load()["briefs"].get(brief_id)
+        """The brief, with any sealed raw message opened as `raw_message`.
+        The opened copy lives only in the returned dict."""
+        brief = self._load()["briefs"].get(brief_id)
+        if brief is None:
+            return None
+        metadata = brief["message_metadata"]
+        sealed = metadata.pop("raw_message_sealed", None)
+        if sealed and self._fernet:
+            raw = self._open(sealed)
+            if raw is not None:
+                metadata["raw_message"] = raw
+        return brief
 
     def update_brief(self, brief_id: str, **fields) -> None:
         data = self._load()
@@ -94,7 +146,7 @@ class ApprovalStore:
         if brief is None:
             return
         brief["status"] = "resolved"
-        brief.get("message_metadata", {}).pop("raw_message", None)
+        self._drop_raw(brief)
         self._save(data)
 
     def forget_raw_message(self, brief_id: str) -> None:
@@ -102,8 +154,14 @@ class ApprovalStore:
         brief = data["briefs"].get(brief_id)
         if brief is None:
             return
-        brief.get("message_metadata", {}).pop("raw_message", None)
+        self._drop_raw(brief)
         self._save(data)
+
+    @staticmethod
+    def _drop_raw(brief: dict) -> None:
+        metadata = brief.get("message_metadata", {})
+        metadata.pop("raw_message", None)
+        metadata.pop("raw_message_sealed", None)
 
     def track_message(self, message_id: int, brief_id: str) -> None:
         data = self._load()

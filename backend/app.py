@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import email.utils
 import hashlib
 import json
@@ -226,7 +227,13 @@ STRUCTURED_JUDGE_AUTHORITATIVE = os.environ.get(
 # and even then only once that calibration has been judged ready.
 laya_judge = get_laya_judge()
 LAYA_FAILOVER = os.environ.get("LAYA_FAILOVER", "false").lower() == "true"
-approval_store = ApprovalStore(PENDING_APPROVALS_PATH)
+# Encrypts the raw message a brief keeps for a Deliver decision. Derived from
+# the shared secret so it needs no separate setting; rotating that secret
+# makes open briefs' raw copies unreadable, and Deliver then says so.
+_APPROVALS_KEY = base64.urlsafe_b64encode(
+    hashlib.sha256(b"mercury approvals raw message v1:" + SHARED_SECRET.encode()).digest()
+)
+approval_store = ApprovalStore(PENDING_APPROVALS_PATH, _APPROVALS_KEY)
 dedup_store = IngestDedupStore(INGEST_DEDUP_PATH)
 policy_store = FilteringPolicyStore(RULES_LEDGER_PATH)
 telegram_approvals = TelegramApprovals(
@@ -1606,6 +1613,10 @@ def _parse_judge_reply(content: str, all_rules: list[str]) -> tuple[dict, bool]:
     m2 = re.search(r"DISPOSITION:\s*(250|421|550)", content)
     if m2:
         disposition = m2.group(1)
+    elif m and verdict != "LEGIT":
+        # A verdict with no usable disposition is deferred for review rather
+        # than accepted, and never bounced on a guess.
+        disposition = "421"
     m3 = re.search(r"CATEGORY:\s*(\w+)", content)
     if m3 and m3.group(1).upper() in CATEGORIES:
         category = m3.group(1).upper()
