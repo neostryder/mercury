@@ -23,9 +23,9 @@ credentials, config, or persona selection your agent needs should already
 be set up in the environment this process runs in - the gateway does not
 manage any of that itself.
 
-Set `AGENT_GATEWAY_SECRET` to a random shared secret; the backend must be
-configured with the same value. This endpoint is meant for a private
-network - it has no other authentication.
+Set `AGENT_GATEWAY_SECRET` to a random shared secret; the backend must be configured with the same value. The secret is the only authentication, so the gateway listens on 127.0.0.1 by default. A backend in Docker on the same machine reaches it at `http://host.docker.internal:8721/agent`. To serve a backend on another machine, set `AGENT_GATEWAY_HOST` to an address on a private network.
+
+A request body over 1 MB (`AGENT_GATEWAY_MAX_BODY`) gets 413. When the command exits non-zero or prints nothing, the gateway answers 502 instead of passing an empty reply to the backend.
 
 ## Running it reliably
 
