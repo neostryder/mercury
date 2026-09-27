@@ -74,10 +74,12 @@ export default {
     const { pathname, search } = url;
 
     if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
-      // Gated entirely by a Cloudflare Access application on this hostname
-      // and path (Zero Trust dashboard, not this Worker) - a request only
-      // ever reaches this code once Access has already approved it, so
-      // there is nothing left for the Worker itself to check.
+      // A Cloudflare Access application covers this hostname and path. The
+      // Worker also checks the token Access attaches, so a route that
+      // bypasses Access (a workers.dev URL, a new custom domain) still
+      // cannot reach the dashboard.
+      const denied = await checkAccessToken(request, env);
+      if (denied) return denied;
       return handleDashboard(pathname, search, env, request);
     }
 
@@ -194,6 +196,88 @@ async function purgeExpiredLogs(env) {
   await db.prepare(
     'INSERT INTO admin_log (at, event, detail) VALUES (?, ?, ?)'
   ).bind(new Date().toISOString(), 'log_retention_sweep', `days=${days} deleted=${totalDeleted}`).run();
+}
+
+// Cloudflare Access signs a JWT for every request it lets through, a service
+// token's included, and sends it as Cf-Access-Jwt-Assertion. It is checked
+// against the team's published keys and this application's audience tag.
+let accessKeys = { fetchedAt: 0, byKid: new Map() };
+const ACCESS_KEYS_MAX_AGE_MS = 60 * 60 * 1000;
+
+function base64UrlBytes(text) {
+  const b64 = text.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(text.length / 4) * 4, '=');
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+function base64UrlJson(text) {
+  return JSON.parse(new TextDecoder().decode(base64UrlBytes(text)));
+}
+
+async function loadAccessKeys(teamDomain) {
+  const res = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`);
+  if (!res.ok) throw new Error(`certs fetch returned ${res.status}`);
+  const { keys } = await res.json();
+  const byKid = new Map();
+  for (const jwk of keys ?? []) {
+    if (jwk.kty !== 'RSA' || !jwk.kid) continue;
+    byKid.set(jwk.kid, await crypto.subtle.importKey(
+      'jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'],
+    ));
+  }
+  accessKeys = { fetchedAt: Date.now(), byKid };
+}
+
+async function accessKey(teamDomain, kid) {
+  if (!accessKeys.byKid.has(kid) || Date.now() - accessKeys.fetchedAt > ACCESS_KEYS_MAX_AGE_MS) {
+    await loadAccessKeys(teamDomain);
+  }
+  return accessKeys.byKid.get(kid);
+}
+
+// Returns null when the token is valid, or the response to send instead.
+async function checkAccessToken(request, env) {
+  const deny = (reason) => new Response(`forbidden: ${reason}`, {
+    status: 403,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+  const teamDomain = env.ACCESS_TEAM_DOMAIN;
+  const audience = env.ACCESS_AUD;
+  if (!teamDomain || !audience) return deny('the Access check is not configured');
+
+  const token = request.headers.get('Cf-Access-Jwt-Assertion');
+  if (!token) return deny('no Access token');
+  const parts = token.split('.');
+  if (parts.length !== 3) return deny('malformed Access token');
+
+  let header;
+  let claims;
+  try {
+    header = base64UrlJson(parts[0]);
+    claims = base64UrlJson(parts[1]);
+  } catch (err) {
+    return deny('malformed Access token');
+  }
+  if (header.alg !== 'RS256' || !header.kid) return deny('unexpected token algorithm');
+
+  let key;
+  try {
+    key = await accessKey(teamDomain, header.kid);
+  } catch (err) {
+    return new Response('Access keys unavailable', { status: 503, headers: { 'Cache-Control': 'no-store' } });
+  }
+  if (!key) return deny('unknown signing key');
+
+  const signed = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, base64UrlBytes(parts[2]), signed);
+  if (!valid) return deny('bad signature');
+
+  const now = Math.floor(Date.now() / 1000);
+  const auds = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (!auds.includes(audience)) return deny('wrong audience');
+  if (claims.iss !== `https://${teamDomain}`) return deny('wrong issuer');
+  if (typeof claims.exp !== 'number' || claims.exp < now - 30) return deny('expired');
+  if (typeof claims.nbf === 'number' && claims.nbf > now + 30) return deny('not yet valid');
+  return null;
 }
 
 const HSTS = 'max-age=31536000; includeSubDomains';

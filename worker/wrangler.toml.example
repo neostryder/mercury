@@ -11,6 +11,9 @@ main = "src/index.js"
 compatibility_date = "2026-08-01"
 
 [vars]
+# The dashboard checks the token Cloudflare Access attaches to each request. ACCESS_TEAM_DOMAIN is your Zero Trust team domain, and ACCESS_AUD is the Application Audience (AUD) tag of the Access application covering /dashboard*. The dashboard answers 403 until both are set.
+ACCESS_TEAM_DOMAIN = "yourteam.cloudflareaccess.com"
+ACCESS_AUD = "your-access-application-aud-tag"
 BACKEND_BASE_URL = "https://your-backend-host.example.com"
 LOG_RETENTION_DAYS = "365"
 # Set to "true" when the backend delivers accepted mail itself (MERCURY_DELIVER_ACCEPTED_MAIL). The webhook is then the only path into the mailbox, so a backend outage answers 421 and the mail host retries, where an accept would lose the message.
