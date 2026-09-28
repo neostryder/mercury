@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- [Visible] [Filtering] Flagging a message with a note that it is fake or unwanted, or with a question about whether Mercury can catch messages like it, now proposes a rule for approval instead of only answering. Proposed content rules are written from signs in the message itself, and a rule proposed with no message attached is no longer tested against the placeholder text. (#76)
+
 ## [1.0.0] - 2026-09-27
 
 ### Added

@@ -1675,6 +1675,12 @@ class RuleSelfTestTests(unittest.TestCase):
         self.assertIsNone(self._run("none", 0.8, context="   "))
         self.assertEqual(app.structured_judge.match_rule.await_count, 0)
 
+    def test_a_general_instruction_is_not_tested(self):
+        # The placeholder for "no message attached" is not a message, and a
+        # rule tested against it reads as broken when it may be fine.
+        self.assertIsNone(self._run("none", 0.8, context=app.NO_MESSAGE_CONTEXT))
+        self.assertEqual(app.structured_judge.match_rule.await_count, 0)
+
 
 class MessageDecisionLabelTests(unittest.TestCase):
     def test_a_telegram_decision_is_kept_as_a_label(self):

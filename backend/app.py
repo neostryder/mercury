@@ -630,6 +630,15 @@ as you would for a brand-new brief - a prior round having concluded is never
 a reason to tell the recipient to go re-flag the message instead of just
 acting on what they are asking for right now.
 
+Flagging a message is itself a request to deal with messages like it. When
+the recipient says the flagged kind of message is fake, unwanted or not
+what it claims to be, states how that kind of mail should always be handled,
+or asks whether Mercury can catch or bounce messages like it, propose the
+standing change that would catch them, with a CAVEAT for any limits. Do not
+only answer or acknowledge: approval in Telegram is where the recipient
+confirms or discards it. Answer with REPLY alone only when they asked about
+something that already happened, or said they want nothing changed.
+
 Decide how to respond. You have eight independent things to decide below.
 QUESTION is mutually exclusive with everything else: if you ask a question,
 leave REPLY, SENDER_LIST, BLACKLIST_PATTERN, SEMANTIC_RULE, CUSTOM_ACTION, and
@@ -650,7 +659,8 @@ approval before writing anything.
   SENDER_LIST/BLACKLIST_PATTERN/SEMANTIC_RULE/CUSTOM_ACTION/ACTION proposal
   below it (e.g. "You're right, that was never done - fixing it now:"). NONE
   when there is nothing worth saying beyond what a proposal or CAVEAT already
-  conveys, or this is the first message in the brief.
+  conveys. On the first message in a brief, a REPLY never takes the place of
+  a proposal the recipient's message calls for.
 - SENDER_LIST: a deterministic disposition based only on sender identity,
   formatted "BLACKLIST | <domain-or-exact-address>", "GREYLIST | ...", or
   "WHITELIST | ...". Use BLACKLIST for 550, GREYLIST for 421, and WHITELIST
@@ -689,7 +699,11 @@ approval before writing anything.
   matches poorly: "The message asks the reader to donate money to a political
   campaign, party or candidate" rather than "Political fundraising". A
   matching message may never use the rule's key words, so describe the
-  substance rather than the vocabulary. NONE when there is no semantic
+  substance rather than the vocabulary. The classifier sees only the message
+  itself, so the condition must be checkable from its sender, headers, text
+  and links, never from what the recipient sent before, who their contacts
+  are, or anything else outside the message. Base the rule on the concrete
+  signs in the flagged message(s) above. NONE when there is no semantic
   standing preference.
 - CUSTOM_ACTION: a standing per-sender instruction that is not a disposition,
   formatted "<domain-or-exact-address> | <standalone instruction> |
@@ -754,6 +768,8 @@ CAVEAT: <a direct heads-up per above, or NONE>"""
     return result
 
 
+NO_MESSAGE_CONTEXT = "(no message attached - this is a general instruction, not about any specific message)"
+
 RULE_ADVICE = ("Rules match best when they describe what a matching message says "
                "or asks for, rather than naming a category for it.")
 
@@ -768,7 +784,8 @@ async def _rule_self_test(change: dict, message_context: str) -> str | None:
     that before approving rather than after. Silent when the rule works, when
     there is no message to test against, or when the structured judge is off.
     """
-    if structured_judge is None or not (message_context or "").strip():
+    context = (message_context or "").strip()
+    if structured_judge is None or not context or context == NO_MESSAGE_CONTEXT:
         return None
     try:
         current = policy_store.load()["semantic_rules"]
@@ -2266,7 +2283,7 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
         message_context = (
             redact("\n\n---\n\n".join(blocks)[:8000])
             if blocks
-            else "(no message attached - this is a general instruction, not about any specific message)"
+            else NO_MESSAGE_CONTEXT
         )
         redacted_instruction = redact(instruction)
         _, rule, action = await telegram_approvals.propose_new(
