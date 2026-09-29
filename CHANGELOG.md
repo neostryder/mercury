@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Internal] [Filtering] `LAYA_URL` accepts several comma-separated endpoints and uses the first healthy one. A server that does not answer, answers 503, or reports busy or not ready on `GET /load` is passed over for 5 s, or 30 s if it could not be reached, and a 4xx answer is not retried on the next server. (#77)
+
 ### Fixed
 
 - [Visible] [Filtering] Flagging a message with a note that it is fake or unwanted, or with a question about whether Mercury can catch messages like it, now proposes a rule for approval instead of only answering. Proposed content rules are written from signs in the message itself, and a rule proposed with no message attached is no longer tested against the placeholder text. (#76)

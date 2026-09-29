@@ -36,8 +36,9 @@ The built-in implementation calls TypeSafe's System One endpoint. To use
 something else, implement the StructuredJudge protocol and swap the selection in
 get_structured_judge().
 
-A second backend can be configured with LAYA_URL: any server that accepts the
-same /v1/systemone request, such as the open-weight Laya model hosted on the
+A second backend can be configured with LAYA_URL: one endpoint, or several
+comma-separated ones tried in order, of any server that accepts the same
+/v1/systemone request, such as the open-weight Laya model hosted on the
 local network. It is built by get_laya_judge(), shadows the primary on every
 message, and decides nothing until laya_shadow.py has calibrated it against the
 primary and found it ready (see that file).
@@ -46,6 +47,7 @@ import asyncio
 import os
 import time
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -138,12 +140,90 @@ class StructuredJudge(Protocol):
         """Return typed answers with probabilities, or None if unavailable."""
 
 
+class EndpointPool:
+    """Picks the first healthy server from an ordered list of endpoints.
+
+    A server is skipped when it does not answer, answers 503, or reports busy
+    or not ready on GET /load. Busy is remembered for a few seconds and
+    unreachable for half a minute, so a sleeping machine costs one short probe
+    rather than one per message. A 4xx answer means the request itself is wrong,
+    so the next server is not tried.
+    """
+
+    def __init__(self, endpoints: list[str], probe_timeout: float = 0.6,
+                 busy_ttl: float = 5.0, down_ttl: float = 30.0, clock=time.monotonic,
+                 transport: httpx.AsyncBaseTransport | None = None):
+        self.endpoints = endpoints
+        self.transport = transport
+        self.probe_timeout, self.busy_ttl, self.down_ttl = probe_timeout, busy_ttl, down_ttl
+        self.clock = clock
+        self._skip: dict[str, float] = {}
+
+    @staticmethod
+    def _base(endpoint: str) -> str:
+        parts = urlsplit(endpoint)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    def _skipped(self, endpoint: str) -> bool:
+        until = self._skip.get(endpoint)
+        if until is not None and until > self.clock():
+            return True
+        self._skip.pop(endpoint, None)
+        return False
+
+    def _mark(self, endpoint: str, ttl: float) -> None:
+        self._skip[endpoint] = self.clock() + ttl
+
+    async def _usable(self, client: httpx.AsyncClient, endpoint: str) -> bool:
+        try:
+            r = await client.get(self._base(endpoint) + "/load", timeout=self.probe_timeout)
+        except Exception:                                     # noqa: BLE001
+            self._mark(endpoint, self.down_ttl)
+            return False
+        if r.status_code == 404:
+            return True       # a server without /load is used as it is
+        if r.status_code != 200:
+            self._mark(endpoint, self.busy_ttl)
+            return False
+        try:
+            state = r.json()
+        except ValueError:
+            return True
+        if state.get("busy") or state.get("ready") is False:
+            self._mark(endpoint, self.busy_ttl)
+            return False
+        return True
+
+    async def post(self, payload: dict, headers: dict, timeout: float) -> dict | None:
+        async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
+            for endpoint in self.endpoints:
+                if self._skipped(endpoint) or not await self._usable(client, endpoint):
+                    continue
+                try:
+                    r = await client.post(endpoint, headers=headers, json=payload)
+                except Exception:                             # noqa: BLE001
+                    self._mark(endpoint, self.down_ttl)
+                    continue
+                if r.status_code >= 500:
+                    self._mark(endpoint, self.busy_ttl)
+                    continue
+                if 400 <= r.status_code < 500:
+                    return None
+                try:
+                    return r.json()
+                except ValueError:
+                    self._mark(endpoint, self.busy_ttl)
+        return None
+
+
 class SystemOneStructuredJudge:
     def __init__(self, api_key: str | None, timeout: float = 15.0,
-                 endpoint: str = ENDPOINT, name: str = "jev"):
+                 endpoint: str = ENDPOINT, name: str = "jev",
+                 pool: EndpointPool | None = None):
         self._key = api_key
         self._timeout = timeout
         self._endpoint = endpoint
+        self._pool = pool
         # Which backend produced an answer, recorded on every result so the
         # event log and the shadow file never have to infer it from the model
         # string the server chose to report.
@@ -186,6 +266,11 @@ class SystemOneStructuredJudge:
         headers = {"Content-Type": "application/json"}
         if self._key:
             headers["Authorization"] = "Bearer " + self._key
+        if self._pool is not None:
+            try:
+                return await self._pool.post(payload, headers, self._timeout)
+            except Exception:                                 # noqa: BLE001
+                return None
         # 429 and 529 are the service saying "later", not "no", and a real 529
         # was observed during development. Two short retries, because the whole
         # call is normally under half a second and a message is waiting on it.
@@ -302,13 +387,14 @@ def get_structured_judge() -> StructuredJudge | None:
 def get_laya_judge() -> StructuredJudge | None:
     """The shadow backend, or None when LAYA_URL is unset.
 
-    It runs on the local network and needs no key. Its call runs in the
-    background (see app._start_shadow), so the timeout only bounds how long a
-    failover waits for it.
+    It runs on the local network and needs no key. LAYA_URL may list several
+    comma-separated endpoints, which are tried in order (see EndpointPool). Its
+    call runs in the background (see app._start_shadow), so the timeout only
+    bounds how long a failover waits for it.
     """
-    url = os.environ.get("LAYA_URL", "").strip()
-    if not url:
+    urls = [u.strip() for u in os.environ.get("LAYA_URL", "").split(",") if u.strip()]
+    if not urls:
         return None
     return SystemOneStructuredJudge(
         None, timeout=float(os.environ.get("LAYA_TIMEOUT", "20")),
-        endpoint=url, name="laya")
+        endpoint=urls[0], name="laya", pool=EndpointPool(urls))
