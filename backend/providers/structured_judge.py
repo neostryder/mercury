@@ -115,6 +115,20 @@ SIGNALS = {
         "recipient.",
     "solicits_money":
         "The message asks the reader to send, donate or transfer money.",
+    # The two yes/no questions the verdict cannot answer. The verdict is one
+    # choice among four, so a message that is plainly unwanted but could be read
+    # as SPAM or PHISH splits its probability and its top label scores low. A
+    # yes/no question keeps that probability whole. Unwanted and dangerous are
+    # separate axes: a romantic solicitation is the first without the second.
+    "unwanted_by_recipient":
+        "The message is unsolicited and the recipient would not want it: bulk or "
+        "cold outreach, a stranger's pitch, a romantic or dating approach, or "
+        "anything deceptive. Mail from a sender the recipient has a relationship "
+        "with, and ordinary transactional mail, is wanted.",
+    "dangerous":
+        "The message could harm the recipient if acted on: it tries to obtain "
+        "credentials or payment, carries or links to hostile software, or "
+        "impersonates a party to defraud them.",
 }
 
 

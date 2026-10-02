@@ -1557,33 +1557,65 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         result["reasoning"] += (" Decided by the calibrated failover model because the "
                                 "primary structured judge was unavailable.")
 
-    # Accepted mail never pages, so its reasoning only reaches the dashboard and
-    # the digest, and the line built from the numbers is enough there. Skipping
-    # the judge for it means ordinary mail gets its SMTP answer in well under a
-    # second instead of waiting minutes on a model that decides nothing.
-    if decision["disposition"] == "250":
+    # Mail the classifier clears is accepted here. It never pages, so its
+    # reasoning only reaches the dashboard and the digest, and the line built
+    # from the numbers is enough there. Skipping the judge for it means ordinary
+    # mail gets its SMTP answer in well under a second instead of waiting
+    # minutes on a model that has nothing to decide.
+    if not verdict_policy.needs_review(structured, decision):
         return result
 
-    # A deferral or a bounce is what the recipient actually reads, so it gets
-    # the judge's sentence. A judge outage must not undo a decision that has
-    # already been made, so any failure here keeps the built line instead.
+    # Everything else is the language-model judge's to decide, with the
+    # classifier's findings in front of it as evidence. A judge outage or a
+    # reply that cannot be read must not undo a decision that has already been
+    # made, so any failure here keeps the classifier's decision and its line.
     try:
-        content = await judge.ask(prompt)
+        content = await judge.ask(_with_evidence(
+            prompt, verdict_policy.evidence_block(structured, decision)))
     except Exception:                                         # noqa: BLE001
         return result
     judged, parsed = _parse_judge_reply(content, all_rules)
     _log_comparison(judged, decision, structured)
-    if not parsed:
+    # A verdict with no disposition line is parsed as a deferral (see
+    # _parse_judge_reply), which is a guess, so only an explicit one counts.
+    if not parsed or not re.search(r"DISPOSITION:\s*(250|421|550)", content):
         return result
-    if (judged["verdict"], judged["disposition"]) == (decision["verdict"], decision["disposition"]):
-        result["reasoning"] = judged["reasoning"]
-    else:
-        # The judge argued for a different outcome. Its sentence would read as
-        # the reason for this one, so the enforced decision leads and the judge
-        # is quoted as a dissent.
-        result["reasoning"] += " The language-model judge disagreed ({}, {}): {}".format(
-            judged["verdict"], judged["disposition"], judged["reasoning"])
+
+    disposition = judged["disposition"]
+    held = decision["disposition"] == "550" and disposition == "250"
+    if held:
+        # One model's word does not deliver mail the classifier was about to
+        # bounce. Deferring it puts it in front of the recipient instead, under
+        # the classifier's label so the hold explains itself.
+        disposition = "421"
+    result.update(
+        verdict=decision["verdict"] if held else judged["verdict"],
+        disposition=disposition,
+        category=decision["category"] if held else judged["category"],
+        triggered_rule=judged["triggered_rule"],
+        # The alert follows the enforced disposition, never the judge's own
+        # ALERT field: an accepted message never pages.
+        alert=verdict_policy.alert_for(disposition, decision, structured),
+        reasoning=judged["reasoning"],
+    )
+    if held:
+        result["reasoning"] += (" Deferred rather than delivered because the "
+                                "classifier had rejected it.")
+    if failed_over:
+        result["reasoning"] += (" The classifier's findings came from the calibrated "
+                                "failover model because the primary was unavailable.")
     return result
+
+
+def _with_evidence(prompt: str, evidence: str) -> str:
+    """The judge prompt with the classifier's findings placed before its answer
+    format. The marker is the last one in the prompt, since the message itself
+    sits earlier and could contain the same words."""
+    marker = "\nRespond with:\n"
+    i = prompt.rfind(marker)
+    if i < 0:
+        return prompt
+    return prompt[:i] + "\n" + evidence + prompt[i:]
 
 
 # Strong references to shadow calls still running after their message was
@@ -1666,11 +1698,21 @@ def _log_comparison(judged: dict, decision: dict, structured: dict) -> None:
     diffs = verdict_policy.disagreement(judged, decision) or {}
     # Agreements are logged too, with an empty field list, so the share of
     # messages where the judges disagree can be computed.
+    # The probabilities behind each answer go in the detail under one reserved
+    # key, so a low top-label confidence can be read back as the split it was.
+    detail = dict(diffs)
+    detail["_structured"] = {
+        "verdict": (structured.get("verdict") or {}).get("probabilities"),
+        "category": (structured.get("category") or {}).get("probabilities"),
+        "signals": structured.get("signals"),
+    }
     event_log.log_event("judge_comparisons", {
         "compared_at": _now(),
-        "authoritative": "structured" if STRUCTURED_JUDGE_AUTHORITATIVE else "judge",
+        # The language-model judge's disposition is the enforced one whenever it
+        # runs, in both modes.
+        "authoritative": "judge",
         "fields": json.dumps(sorted(diffs)),
-        "detail": json.dumps(diffs)[:4000],
+        "detail": json.dumps(detail)[:4000],
         "structured_confidence": decision["confidence"],
         "structured_severity": decision["severity"],
         "structured_why": decision["why"],

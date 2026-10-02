@@ -4,7 +4,13 @@
 
 ### Added
 
+- [Internal] [Filtering] The structured judge asks two more yes/no questions, `unwanted_by_recipient` and `dangerous`, kept apart because a message can be the first without the second. The `judge_comparisons` detail now carries the verdict, category and signal probabilities under `_structured`, so a low top-label confidence can be read back as the split it was. A backend that does not answer the new questions leaves the review gate where it was. (#78)
+
 - [Internal] [Filtering] `LAYA_URL` accepts several comma-separated endpoints and uses the first healthy one. A server that does not answer, answers 503, or reports busy or not ready on `GET /load` is passed over for 5 s, or 30 s if it could not be reached, and a 4xx answer is not retried on the next server. (#77)
+
+### Changed
+
+- [Visible] [Filtering] With the structured judge authoritative, the language-model judge now decides every message the structured judge does not clear, and its disposition is enforced. Before, the structured decision won and the judge was only quoted as a dissent, so a romantic solicitation the judge would have bounced was deferred when the verdict scored 24% PHISH and threat evidence landed on the 2.0 cutoff. The judge receives the structured findings, including the probability behind each label. It cannot turn a structured 550 into a 250 (the message is deferred), and a reply without a disposition line decides nothing. Accepted mail with unwanted or dangerous probability at 0.40, threat evidence at 1.0, or a SPAM or PHISH verdict at 0.25 now goes to the judge as well; `MERCURY_REVIEW_UNWANTED`, `MERCURY_REVIEW_DANGEROUS`, `MERCURY_REVIEW_SEVERITY` and `MERCURY_REVIEW_LEAN` set those bars. (#78)
 
 ### Fixed
 

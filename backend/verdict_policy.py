@@ -70,6 +70,17 @@ SIGNAL_PRESENT = float(os.environ.get("MERCURY_SIGNAL_PRESENT", "0.70"))
 
 INJECTION_PRESENT = float(os.environ.get("MERCURY_INJECTION_PRESENT", "0.70"))
 
+# The structured judge accepts mail on its own only when it is clear. Mail it
+# would accept but that carries this much unwanted or dangerous probability goes
+# to the language-model judge, which decides it. Lower than SIGNAL_PRESENT on
+# purpose: this gate only buys a second opinion, it never bounces anything.
+REVIEW_UNWANTED = float(os.environ.get("MERCURY_REVIEW_UNWANTED", "0.40"))
+REVIEW_DANGEROUS = float(os.environ.get("MERCURY_REVIEW_DANGEROUS", "0.40"))
+# Threat severity, and confidence in a SPAM or PHISH verdict, at which a 250 is
+# no longer clear. Both sit well below the thresholds that defer or bounce.
+REVIEW_SEVERITY = float(os.environ.get("MERCURY_REVIEW_SEVERITY", "1.0"))
+REVIEW_LEAN = float(os.environ.get("MERCURY_REVIEW_LEAN", "0.25"))
+
 # Alert tuning for soft-defers only. Below this confidence the message is
 # genuinely ambiguous and worth the recipient's own eyes today.
 AMBIGUOUS_CONFIDENCE = float(os.environ.get("MERCURY_AMBIGUOUS_CONFIDENCE", "0.50"))
@@ -154,6 +165,84 @@ def decide(structured: dict, rules: dict[str, list[str]]) -> dict:
         "confidence": round(verdict_conf, 4),
         "severity": round(severity, 4),
     }
+
+
+def needs_review(structured: dict, decision: dict) -> bool:
+    """Whether the language-model judge must decide this message.
+
+    Any 421 or 550 goes to it, since a deferral or a bounce is what the
+    recipient reads. A 250 goes to it too unless the structured judge is clear:
+    no unwanted or dangerous probability worth a second look, little threat
+    evidence, and a verdict that is not leaning toward SPAM or PHISH. A
+    standing accept rule is always clear. The language-model judge's disposition
+    is then enforced (see app.judge_email), so this gate is what keeps ordinary
+    mail from waiting on it.
+    """
+    if decision["disposition"] != "250":
+        return True
+    if decision["why"] == "standing rule":
+        # An accept rule is the recipient's own instruction.
+        return False
+    signals = structured.get("signals") or {}
+    if signals.get("unwanted_by_recipient", 0.0) >= REVIEW_UNWANTED:
+        return True
+    if signals.get("dangerous", 0.0) >= REVIEW_DANGEROUS:
+        return True
+    if decision["severity"] >= REVIEW_SEVERITY:
+        return True
+    if decision["verdict"] in ("SPAM", "PHISH") and decision["confidence"] >= REVIEW_LEAN:
+        return True
+    return False
+
+
+def _probabilities(answer: dict | None) -> str:
+    probs = (answer or {}).get("probabilities") or {}
+    if not probs:
+        return "{} at {:.0%}".format((answer or {}).get("choice", "unknown"), _conf(answer))
+    ranked = sorted(probs.items(), key=lambda kv: -kv[1])
+    return ", ".join("{} {:.0%}".format(k, v) for k, v in ranked if v >= 0.01)
+
+
+def evidence_block(structured: dict, decision: dict) -> str:
+    """The structured judge's findings, written for the language-model judge.
+
+    Its disposition is the one enforced, so it is given everything the
+    classifier found, including the probabilities behind a low top-label
+    confidence, and told these are evidence to weigh rather than a ruling.
+    """
+    signals = structured.get("signals") or {}
+    lines = [
+        "A separate classifier already scored this message. Its findings are "
+        "evidence for your judgment, not a ruling: you make the final decision.",
+        "- Verdict probabilities: " + _probabilities(structured.get("verdict")),
+        "- Category probabilities: " + _probabilities(structured.get("category")),
+        "- Threat evidence: {:.1f} of 3".format(decision["severity"]),
+    ]
+    for key in ("unwanted_by_recipient", "dangerous", "impersonates_known_party",
+                "requests_credentials_or_payment", "manufactured_urgency",
+                "solicits_money"):
+        if key in signals:
+            lines.append("- {}: {:.0%}".format(key.replace("_", " "), signals[key]))
+    if decision["triggered_rule"]:
+        lines.append('- Matched standing rule: "{}"'.format(decision["triggered_rule"]))
+    else:
+        lines.append("- Matched no standing rule with confidence "
+                     "(check the rules above yourself).")
+    lines.append("- Its own disposition: {} ({})".format(decision["disposition"],
+                                                       decision["why"]))
+    return "\n".join(lines) + "\n"
+
+
+def alert_for(disposition: str, decision: dict, structured: dict) -> str:
+    """The alert level for a disposition other than the one decide() chose.
+
+    Used when the language-model judge's disposition is enforced, so the page
+    rule stays structural: an accepted message never pages, whatever the judge
+    wrote in its own ALERT field.
+    """
+    signals = structured.get("signals") or {}
+    return _alert_for(disposition, decision["verdict"], decision["confidence"],
+                      decision["severity"], signals, signals.get("attempts_injection", 0.0))
 
 
 def _alert_for(disposition, verdict, verdict_conf, severity, signals, injection_signal):

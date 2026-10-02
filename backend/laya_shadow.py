@@ -10,7 +10,7 @@ a schedule.
 
 What is fitted, per question:
 
-  Nouls (the five signals)       Platt scaling, p' = sigmoid(a * logit(p) + b).
+  Nouls (the signals)            Platt scaling, p' = sigmoid(a * logit(p) + b).
   verdict, category, severity    Temperature plus a per-option bias, so
                                  p'_k is proportional to exp(a * log p_k + b_k).
                                  The bias can move the top choice, which is what

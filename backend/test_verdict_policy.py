@@ -247,6 +247,81 @@ class DescribeTests(unittest.TestCase):
                       verdict_policy.describe(verdict_policy.decide(s, RULES), s))
 
 
+class ReviewGateTests(unittest.TestCase):
+    """Which accepted mail still goes to the language-model judge."""
+
+    def _gate(self, s):
+        return verdict_policy.needs_review(s, verdict_policy.decide(s, RULES))
+
+    def test_clear_mail_skips_the_judge(self):
+        s = structured("LEGIT", 0.95, severity=0.1,
+                       unwanted_by_recipient=0.05, dangerous=0.02)
+        self.assertFalse(self._gate(s))
+
+    def test_mail_with_no_new_signals_is_clear_as_before(self):
+        """A backend that does not answer the two yes/no questions leaves the
+        gate exactly where it was."""
+        self.assertFalse(self._gate(structured("LEGIT", 0.9, severity=0.1)))
+
+    def test_a_deferral_or_a_bounce_always_goes_to_the_judge(self):
+        self.assertTrue(self._gate(structured("PHISH", 0.97, severity=3.0)))
+        self.assertTrue(self._gate(structured("UNSURE", 0.3, severity=2.0)))
+
+    def test_unwanted_probability_sends_an_accepted_message_to_the_judge(self):
+        self.assertTrue(self._gate(structured(
+            "LEGIT", 0.9, severity=0.1, unwanted_by_recipient=0.5)))
+
+    def test_dangerous_probability_sends_an_accepted_message_to_the_judge(self):
+        self.assertTrue(self._gate(structured(
+            "LEGIT", 0.9, severity=0.1, dangerous=0.45)))
+
+    def test_some_threat_evidence_sends_an_accepted_message_to_the_judge(self):
+        self.assertTrue(self._gate(structured("LEGIT", 0.9, severity=1.2)))
+
+    def test_a_verdict_leaning_toward_spam_sends_it_to_the_judge(self):
+        self.assertTrue(self._gate(structured("SPAM", 0.3, severity=0.2)))
+
+    def test_a_standing_accept_rule_is_never_second_guessed(self):
+        s = structured("SPAM", 0.9, severity=0.5, rule="r250_0",
+                       rule_confidence=0.95, unwanted_by_recipient=0.95)
+        self.assertEqual(verdict_policy.decide(s, RULES)["disposition"], "250")
+        self.assertFalse(self._gate(s))
+
+
+class EvidenceTests(unittest.TestCase):
+    def test_the_split_behind_a_low_confidence_is_shown(self):
+        s = structured("PHISH", 0.24, severity=2.0, unwanted_by_recipient=0.9)
+        s["verdict"]["probabilities"] = {"PHISH": 0.24, "SPAM": 0.22,
+                                         "LEGIT": 0.2, "UNSURE": 0.34}
+        text = verdict_policy.evidence_block(s, verdict_policy.decide(s, RULES))
+        self.assertIn("UNSURE 34%, PHISH 24%, SPAM 22%, LEGIT 20%", text)
+        self.assertIn("unwanted by recipient: 90%", text)
+        self.assertIn("Threat evidence: 2.0 of 3", text)
+        self.assertIn("you make the final decision", text)
+
+    def test_a_missing_probability_table_falls_back_to_the_top_choice(self):
+        s = structured("LEGIT", 0.9)
+        text = verdict_policy.evidence_block(s, verdict_policy.decide(s, RULES))
+        self.assertIn("Verdict probabilities: LEGIT at 90%", text)
+
+    def test_a_matched_rule_is_quoted_from_the_policy(self):
+        s = structured("LEGIT", 0.9, rule="r550_0", rule_confidence=0.95)
+        text = verdict_policy.evidence_block(s, verdict_policy.decide(s, RULES))
+        self.assertIn(RULES["550"][0], text)
+
+
+class AlertForTests(unittest.TestCase):
+    def test_an_accepted_message_never_pages_whatever_the_decision(self):
+        s = structured("PHISH", 0.97, severity=3.0)
+        d = verdict_policy.decide(s, RULES)
+        self.assertEqual(verdict_policy.alert_for("250", d, s), "NONE")
+
+    def test_a_deferral_the_classifier_was_unsure_of_is_urgent(self):
+        s = structured("UNSURE", 0.3, severity=0.5)
+        d = verdict_policy.decide(s, RULES)
+        self.assertEqual(verdict_policy.alert_for("421", d, s), "URGENT")
+
+
 class RuleIdTests(unittest.TestCase):
     def test_ids_carry_their_bucket_and_position(self):
         ids = rule_ids(RULES)
