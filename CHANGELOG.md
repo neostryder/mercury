@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.0.1] - 2026-10-07
+
 ### Added
 
 - [Internal] [Filtering] The structured judge asks two more yes/no questions, `unwanted_by_recipient` and `dangerous`, kept apart because a message can be the first without the second. The `judge_comparisons` detail now carries the verdict, category and signal probabilities under `_structured`, so a low top-label confidence can be read back as the split it was. A backend that does not answer the new questions leaves the review gate where it was. (#78)
