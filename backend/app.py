@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import base64
 import email.utils
 import hashlib
@@ -2425,5 +2426,22 @@ async def telegram_relay(request: Request, x_mercury_secret: str | None = Header
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
     update = await request.json()
-    await telegram_approvals.handle_relayed_update(update)
+    # Acknowledged at once, then handled in the background: an approved action
+    # can run the browsing agent for minutes, far longer than the forwarder
+    # waits for an answer, and it would log a timeout for work that was
+    # in fact running. Failures are logged by the task's own handler.
+    task = asyncio.create_task(_handle_relayed_update(update))
+    _relay_tasks.add(task)
+    task.add_done_callback(_relay_tasks.discard)
+    await asyncio.sleep(0)
     return {"ok": True}
+
+
+_relay_tasks: set[asyncio.Task] = set()
+
+
+async def _handle_relayed_update(update: dict) -> None:
+    try:
+        await telegram_approvals.handle_relayed_update(update)
+    except Exception:
+        logging.getLogger(__name__).exception("relayed Telegram update failed")

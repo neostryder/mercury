@@ -8,6 +8,10 @@
 
 - [Visible] [Telegram] **The Telegram card for a proposed unsubscribe now shows which address it will run for.** An "Address to unsubscribe" line names the recipient address, or says none was found and that a form asking for one will fail, so a missing address shows up before Approve is pressed. The prompt sent to the browsing agent now starts with the request to unsubscribe that address. Redeploy the backend to pick this up. (#81)
 
+### Changed
+
+- [Internal] [Telegram] **The `/telegram/relay` endpoint now answers the forwarder right away and handles the tapped button or reply as a background task.** Before, it answered only after the whole handler finished. An approved unsubscribe or mailbox action can keep the browsing agent busy for a minute or more, so the forwarder gave up after 30 s and logged a relay timeout while the action was still running, even though its result still reached Telegram. A failure in the background task is logged. Redeploy the backend to pick this up. (#83)
+
 ### Fixed
 
 - [Visible] [Pipeline] **An unsubscribe whose route passed the domain check no longer fails before the agent visits it.** The unsubscribe prompt told the browsing agent to post its own progress updates to Telegram, and the execution session has no way to send them. An agent that took this literally stopped and returned FAILED, as an unsubscribe from a Mailchimp-hosted list did. The prompt now says the backend sends those updates and that being unable to send them is no reason to stop. The backend still sends the "working on it" message before it calls the agent. Redeploy the backend to pick this up. (#80)

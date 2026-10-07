@@ -797,6 +797,36 @@ class TelegramRelayTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         fake_telegram.handle_relayed_update.assert_awaited_once_with(update)
 
+    def test_answers_before_a_slow_approval_finishes(self):
+        finished = []
+
+        async def slow_handler(update):
+            await asyncio.sleep(0.2)
+            finished.append(update)
+
+        async def run():
+            fake_telegram = SimpleNamespace(handle_relayed_update=slow_handler)
+            with patch.object(app, "telegram_approvals", fake_telegram):
+                response = await app.telegram_relay(FakeRequest({"chat_id": "test-chat"}), "test-secret")
+            answered_before_done = not finished
+            await asyncio.gather(*app._relay_tasks)
+            return response, answered_before_done
+
+        response, answered_before_done = asyncio.run(run())
+        self.assertTrue(response["ok"])
+        self.assertTrue(answered_before_done)
+        self.assertEqual(len(finished), 1)
+
+    def test_a_failing_update_is_logged_not_raised(self):
+        async def run():
+            fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock(side_effect=RuntimeError("boom")))
+            with patch.object(app, "telegram_approvals", fake_telegram):
+                await app.telegram_relay(FakeRequest({"chat_id": "test-chat"}), "test-secret")
+            await asyncio.gather(*app._relay_tasks)
+
+        with self.assertLogs(level="ERROR"):
+            asyncio.run(run())
+
     def test_rejects_a_wrong_secret(self):
         fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
         with patch.object(app, "telegram_approvals", fake_telegram):
