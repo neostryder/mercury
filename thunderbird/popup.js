@@ -140,6 +140,18 @@ async function resolveRecipientEmail(message, full) {
   return identityEmails.length === 1 ? identityEmails[0] : "";
 }
 
+// Every address the message names as a recipient. The account's identities
+// only cover addresses Thunderbird knows about, so mail sent to a catch-all
+// alias or a personal address that forwards in matches none of them; the
+// backend knows the owner's full address list and picks from these.
+function recipientCandidates(full) {
+  const seen = new Set();
+  for (const name of RECIPIENT_HEADER_PRIORITY) {
+    for (const address of extractAddresses(headerValue(full.headers, name))) seen.add(address);
+  }
+  return [...seen];
+}
+
 async function init() {
   const submitButton = document.getElementById("submit");
   const statusEl = document.getElementById("status");
@@ -239,6 +251,7 @@ async function onSubmit(submitButton, statusEl) {
           list_unsubscribe: headerValue(full.headers, "list-unsubscribe"),
           list_unsubscribe_post: headerValue(full.headers, "list-unsubscribe-post"),
           recipient_email: await resolveRecipientEmail(m, full),
+          recipient_candidates: recipientCandidates(full),
         };
       })
     );

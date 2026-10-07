@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- [Visible] [Thunderbird] **An unsubscribe flagged from Thunderbird now carries the recipient's address even when no identity on the account matches the message headers.** The popup also sends every address in the Delivered-To, X-Original-To, To and Cc headers as `recipient_candidates`, and when its own identity match comes back empty, the backend picks from those: an rpgm.tools address first, then any other known alias of the mailbox owner. The personal-address forwarding alias is never picked, because it only names a hop the mail passed through on its way in. With no qualifying address, the unsubscribe agent still reports that it has none instead of guessing. Before, mail sent to a catch-all alias or forwarded in from a personal address matched no identity, so the brief carried no address and the unsubscribe stopped. Install the new extension build and redeploy the backend to pick this up. (#79)
+
 - [Visible] [Filtering] Flagging a message with a note that it is fake or unwanted, or with a question about whether Mercury can catch messages like it, now proposes a rule for approval instead of only answering. Proposed content rules are written from signs in the message itself, and a rule proposed with no message attached is no longer tested against the placeholder text. (#76)
 
 ## [1.0.0] - 2026-09-27

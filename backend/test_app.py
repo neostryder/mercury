@@ -1018,8 +1018,48 @@ class ExecuteMessageDecisionUnsubscribeTests(unittest.TestCase):
         self.assertIsNone(fake.await_args.args[-1])
 
 
+class RecipientEmailFromCandidatesTests(unittest.TestCase):
+    """_recipient_email_from_candidates() picks the recipient's own address
+    out of a flagged message's To/Cc/Delivered-To addresses when the mail
+    client could not match one to an identity itself."""
+
+    def setUp(self):
+        patcher_identities = patch.object(
+            app, "KNOWN_IDENTITIES", [("personal-example.test", {"someone"}, False)])
+        patcher_alias = patch.object(app, "_PERSONAL_FORWARD_ALIAS", "forwarded@rpgm.tools")
+        patcher_identities.start()
+        patcher_alias.start()
+        self.addCleanup(patcher_identities.stop)
+        self.addCleanup(patcher_alias.stop)
+
+    def test_prefers_an_rpgm_tools_catch_all_alias(self):
+        self.assertEqual(
+            app._recipient_email_from_candidates(
+                ["list@example.com", "Aaron-CodePilot@rpgm.tools"]),
+            "aaron-codepilot@rpgm.tools",
+        )
+
+    def test_accepts_a_known_personal_address(self):
+        self.assertEqual(
+            app._recipient_email_from_candidates(["list@example.com", "someone@personal-example.test"]),
+            "someone@personal-example.test",
+        )
+
+    def test_never_returns_the_forwarding_alias_or_a_stranger(self):
+        self.assertIsNone(app._recipient_email_from_candidates(
+            ["forwarded@rpgm.tools", "list@example.com"]))
+
+    def test_tolerates_missing_or_malformed_candidates(self):
+        self.assertIsNone(app._recipient_email_from_candidates(None))
+        self.assertIsNone(app._recipient_email_from_candidates("someone@personal-example.test"))
+        self.assertIsNone(app._recipient_email_from_candidates([None, 3, "no-at-sign"]))
+
+
 class ProposeRuleUnsubscribeContextTests(unittest.TestCase):
     def _propose(self, message: dict) -> str:
+        return self._propose_call(message).call_args[0][1]
+
+    def _propose_call(self, message: dict):
         fake_telegram = SimpleNamespace(
             propose_new=AsyncMock(return_value=("brief-1", None, "UNSUBSCRIBE: example.com"))
         )
@@ -1028,7 +1068,33 @@ class ProposeRuleUnsubscribeContextTests(unittest.TestCase):
                 FakeRequest({"instruction": "Unsubscribe me.", "messages": [message]}),
                 "test-secret",
             ))
-        return fake_telegram.propose_new.call_args[0][1]
+        return fake_telegram.propose_new
+
+    def test_recipient_comes_from_candidates_when_the_client_sent_none(self):
+        propose = self._propose_call({
+            "subject": "A newsletter",
+            "from": "News <news@example.com>",
+            "text": "Body.",
+            "recipient_email": "",
+            "recipient_candidates": ["news-list@example.com", "aaron-codepilot@rpgm.tools"],
+        })
+        self.assertEqual(
+            propose.call_args.kwargs["message_metadata"],
+            {"recipient_email": "aaron-codepilot@rpgm.tools"},
+        )
+
+    def test_the_clients_own_resolution_wins_over_candidates(self):
+        propose = self._propose_call({
+            "subject": "A newsletter",
+            "from": "News <news@example.com>",
+            "text": "Body.",
+            "recipient_email": "aaron@rpgm.tools",
+            "recipient_candidates": ["aaron-codepilot@rpgm.tools"],
+        })
+        self.assertEqual(
+            propose.call_args.kwargs["message_metadata"],
+            {"recipient_email": "aaron@rpgm.tools"},
+        )
 
     def test_context_states_the_route_the_body_alone_does_not_contain(self):
         context = self._propose({

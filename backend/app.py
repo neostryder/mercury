@@ -453,6 +453,29 @@ def _recipient_email_from_classification(
     return address or None
 
 
+def _recipient_email_from_candidates(candidates: object) -> str | None:
+    """The recipient's own address among the addresses a flagged message was
+    sent to, for when the mail client could not pick one itself. An rpgm.tools
+    address wins, then any of the mailbox owner's other known aliases, using
+    the same families as _classify_recipient(). The personal-address forwarding
+    alias is a hop the mail took, not an address anyone subscribed with, so it
+    never counts. None when nothing qualifies - the unsubscribe agent then
+    reports that it has no address rather than guessing one."""
+    if not isinstance(candidates, list):
+        return None
+    addresses = [
+        c.strip().lower() for c in candidates if isinstance(c, str) and "@" in c
+    ]
+    addresses = [a for a in addresses if a != _PERSONAL_FORWARD_ALIAS]
+    for address in addresses:
+        if address.endswith("@rpgm.tools"):
+            return address
+    for address in addresses:
+        if _is_known_identity(address):
+            return address
+    return None
+
+
 def _parse_brief_response(content: str) -> dict:
     def _extract(field: str, later_fields: list[str]) -> str | None:
         if later_fields:
@@ -2320,8 +2343,10 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             # LLM prompt) since an unsubscribe action needs this one verbatim -
             # the first message's address wins, matching the single sender an
             # UNSUBSCRIBE action is ever scoped to.
-            if recipient_email is None and message.get("recipient_email"):
-                recipient_email = message["recipient_email"]
+            if recipient_email is None:
+                recipient_email = message.get("recipient_email") or _recipient_email_from_candidates(
+                    message.get("recipient_candidates")
+                )
         message_context = (
             redact("\n\n---\n\n".join(blocks)[:8000])
             if blocks

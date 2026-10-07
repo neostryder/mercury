@@ -481,21 +481,7 @@ provider acting for it. An unrelated domain, payment request, non-login
 credential request, phishing indicator, or uncertain relationship is unsafe
 and is never visited.
 
-The recipient's own subscribed email address travels alongside the flagged
-message as `recipient_email`, kept separate from `message_context` so
-`redact()` never masks it - the Thunderbird flagging popup resolves it
-per-message, matched against Delivered-To/X-Original-To/To/Cc against the
-account's own identities. It falls back to the account's one identity only
-when there is exactly one on file; an account with several identities and
-no header match sends no address at all rather than guessing one, since a
-wrong address submitted to a real unsubscribe form is a wrong action taken
-silently, not a missing one the backend can honestly report and ask about.
-The auto-verdict Telegram decision path uses the single monitored
-mailbox's `MERCURY_MAILBOX_IMAP_USER`. Many list-management providers
-(Mailchimp and similar) require this address to be typed into a
-confirmation field before they will process the request; the browsing
-prompt is told this is not a credential and is safe to enter, and to report
-`FAILED` rather than guess an address when none was supplied.
+The recipient's own subscribed address travels with the flagged message as `recipient_email`, kept apart from `message_context` so `redact()` never masks it. The Thunderbird flagging popup resolves it per message by matching the Delivered-To, X-Original-To, To and Cc headers against the account's identities, and falls back to the account's identity only when exactly one is on file. The popup also sends every address from those headers as `recipient_candidates`. The backend uses `recipient_email` when it is present, and otherwise takes the first qualifying candidate: an rpgm.tools address first, then any alias listed in `identities.json`. The personal-address forwarding alias never qualifies, because it records a hop the mail took on its way in and nobody subscribed with it. When nothing qualifies, the backend sends no address at all. A wrong address typed into a real unsubscribe form is an action taken silently, while a missing one is something the agent can report and ask about. The auto-verdict Telegram path, reached from the buttons on a report card, uses the address recovered from how the message was addressed: the To or Cc address, or the Bcc envelope recipient. For mail forwarded in from a personal address, where the original address is not visible, it sends none. Many list-management providers, Mailchimp among them, need this address typed into a confirmation field before they process the request. The browsing prompt tells the agent the address is safe to enter and is not a credential, and to report `FAILED` instead of guessing when no address was supplied.
 
 The routes themselves are extracted before the prompt is built, not found by
 reading the message. `unsubscribe_routes` collects the `List-Unsubscribe` and
