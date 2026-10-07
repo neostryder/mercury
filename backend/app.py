@@ -1057,8 +1057,13 @@ asks for the recipient's own email address before it will process the
 request, that is not something to guess - report RESULT: FAILED and say
 the form needs an email address that was not available."""
     )
+    request_line = (
+        f"Please unsubscribe {recipient_email} from this sender's mailing list."
+        if recipient_email
+        else "Please unsubscribe the recipient from this sender's mailing list."
+    )
     prompt = f"""The recipient has approved an unsubscribe request and it should be carried
-out now, using your browsing skill.
+out now, using your browsing skill. {request_line}
 {email_note}
 
 Mercury is handling Telegram progress updates; do not attempt to send

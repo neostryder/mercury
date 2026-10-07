@@ -1352,6 +1352,7 @@ SUMMARY: Typed the subscribed email address into the confirmation field and subm
 
         prompt = app.judge.ask.await_args.args[0]
         self.assertIn("subscriber@example.com", prompt)
+        self.assertIn("Please unsubscribe subscriber@example.com from this sender", prompt)
         self.assertIn("UNSUBSCRIBED", outcome)
         self.assertEqual(followup["recommendation"], "none")
 

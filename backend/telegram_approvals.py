@@ -152,7 +152,10 @@ class TelegramApprovals:
             message_id = await self._send(text)
         elif changes or action:
             self._store.update_brief(brief_id, status="open", changes=changes, action=action, caveat=caveat)
-            text = self._proposal_text(changes, action, caveat)
+            text = self._proposal_text(
+                changes, action, caveat,
+                (self._store.get_brief(brief_id).get("message_metadata") or {}).get("recipient_email"),
+            )
             if intro:
                 text = f"{intro}\n\n{text}"
             self._store.append_turn(brief_id, "loremaster", text)
@@ -200,7 +203,13 @@ class TelegramApprovals:
             return f"blacklist pattern: {change['pattern']}"
         return "unknown filtering change"
 
-    def _proposal_text(self, changes: list[dict], action: str | None, caveat: str | None) -> str:
+    def _proposal_text(
+        self,
+        changes: list[dict],
+        action: str | None,
+        caveat: str | None,
+        recipient_email: str | None = None,
+    ) -> str:
         plural = "s" if len(changes) > 1 else ""
         if changes and action:
             lines = [f"Mercury: standing change{plural} + action proposed"]
@@ -212,6 +221,12 @@ class TelegramApprovals:
             lines.append(f"Standing change: {self._change_text(change)}")
         if changes and action:
             lines.append(f"Action: {action}")
+        if action and action.upper().startswith("UNSUBSCRIBE"):
+            lines.append(
+                f"Address to unsubscribe: {recipient_email}"
+                if recipient_email
+                else "Address to unsubscribe: none found, so a form that asks for one will fail"
+            )
         if caveat:
             lines.append(f"\n⚠️ {caveat}")
         return "\n".join(lines)

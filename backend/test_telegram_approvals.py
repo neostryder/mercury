@@ -305,6 +305,33 @@ class UnsubscribeFollowupAndRecipientEmailTests(unittest.TestCase):
         )
 
 
+class UnsubscribeProposalAddressTests(unittest.TestCase):
+    """The proposal card names the address the unsubscribe will be run for, so
+    a missing one is visible before Approve rather than after a failure."""
+
+    def setUp(self):
+        self.telegram = TelegramApprovals(
+            ApprovalStore(Path(__file__).parent / ".test-proposal-address-unused.json"),
+            advance=AsyncMock(),
+            finalize=AsyncMock(),
+            execute_action=AsyncMock(),
+            execute_message_decision=AsyncMock(),
+        )
+
+    def test_names_the_address_when_one_is_known(self):
+        text = self.telegram._proposal_text(
+            [], "UNSUBSCRIBE: example.com", None, "info@rpgm.tools")
+        self.assertIn("Address to unsubscribe: info@rpgm.tools", text)
+
+    def test_says_so_when_no_address_was_found(self):
+        text = self.telegram._proposal_text([], "UNSUBSCRIBE: example.com", None, None)
+        self.assertIn("Address to unsubscribe: none found", text)
+
+    def test_other_actions_carry_no_address_line(self):
+        text = self.telegram._proposal_text([], "MOVE: newsletters", None, "info@rpgm.tools")
+        self.assertNotIn("Address to unsubscribe", text)
+
+
 class MostRecentOpenBriefTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = Path(__file__).parent / ".test-most-recent-open-brief-data"
