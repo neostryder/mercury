@@ -1061,11 +1061,9 @@ the form needs an email address that was not available."""
 out now, using your browsing skill.
 {email_note}
 
-Before you begin, and as you complete each meaningful step, send a brief
-status update to this same Telegram chat (e.g. "Examining the unsubscribe
-link...", "Submitting the unsubscribe form...") using your own
-Telegram-sending capability, so the recipient sees progress instead of
-waiting in silence for the final report.
+Mercury is handling Telegram progress updates; do not attempt to send
+Telegram messages from this execution session, and do not stop or report a
+failure because you cannot send them.
 
 First, evaluate whether the unsubscribe route is safe to use at all. When the
 message below carries a block headed "Unsubscribe routes extracted from this

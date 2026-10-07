@@ -1355,6 +1355,20 @@ SUMMARY: Typed the subscribed email address into the confirmation field and subm
         self.assertIn("UNSUBSCRIBED", outcome)
         self.assertEqual(followup["recommendation"], "none")
 
+    def test_prompt_does_not_ask_the_agent_to_send_telegram_updates(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: example.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Submitted the form."""))
+
+        asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from example.com", "From: news@example.com"
+        ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("do not attempt to send\nTelegram messages", prompt)
+        self.assertNotIn("Telegram-sending capability", prompt)
+
     def test_missing_recipient_email_tells_the_prompt_not_to_guess_one(self):
         app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
 DOMAIN: prcmarketresearch.com

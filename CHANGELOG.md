@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- [Visible] [Pipeline] **An unsubscribe whose route passed the domain check no longer fails before the agent visits it.** The unsubscribe prompt told the browsing agent to post its own progress updates to Telegram, and the execution session has no way to send them. An agent that took this literally stopped and returned FAILED, as an unsubscribe from a Mailchimp-hosted list did. The prompt now says the backend sends those updates and that being unable to send them is no reason to stop. The backend still sends the "working on it" message before it calls the agent. Redeploy the backend to pick this up. (#80)
+
 ## [1.0.1] - 2026-10-07
 
 ### Added
