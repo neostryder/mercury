@@ -453,6 +453,36 @@ def _recipient_email_from_classification(
     return address or None
 
 
+_FORWARD_TRACE_HEADERS = ("x-original-to", "x-forwarded-to", "delivered-to", "x-envelope-to")
+
+
+def _forwarded_recipient_from_headers(headers: object, raw_message: str | None) -> str | None:
+    """The mailbox owner's own personal address, found in the places a
+    forwarding hop leaves it when To and Cc do not name it: X-Original-To,
+    X-Forwarded-To, Delivered-To, X-Envelope-To and the "for <address>" clause
+    of Received lines. Only an address matching identities.json can qualify,
+    so a list address, a third party or the forwarding alias is never picked.
+    None when no such trace exists, which leaves the address unknown rather
+    than guessed."""
+    texts: list[str] = [_header_value(headers, name) for name in _FORWARD_TRACE_HEADERS]
+    if raw_message:
+        block = re.split(r"\r?\n\r?\n", raw_message, maxsplit=1)[0]
+        unfolded = re.sub(r"\r?\n[ \t]+", " ", block)
+        for line in unfolded.splitlines():
+            name, _, value = line.partition(":")
+            lowered = name.strip().lower()
+            if lowered in _FORWARD_TRACE_HEADERS:
+                texts.append(value)
+            elif lowered == "received":
+                texts.extend(re.findall(r"\bfor\s+<?([^\s<>;]+@[^\s<>;]+)", value, re.I))
+    for text in texts:
+        for match in EMAIL_RE.finditer(text or ""):
+            address = f"{match.group(1)}@{match.group(2)}".lower()
+            if address != _PERSONAL_FORWARD_ALIAS and _is_known_identity(address):
+                return address
+    return None
+
+
 def _recipient_email_from_candidates(candidates: object) -> str | None:
     """The recipient's own address among the addresses a flagged message was
     sent to, for when the mail client could not pick one itself. An rpgm.tools
@@ -2108,6 +2138,10 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                     "already_delivered": bool(SHADOW_MODE or _delivered(delivery_result)),
                     "recipient_email": _recipient_email_from_classification(
                         recipient_class, recipient_detail
+                    ) or (
+                        _forwarded_recipient_from_headers(payload.get("headers"), raw_message)
+                        if recipient_class in ("f", None)
+                        else None
                     ),
                     "shadow_id": laya_shadow.shadow_id(dedup_key),
                 },

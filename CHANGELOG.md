@@ -4,6 +4,8 @@
 
 ### Added
 
+- [Visible] [Pipeline] **Bcc mail forwarded in from a personal address now gets a verdict report that carries the recipient's address.** Mercury used to read only the `To` and `Cc` headers, so this mail had no address and an unsubscribe from its report card could not fill in a confirmation form. It now also looks in `X-Original-To`, `X-Forwarded-To`, `Delivered-To` and `X-Envelope-To`, and in the for clause of a `Received` line, wherever a forwarding hop left the address. Only an address listed in `identities.json` counts, so a list address, a third party or the forwarding alias is never picked. Mail whose headers hold no such trace still has no address. Redeploy the backend to pick this up. (#82)
+
 - [Visible] [Telegram] **The Telegram card for a proposed unsubscribe now shows which address it will run for.** An "Address to unsubscribe" line names the recipient address, or says none was found and that a form asking for one will fail, so a missing address shows up before Approve is pressed. The prompt sent to the browsing agent now starts with the request to unsubscribe that address. Redeploy the backend to pick this up. (#81)
 
 ### Fixed

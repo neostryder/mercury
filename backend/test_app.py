@@ -1049,6 +1049,29 @@ class RecipientEmailFromCandidatesTests(unittest.TestCase):
         self.assertIsNone(app._recipient_email_from_candidates(
             ["forwarded@rpgm.tools", "list@example.com"]))
 
+    def test_finds_a_known_address_in_a_received_for_clause(self):
+        raw = (
+            "Received: from relay.example.net by mx.example.org\r\n"
+            " with ESMTP id abc for <someone@personal-example.test>;\r\n"
+            " Tue, 7 Oct 2026 09:00:00 -0700\r\n"
+            "Subject: hi\r\n\r\nbody for <stranger@example.com>\r\n"
+        )
+        self.assertEqual(
+            app._forwarded_recipient_from_headers({}, raw), "someone@personal-example.test")
+
+    def test_finds_a_known_address_in_forwarding_headers(self):
+        self.assertEqual(
+            app._forwarded_recipient_from_headers(
+                {"X-Original-To": "Someone@Personal-Example.test"}, None),
+            "someone@personal-example.test",
+        )
+
+    def test_forwarding_headers_never_yield_a_stranger_or_the_alias(self):
+        self.assertIsNone(app._forwarded_recipient_from_headers(
+            {"Delivered-To": "forwarded@rpgm.tools", "X-Forwarded-To": "list@example.com"},
+            "Received: by mx for <list@example.com>;\r\n\r\nbody",
+        ))
+
     def test_tolerates_missing_or_malformed_candidates(self):
         self.assertIsNone(app._recipient_email_from_candidates(None))
         self.assertIsNone(app._recipient_email_from_candidates("someone@personal-example.test"))
