@@ -174,6 +174,32 @@ class AppTests(unittest.TestCase):
         self.assertEqual(message["category"], "SENDER_LIST")
         self.assertIn("deterministic blacklist", message["reasoning"])
 
+    def test_a_named_domain_left_out_of_a_sender_list_proposal_is_reported(self):
+        history = [
+            {"speaker": "user", "text": "You soft bounced PayPal and GOG."},
+            {"speaker": "loremaster", "text": "Should paypal.com and gog.com be allowed?"},
+        ]
+        changes = [{"kind": "sender_list", "list": "whitelist", "selector": "paypal.com"}]
+        self.assertEqual(app._unproposed_domains(history, "Yes", changes), ["gog.com"])
+        self.assertEqual(app._unproposed_domains(history[:1], "Yes", changes), [])
+
+    def test_every_named_domain_covered_by_the_proposal_reports_nothing(self):
+        changes = [
+            {"kind": "sender_list", "list": "whitelist", "selector": "paypal.com"},
+            {"kind": "sender_list", "list": "whitelist", "selector": "gog.com"},
+        ]
+        self.assertEqual(
+            app._unproposed_domains([], "Allow paypal.com and mail.gog.com", changes), [])
+
+    def test_no_check_without_a_sender_list_change(self):
+        changes = [{"kind": "semantic_rule", "disposition": "250", "rule": "x"}]
+        self.assertEqual(app._unproposed_domains([], "Allow gog.com", changes), [])
+
+    def test_domains_only_in_the_flagged_message_are_not_reported(self):
+        history = [{"speaker": "loremaster", "text": "Flagged message from tracker.example.net"}]
+        changes = [{"kind": "sender_list", "list": "whitelist", "selector": "gog.com"}]
+        self.assertEqual(app._unproposed_domains(history[:0], "Allow gog.com", changes), [])
+
     def test_judge_reads_the_html_when_the_text_part_is_a_placeholder(self):
         payload = self._payload()
         payload["text"] = "Plain text version not available"

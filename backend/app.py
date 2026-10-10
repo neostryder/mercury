@@ -26,8 +26,10 @@ from approvals import ApprovalStore
 from dedup import IngestDedupStore
 from filtering import (
     FilteringPolicyStore,
+    _domain_covers,
     compile_blacklist_pattern,
     normalize_selector,
+    selector_domain,
     sender_domain_is_authenticated,
 )
 from providers.classifier import get_classifier
@@ -818,9 +820,54 @@ CAVEAT: <a direct heads-up per above, or NONE>"""
             note = await _rule_self_test(change, message_context)
             if note:
                 notes.append(note)
+    missing = _unproposed_domains(history, new_message, result["changes"])
+    if missing:
+        notes.append(
+            "The conversation also names {} and this proposal does not cover {}. "
+            "Reply to add {} with the disposition it should get.".format(
+                ", ".join(missing),
+                "it" if len(missing) == 1 else "them",
+                "it" if len(missing) == 1 else "each",
+            )
+        )
     if notes:
         result["caveat"] = " ".join(part for part in (result.get("caveat"), *notes) if part)
     return result
+
+
+_DOMAIN_TOKEN = re.compile(r"\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,6})\b", re.I)
+
+
+def _unproposed_domains(history: list[dict], new_message: str, changes: list[dict]) -> list[str]:
+    """Domains the recipient named that a proposed sender-list change leaves out.
+
+    The model is told never to propose only one of several named domains, and
+    still does: a request about paypal.com and gog.com came back as a whitelist
+    for paypal.com alone, and gog.com went on being deferred. So the check is
+    made in code. Only the recipient's own turns, the latest reply and the
+    question the latest reply answers are read, since the flagged message's
+    own text names plenty of domains nobody asked about. Nothing is checked
+    unless the proposal already holds a sender-list change, because a proposal
+    with none is a different kind of answer.
+    """
+    selectors = [c["selector"] for c in changes if c.get("kind") == "sender_list"]
+    if not selectors:
+        return []
+    covered = [selector_domain(s) for s in selectors]
+    texts = [new_message or ""]
+    texts.extend(t.get("text", "") for t in history if t.get("speaker") == "user")
+    if history and history[-1].get("speaker") != "user":
+        texts.append(history[-1].get("text", ""))
+    named: list[str] = []
+    for text in texts:
+        for match in _DOMAIN_TOKEN.finditer(text):
+            domain = match.group(1).lower()
+            if domain not in named:
+                named.append(domain)
+    return [
+        d for d in named
+        if not any(_domain_covers(c, d) or _domain_covers(d, c) for c in covered)
+    ]
 
 
 NO_MESSAGE_CONTEXT = "(no message attached - this is a general instruction, not about any specific message)"
