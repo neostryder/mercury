@@ -174,6 +174,27 @@ class AppTests(unittest.TestCase):
         self.assertEqual(message["category"], "SENDER_LIST")
         self.assertIn("deterministic blacklist", message["reasoning"])
 
+    def test_judge_reads_the_html_when_the_text_part_is_a_placeholder(self):
+        payload = self._payload()
+        payload["text"] = "Plain text version not available"
+        payload["html"] = "<p>Octopath Traveler is 60% off for 24 hours.</p>"
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "SAFE", "score": 0.99})
+        )
+        judge_email = AsyncMock(return_value={
+            "verdict": "LEGIT", "disposition": "250", "category": "NEWSLETTER",
+            "alert": "NONE", "triggered_rule": None, "reasoning": "ok",
+        })
+
+        with patch.object(app, "judge_email", judge_email), \
+                patch.object(app.event_log, "log_event"):
+            response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        self.assertEqual(response.status_code, 250)
+        shown = judge_email.await_args.args[0]
+        self.assertIn("Octopath Traveler is 60% off", shown)
+        self.assertNotIn("not available", shown)
+
     def test_blacklist_pattern_match_surfaces_the_pattern_as_the_triggered_rule(self):
         self.store.add_blacklist_pattern(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$")
         app.classifier = SimpleNamespace(

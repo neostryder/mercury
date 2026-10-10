@@ -19,6 +19,7 @@ import event_log
 import gandalf_relay
 import laya_shadow
 import mail_delivery
+import message_body
 import sender_facts
 import verdict_policy
 from approvals import ApprovalStore
@@ -1953,7 +1954,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
     delivered = False
 
     try:
-        text_body = payload.get("text") or payload.get("html", "")
+        text_body = message_body.judged_body(payload.get("text"), payload.get("html"))
         from_field = payload.get("from", "")
         from_display = (
             from_field.get("text") if isinstance(from_field, dict) else str(from_field)
@@ -2362,10 +2363,10 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
         for i, message in enumerate(messages[:max_messages], start=1):
             subject = message.get("subject", "")
             from_display = message.get("from", "")
-            body = message.get("text", "")
+            body = message_body.judged_body(message.get("text"), message.get("html"))
             header = f"Message {i} of {min(len(messages), max_messages)}" if len(messages) > 1 else "Message"
             routes = unsubscribe_routes(
-                text=body,
+                text=message.get("text", ""),
                 html=message.get("html", ""),
                 list_unsubscribe=message.get("list_unsubscribe", ""),
                 list_unsubscribe_post=message.get("list_unsubscribe_post", ""),

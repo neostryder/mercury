@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] **Mail whose plain-text part is only a placeholder is now judged on its html content.** Some marketing platforms put a line such as "Plain text version not available" in the text part, and Mercury passed that line to the classifier and the judge instead of the html, so they saw little more than the From line and the subject. A newsletter whose subject was a promo code with a 24-hour expiry read as an account-security scare, came back UNSURE, and was soft-deferred and paged as URGENT on every delivery, even after its sender was approved. A text part that is empty, a placeholder, or under 80 characters beside an html part at least three times longer is now replaced with a plain-text rendering of the html, with scripts and styles dropped and links kept as "label (url)". A real text part is used as before. Html-only mail is judged as rendered text rather than as raw markup cut off at 6000 characters. Flagging from Thunderbird through `/rules/propose` reads the body the same way. Redeploy the backend to pick this up. (#84)
+
 - [Visible] [Pipeline] **An unsubscribe whose route passed the domain check no longer fails before the agent visits it.** The unsubscribe prompt told the browsing agent to post its own progress updates to Telegram, and the execution session has no way to send them. An agent that took this literally stopped and returned FAILED, as an unsubscribe from a Mailchimp-hosted list did. The prompt now says the backend sends those updates and that being unable to send them is no reason to stop. The backend still sends the "working on it" message before it calls the agent. Redeploy the backend to pick this up. (#80)
 
 ## [1.0.1] - 2026-10-07
