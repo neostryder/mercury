@@ -72,14 +72,14 @@ export default {
     }
     const { pathname, search } = url;
 
-    // The dashboard app lives at the root. The page and its files hold no mail
-    // data, so they are served without the Access login; every call that returns
-    // data goes to /dashboard/api/*, which stays behind Access.
+    // The dashboard page needs a Cloudflare Access login, and a visitor without one goes to /dashboard/login. The static files stay public because a phone fetches them without the login cookie and they hold no mail data. Every call that returns data goes to /dashboard/api/*, which has its own token check.
     if (request.method === 'GET' || request.method === 'HEAD') {
       if (pathname === '/healthz') {
         return new Response('OK', { status: 200, headers: { 'Cache-Control': 'no-store' } });
       }
       if (pathname === '/' && acceptsHtml(request)) {
+        const denied = await checkAccessToken(request, env, { cookie: true });
+        if (denied) return denied.status === 403 ? signInRedirect() : denied;
         return serveAsset(request, env, '/', DASHBOARD_PAGE_HEADERS);
       }
       if (STATIC_PATH.test(pathname)) {
@@ -251,8 +251,21 @@ async function accessKey(teamDomain, kid) {
   return accessKeys.byKid.get(kid);
 }
 
+function cookieValue(request, name) {
+  for (const part of (request.headers.get('Cookie') || '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq > 0 && part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+// /dashboard/login sits behind Access and sends the visitor back to /.
+function signInRedirect() {
+  return new Response(null, { status: 302, headers: { Location: '/dashboard/login', 'Cache-Control': 'no-store', 'Strict-Transport-Security': HSTS } });
+}
+
 // Returns null when the token is valid, or the response to send instead.
-async function checkAccessToken(request, env) {
+async function checkAccessToken(request, env, { cookie = false } = {}) {
   const deny = (reason) => new Response(`forbidden: ${reason}`, {
     status: 403,
     headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -261,7 +274,7 @@ async function checkAccessToken(request, env) {
   const audience = env.ACCESS_AUD;
   if (!teamDomain || !audience) return deny('the Access check is not configured');
 
-  const token = request.headers.get('Cf-Access-Jwt-Assertion');
+  const token = request.headers.get('Cf-Access-Jwt-Assertion') || (cookie ? cookieValue(request, 'CF_Authorization') : null);
   if (!token) return deny('no Access token');
   const parts = token.split('.');
   if (parts.length !== 3) return deny('malformed Access token');

@@ -17,7 +17,7 @@ binding = "ASSETS"
 run_worker_first = true
 
 [vars]
-# The dashboard checks the token Cloudflare Access attaches to each request. ACCESS_TEAM_DOMAIN is your Zero Trust team domain, and ACCESS_AUD is the Application Audience (AUD) tag of the Access application covering /dashboard*, which holds every call that returns mail data. The dashboard answers 403 until both are set.
+# The Worker checks the Cloudflare Access token on /dashboard* and on the page at /, and the page sends a visitor without a valid token to sign in. ACCESS_TEAM_DOMAIN is your Zero Trust team domain, and ACCESS_AUD is the Application Audience (AUD) tag of the Access application covering /dashboard*. Until both are set, the API answers 403 and the page sends everyone to sign in.
 ACCESS_TEAM_DOMAIN = "yourteam.cloudflareaccess.com"
 ACCESS_AUD = "your-access-application-aud-tag"
 BACKEND_BASE_URL = "https://your-backend-host.example.com"
