@@ -30,12 +30,16 @@ for (const name of FINGERPRINTED) {
 
 let html = readFileSync(join(SRC, 'index.html'), 'utf8');
 for (const [from, to] of renamed) html = html.replaceAll(`"/${from}"`, `"/${to}"`);
+// A phone fetches linked home-screen icons in a separate process, so the page also carries them inline.
+const dataUri = (rel, type) => `data:${type};base64,${readFileSync(join(SRC, rel)).toString('base64')}`;
+html = html.replace('href="/icons/apple-touch-icon.png"', `href="${dataUri('icons/apple-touch-icon.jpg', 'image/jpeg')}"`);
+html = html.replace('href="/favicon.png"', `href="${dataUri('favicon.png', 'image/png')}"`);
 writeFileSync(join(OUT, 'index.html'), html);
 
 const shell = ['/'];
 const versionParts = [html];
 for (const rel of files) {
-  if (rel === 'index.html' || rel === 'sw.js' || rel === 'manifest.webmanifest' || rel.startsWith('fonts/LICENSE')) {
+  if (rel === 'index.html' || rel === 'sw.js' || rel === 'manifest.webmanifest' || rel.startsWith('fonts/LICENSE') || rel.endsWith('.jpg')) {
     if (rel === 'manifest.webmanifest') cpSync(join(SRC, rel), join(OUT, rel));
     if (rel.startsWith('fonts/LICENSE')) { mkdirSync(join(OUT, 'fonts'), { recursive: true }); cpSync(join(SRC, rel), join(OUT, rel)); }
     continue;
@@ -49,6 +53,7 @@ for (const rel of files) {
 }
 // iOS also asks for these two root paths directly, so they must be real images.
 for (const name of ['apple-touch-icon.png', 'apple-touch-icon-precomposed.png']) cpSync(join(SRC, 'icons/apple-touch-icon.png'), join(OUT, name));
+cpSync(join(SRC, 'favicon.png'), join(OUT, 'favicon.ico'));
 shell.sort();
 
 let sw = readFileSync(join(SRC, 'sw.js'), 'utf8');

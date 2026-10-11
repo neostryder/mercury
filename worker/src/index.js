@@ -311,12 +311,13 @@ const DASHBOARD_PAGE_HEADERS = {
 
 // The files the static page is made of, built into public/ by build.mjs. An
 // explicit list keeps this route from ever shadowing an API or webhook path.
-const STATIC_PATH = /^\/(?:app\.[0-9a-f]{10}\.(?:css|js)|theme-boot\.[0-9a-f]{10}\.js|sw\.js|manifest\.webmanifest|favicon\.png|apple-touch-icon(?:-precomposed)?\.png|icons\/[a-z0-9-]+\.png|fonts\/[A-Za-z0-9.-]+\.(?:woff2|txt))$/;
+const STATIC_PATH = /^\/(?:app\.[0-9a-f]{10}\.(?:css|js)|theme-boot\.[0-9a-f]{10}\.js|sw\.js|manifest\.webmanifest|favicon\.(?:png|ico)|apple-touch-icon(?:-precomposed)?\.png|icons\/[a-z0-9-]+\.png|fonts\/[A-Za-z0-9.-]+\.(?:woff2|txt))$/;
 const MIME = {
   css: 'text/css; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
   webmanifest: 'application/manifest+json',
   png: 'image/png',
+  ico: 'image/png',
   woff2: 'font/woff2',
   txt: 'text/plain; charset=utf-8',
 };
