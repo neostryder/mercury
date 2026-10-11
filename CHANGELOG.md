@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- [Visible] [Dashboard] **Brighter app icon.** The old winged letter looked too dark on a phone home screen, so the new one uses lighter colors.
+
+### Fixed
+
+- [Visible] [Dashboard] **Add to Home Screen on an iPhone now shows the app icon.** Before this fix, Safari could leave a plain letter tile in its place. The page carries the touch icon and the favicon inline, and `/favicon.ico`, `/apple-touch-icon.png`, and `/apple-touch-icon-precomposed.png` at the root return real images where they used to answer with a plain "OK". The icon link also names its 180 pixel size. A phone that already tried to install the app can keep showing the tile until Safari's website data for mercury.rpgm.tools is cleared (Settings, Apps, Safari, Advanced, Website Data). After that, the icon can be added again.
+
 ## [1.1.0] - 2026-10-11
 
 ### Added
