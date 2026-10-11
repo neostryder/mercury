@@ -47,6 +47,8 @@ for (const rel of files) {
   if (!/^icons\/(icon-512|icon-maskable|apple-touch)/.test(rel)) shell.push(`/${outName}`);
   versionParts.push(outName);
 }
+// iOS also asks for these two root paths directly, so they must be real images.
+for (const name of ['apple-touch-icon.png', 'apple-touch-icon-precomposed.png']) cpSync(join(SRC, 'icons/apple-touch-icon.png'), join(OUT, name));
 shell.sort();
 
 let sw = readFileSync(join(SRC, 'sw.js'), 'utf8');
