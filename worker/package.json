@@ -2,10 +2,13 @@
   "name": "mercury-gate",
   "private": true,
   "scripts": {
-    "deploy": "wrangler deploy",
+    "build": "node build.mjs",
+    "deploy": "node build.mjs && wrangler deploy",
     "tail": "wrangler tail"
   },
   "devDependencies": {
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource/alegreya-sans": "^5.3.0",
     "wrangler": "^4.127.0"
   }
 }

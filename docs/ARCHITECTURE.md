@@ -137,6 +137,14 @@ The dashboard reads rule hit counts from the log. A content rule or pattern is c
 
 `review_labels` holds a person's call on single messages. The Review view draws each outcome's sample in a fixed pseudo-random order over the last 14 days, so the share marked wrong within an outcome estimates that outcome's error rate. Labels from removing a rule in the message panel are stored with `source = 'reversal'` and kept out of that rate, because those messages were chosen rather than sampled.
 
+## The dashboard app
+
+The dashboard is a static page that `build.mjs` builds from `worker/ui` into `worker/public`, fingerprinting the CSS and JS and writing a service worker with the file list. The Worker serves it through the ASSETS binding with `run_worker_first`, so it can allow-list paths and set headers: no-cache for the page, service worker, and manifest, and one-year immutable caching for fingerprinted files and fonts. The content policy is `default-src 'none'`, with script, style, font, img, connect, manifest, and worker limited to `'self'`.
+
+Cloudflare Access covers only `/dashboard*`, so the page loads without a login but every API call needs one, and the Worker also checks the Access token. The client calls the API with `redirect` set to `manual`, so an expired session comes back as an opaque redirect and the page offers `/dashboard/login`, which Access gates and the Worker redirects back to `/`.
+
+The service worker never caches `/dashboard/api` responses, and the page keeps only the last 24-hour counts in localStorage for offline use. GET / serves the page only when Accept includes text/html and otherwise answers "OK".
+
 ## Providers
 
 `backend/providers/` holds three seams, each a small `Protocol` plus one

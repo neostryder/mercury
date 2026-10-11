@@ -6,7 +6,7 @@
 // Thunderbird extension) straight to the backend and returns its real
 // response - that call is a direct, synchronous user action, not something
 // arriving under SMTP bounce-risk, so there is nothing to protect it from.
-import { DASHBOARD_HTML, lastNDays, renderStackedBarSVG, categoryClass } from './dashboard.js';
+import { lastNDays, renderStackedBarSVG, categoryClass } from './dashboard.js';
 
 const INGEST_TIMEOUT_MS = 20000;
 const MAX_CREDENTIAL_BODY_BYTES = 4096;
@@ -72,6 +72,21 @@ export default {
     }
     const { pathname, search } = url;
 
+    // The dashboard app lives at the root. The page and its files hold no mail
+    // data, so they are served without the Access login; every call that returns
+    // data goes to /dashboard/api/*, which stays behind Access.
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      if (pathname === '/healthz') {
+        return new Response('OK', { status: 200, headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (pathname === '/' && acceptsHtml(request)) {
+        return serveAsset(request, env, '/', DASHBOARD_PAGE_HEADERS);
+      }
+      if (STATIC_PATH.test(pathname)) {
+        return serveAsset(request, env, pathname, staticHeaders(pathname));
+      }
+    }
+
     if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
       // A Cloudflare Access application covers this hostname and path. The
       // Worker also checks the token Access attaches, so a route that
@@ -94,7 +109,9 @@ export default {
     }
 
     if (request.method !== 'POST') {
-      return new Response('OK', { status: 200 });
+      // Anything that is not a browser asking for the page (a monitor, curl)
+      // still gets the plain OK this address has always returned.
+      return new Response('OK', { status: 200, headers: { Vary: 'Accept' } });
     }
 
     if (pathname === '/log') {
@@ -284,12 +301,50 @@ const HSTS = 'max-age=31536000; includeSubDomains';
 
 const DASHBOARD_PAGE_HEADERS = {
   'Content-Type': 'text/html; charset=utf-8',
-  'Cache-Control': 'no-store',
-  'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'Cache-Control': 'no-cache',
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   'Referrer-Policy': 'no-referrer',
   'Strict-Transport-Security': HSTS,
   'X-Content-Type-Options': 'nosniff',
+  Vary: 'Accept',
 };
+
+// The files the static page is made of, built into public/ by build.mjs. An
+// explicit list keeps this route from ever shadowing an API or webhook path.
+const STATIC_PATH = /^\/(?:app\.[0-9a-f]{10}\.(?:css|js)|theme-boot\.[0-9a-f]{10}\.js|sw\.js|manifest\.webmanifest|favicon\.png|icons\/[a-z0-9-]+\.png|fonts\/[A-Za-z0-9.-]+\.(?:woff2|txt))$/;
+const MIME = {
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  webmanifest: 'application/manifest+json',
+  png: 'image/png',
+  woff2: 'font/woff2',
+  txt: 'text/plain; charset=utf-8',
+};
+
+function acceptsHtml(request) {
+  return (request.headers.get('Accept') || '').includes('text/html');
+}
+
+function staticHeaders(pathname) {
+  const ext = pathname.slice(pathname.lastIndexOf('.') + 1);
+  const fingerprinted = /^\/(?:app|theme-boot)\.[0-9a-f]{10}\./.test(pathname);
+  return {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    // A fingerprinted name never changes its content; the service worker and
+    // manifest must be rechecked every time so an update reaches installed apps.
+    'Cache-Control': fingerprinted || pathname.startsWith('/fonts/') ? 'public, max-age=31536000, immutable'
+      : pathname === '/sw.js' || pathname === '/manifest.webmanifest' ? 'no-cache'
+      : 'public, max-age=86400',
+    'Strict-Transport-Security': HSTS,
+    'X-Content-Type-Options': 'nosniff',
+  };
+}
+
+async function serveAsset(request, env, assetPath, headers) {
+  const asset = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url), { method: 'GET' }));
+  if (!asset.ok) return new Response('not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  return new Response(request.method === 'HEAD' ? null : asset.body, { status: 200, headers });
+}
 
 const DASHBOARD_JSON_HEADERS = {
   'Content-Type': 'application/json',
@@ -471,8 +526,14 @@ async function handleCredentialPrompt(request, token, env) {
 }
 
 async function handleDashboard(pathname, search, env, request) {
-  if (pathname === '/dashboard' || pathname === '/dashboard/') {
-    return new Response(DASHBOARD_HTML, { headers: DASHBOARD_PAGE_HEADERS });
+  // The page moved to the root. The old address and the sign-in address (which
+  // exists so the app can send an expired session through Access and back)
+  // both land there. The redirect keeps any #fragment the browser holds.
+  if (pathname === '/dashboard' || pathname === '/dashboard/' || pathname === '/dashboard/login') {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: '/', 'Cache-Control': 'no-store', 'Strict-Transport-Security': HSTS },
+    });
   }
 
   // A state-changing call must come from the dashboard page itself. The

@@ -63,7 +63,7 @@ SMTP_HOST = "smtp.forwardemail.net"
 SMTP_PORT = 465
 DIGEST_FROM = "gandalf@rpgm.tools"
 DIGEST_TO = "aaron@rpgm.tools"
-DASHBOARD_LINK = "https://mercury.rpgm.tools/dashboard"
+DASHBOARD_LINK = "https://mercury.rpgm.tools/"
 PAGE_SIZE = 100
 MAX_PAGES = 20
 LOOKBACK = timedelta(hours=24)

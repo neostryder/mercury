@@ -8,9 +8,19 @@
 
 - [Visible] [Telegram] **The Telegram card for a proposed unsubscribe now shows which address it will run for.** An "Address to unsubscribe" line names the recipient address, or says none was found and that a form asking for one will fail, so a missing address shows up before Approve is pressed. The prompt sent to the browsing agent now starts with the request to unsubscribe that address. Redeploy the backend to pick this up. (#81)
 
+- [Visible] [Dashboard] **The dashboard opens at the site root and installs as an app.** It lives at https://mercury.rpgm.tools/, and /dashboard and /dashboard/login redirect there. The API paths are unchanged. Installed, it gets a home-screen icon with a winged letter and runs as a standalone app. Offline, it opens from a cache and shows only the last 24-hour counts.
+
+- [Visible] [Dashboard] **The dashboard has a phone layout.** A bottom tab bar switches between Briefing, Activity, Review, and More, with a badge for open items. Message rows show as cards, message detail opens as a bottom sheet you can swipe away, and pulling down refreshes.
+
+- [Visible] [Dashboard] **The Briefing home page leads with what needs you.** Open action items and the review sample come first, as letters with Mark done and Open message buttons. The 24-hour counts, recent decisions, categories, and trends follow.
+
 ### Changed
 
 - [Internal] [Telegram] **The `/telegram/relay` endpoint now answers the forwarder right away and handles the tapped button or reply as a background task.** Before, it answered only after the whole handler finished. An approved unsubscribe or mailbox action can keep the browsing agent busy for a minute or more, so the forwarder gave up after 30 s and logged a relay timeout while the action was still running, even though its result still reached Telegram. A failure in the background task is logged. Redeploy the backend to pick this up. (#83)
+
+- [Visible] [Dashboard] **The dashboard has a new look and theme controls.** The Courier's Desk style uses warm ink and brass, with Fraunces and Alegreya Sans fonts served from the dashboard itself. A theme button cycles through follow the device, light, and dark. A new Animations setting under System follows the device's reduced-motion preference unless you set it.
+
+- [Internal] [Dashboard] **The dashboard page is now static files served by the Worker.** The source in worker/ui builds into worker/public with `npm run build`, which `npm run deploy` runs first. The Worker serves only an allow-listed set of paths, under a strict content policy with no inline script or style. The page and its files need no Access login, while /dashboard/api/* still does. An expired Access session shows a sign-in link instead of a failed load. GET / still answers a plain "OK" unless the request accepts text/html, and /healthz is new. The daily digest links to the root.
 
 ### Fixed
 
