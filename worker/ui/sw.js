@@ -5,12 +5,19 @@ const VERSION = '__VERSION__';
 const CACHE = 'mercury-shell-' + VERSION;
 const SHELL = __SHELL__;
 
+function isPage(res) {
+  return res.ok && !res.redirected && (res.headers.get('Content-Type') || '').includes('text/html');
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
     await Promise.all(SHELL.map(async (path) => {
-      const res = await fetch(path, { cache: 'reload' });
-      if (res.ok) await cache.put(path, res);
+      // The Worker answers a plain OK to / unless the request asks for HTML, and sends a
+      // visitor without a sign-in to Access. Neither answer is the page, so neither is kept.
+      const page = path === '/';
+      const res = await fetch(path, page ? { cache: 'reload', redirect: 'manual', headers: { Accept: 'text/html' } } : { cache: 'reload' });
+      if (page ? isPage(res) : res.ok) await cache.put(path, res);
     }));
     await self.skipWaiting();
   })());
@@ -36,7 +43,7 @@ self.addEventListener('fetch', (event) => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match('/');
       const refresh = fetch(req).then((res) => {
-        if (res.ok && (res.headers.get('Content-Type') || '').includes('text/html')) cache.put('/', res.clone());
+        if (isPage(res)) cache.put('/', res.clone());
         return res;
       });
       if (cached) { event.waitUntil(refresh.catch(() => {})); return cached; }

@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- [Visible] [Dashboard] **A phone or browser no longer shows a blank "OK" page at the site root after an update.** On its first install, the dashboard's service worker could store the plain OK answer in place of the page. The service worker now asks for the page explicitly and keeps only a real HTML page, so it never stores a redirect to the Access sign-in either.
+
 - [Visible] [Dashboard] **Add to Home Screen on an iPhone now shows the app icon.** Before this fix, Safari could leave a plain letter tile in its place. The page carries the touch icon and the favicon inline, and `/favicon.ico`, `/apple-touch-icon.png`, and `/apple-touch-icon-precomposed.png` at the root return real images where they used to answer with a plain "OK". The icon link also names its 180 pixel size. A phone that already tried to install the app can keep showing the tile until Safari's website data for mercury.rpgm.tools is cleared (Settings, Apps, Safari, Advanced, Website Data). After that, the icon can be added again.
 
 ## [1.1.0] - 2026-10-11
