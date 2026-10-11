@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.1.1] - 2026-10-11
+
 ### Changed
 
 - [Visible] [Dashboard] **The dashboard page at the site root now needs a Cloudflare Access sign-in.** A visitor without a valid session goes to `/dashboard/login` and returns to the page after signing in. The script, styles, fonts, icons, manifest, and service worker stay public because a phone fetches them without the login cookie and they hold no mail data. A request to `/` that does not ask for HTML still gets a plain OK, so health probes keep working, and `/healthz`, the webhook, and the Access application's `/dashboard*` scope are unchanged.
