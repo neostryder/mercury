@@ -732,9 +732,17 @@ async function handleDashboard(pathname, search, env, request) {
         const messageId = Number(body?.message_id);
         const verdict = body?.verdict;
         const correct = body?.correct_disposition ?? null;
-        if (!Number.isInteger(messageId) || messageId <= 0 || !['right', 'wrong'].includes(verdict)
+        if (!Number.isInteger(messageId) || messageId <= 0 || !['right', 'wrong', 'undo'].includes(verdict)
           || (correct !== null && !['250', '421', '550'].includes(correct))) {
-          return json({ ok: false, error: 'a message id and a verdict of right or wrong are needed' }, 400);
+          return json({ ok: false, error: 'a message id and a verdict of right, wrong or undo are needed' }, 400);
+        }
+        if (verdict === 'undo') {
+          // Only a sample label can be undone here. A label written by removing
+          // a rule belongs to that reversal and stays.
+          const removed = await env.MERCURY_LOG.prepare(
+            "DELETE FROM review_labels WHERE message_id = ? AND source = 'sample'",
+          ).bind(messageId).run();
+          return json({ ok: true, removed: removed.meta?.changes ?? 0 });
         }
         const stored = await recordReviewLabel(env, messageId, verdict, verdict === 'wrong' ? correct : null, 'sample');
         if (!stored) return json({ ok: false, error: 'no message with that id' }, 404);
@@ -753,7 +761,16 @@ async function handleDashboard(pathname, search, env, request) {
         LIMIT ?
       `).bind(outcome, quota).all()).results ?? [];
       const [accepted, deferred, rejected] = await Promise.all([draw('250', 8), draw('421', 4), draw('550', 8)]);
-      return json({ days: REVIEW_WINDOW_DAYS, rows: [...rejected, ...accepted, ...deferred] });
+      // The newest labels, so a mistaken one can be changed or undone.
+      const reviewed = (await env.MERCURY_LOG.prepare(`
+        SELECT m.id, m.received_at, m.from_display, m.from_domain, m.subject, m.enforced_disposition,
+          m.category, m.reasoning, l.verdict AS label_verdict, l.correct_disposition AS label_correct
+        FROM review_labels l JOIN messages m ON m.id = l.message_id
+        WHERE l.source = 'sample'
+        ORDER BY l.labeled_at DESC
+        LIMIT ${REVIEWED_LIMIT}
+      `).all()).results ?? [];
+      return json({ days: REVIEW_WINDOW_DAYS, rows: [...rejected, ...accepted, ...deferred], reviewed });
     }
 
     if (pathname === '/dashboard/api/review/metrics') {
@@ -1034,6 +1051,7 @@ async function proxyIngest(backendUrl, bodyText, env) {
 
 const RULE_STATS_DAYS = 90;
 const REVIEW_WINDOW_DAYS = 14;
+const REVIEWED_LIMIT = 15;
 const SENDER_LIST_DISPOSITIONS = { whitelist: '250', greylist: '421', blacklist: '550' };
 
 function senderAddress(fromDisplay) {

@@ -768,18 +768,39 @@ async function loadReview() {
     return '<dt>' + OUTCOME_LABEL[k] + '</dt><dd>' + esc(line) + '</dd>';
   }).join('');
   var rows = both[0].rows;
-  list.innerHTML = rows.length ? rows.map(function (m) {
-    var others = ['250', '421', '550'].filter(function (k) { return k !== m.enforced_disposition; });
-    return '<div class="panel review-card" data-review-id="' + esc(m.id) + '">' +
-      '<div class="review-head">' + outcomeTag(m.enforced_disposition) + '<strong>' + esc(m.from_domain || m.from_display || '-') + '</strong>' + timeTag(m.received_at, 'relative') + '<span class="tag">' + esc(m.category) + '</span></div>' +
-      '<div><button type="button" class="linkish" data-open-message="' + esc(m.id) + '">' + esc(m.subject || '(no subject)') + '</button></div>' +
-      '<div class="review-why">' + esc((m.reasoning || '').slice(0, 280)) + '</div>' +
-      '<div class="review-actions"><button type="button" class="btn secondary small" data-review="right">Right</button>' +
-      others.map(function (k) { return '<button type="button" class="btn secondary small" data-review="wrong" data-correct="' + k + '">Should be ' + OUTCOME_LABEL[k].toLowerCase() + '</button>'; }).join('') +
-      '</div></div>';
-  }).join('') : '<div class="empty">Every recent message in the sample is reviewed.</div>';
+  list.innerHTML = rows.length ? rows.map(function (m) { return reviewCard(m, null); }).join('')
+    : '<div class="empty">Every recent message in the sample is reviewed.</div>';
+  var reviewed = both[0].reviewed || [];
+  byId('review-done').innerHTML = reviewed.length ? reviewed.map(function (m) {
+    return reviewCard(m, { verdict: m.label_verdict, correct: m.label_correct });
+  }).join('') : '<div class="empty">Nothing reviewed yet. Answer a message in the sample to list it here.</div>';
 }
-byId('review-list').addEventListener('click', async function (e) {
+// One card per message. `label` is null for a message still waiting for a
+// label, or the label it already carries, which adds a status line, marks the
+// current answer, and offers an undo.
+function reviewCard(m, label) {
+  var others = ['250', '421', '550'].filter(function (k) { return k !== m.enforced_disposition; });
+  function choice(text, verdict, correct) {
+    var current = label && label.verdict === verdict && (label.correct || null) === (correct || null);
+    return '<button type="button" class="btn secondary small" data-review="' + verdict + '"' +
+      (correct ? ' data-correct="' + correct + '"' : '') +
+      (current ? ' disabled aria-pressed="true"' : '') + '>' + text + '</button>';
+  }
+  var status = '';
+  if (label) {
+    status = '<div class="review-status">' + (label.verdict === 'right' ? 'Marked right.'
+      : 'Marked wrong: should be ' + (OUTCOME_LABEL[label.correct] || 'different').toLowerCase() + '.') + '</div>';
+  }
+  return '<div class="panel review-card" data-review-id="' + esc(m.id) + '">' +
+    '<div class="review-head">' + outcomeTag(m.enforced_disposition) + '<strong>' + esc(m.from_domain || m.from_display || '-') + '</strong>' + timeTag(m.received_at, 'relative') + '<span class="tag">' + esc(m.category) + '</span></div>' +
+    '<div><button type="button" class="linkish" data-open-message="' + esc(m.id) + '">' + esc(m.subject || '(no subject)') + '</button></div>' +
+    '<div class="review-why">' + esc((m.reasoning || '').slice(0, 280)) + '</div>' + status +
+    '<div class="review-actions">' + choice('Right', 'right', null) +
+    others.map(function (k) { return choice('Should be ' + OUTCOME_LABEL[k].toLowerCase(), 'wrong', k); }).join('') +
+    (label ? '<button type="button" class="btn secondary small" data-review="undo">Undo</button>' : '') +
+    '</div></div>';
+}
+async function reviewClick(e) {
   var btn = e.target.closest('[data-review]');
   if (!btn) return;
   var card = btn.closest('[data-review-id]');
@@ -787,13 +808,14 @@ byId('review-list').addEventListener('click', async function (e) {
   try {
     await fetchJson('/dashboard/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message_id: Number(card.dataset.reviewId), verdict: btn.dataset.review, correct_disposition: btn.dataset.correct || null }) });
-    card.classList.add('done');
-    btn.textContent = btn.dataset.review === 'right' ? 'Marked right' : 'Marked wrong';
+    await loadReview();
   } catch (err) {
     card.querySelectorAll('button[data-review]').forEach(function (b) { b.disabled = false; });
     toast('The label was not saved: ' + (err.message || err));
   }
-});
+}
+byId('review-list').addEventListener('click', reviewClick);
+byId('review-done').addEventListener('click', reviewClick);
 
 // ---- audit ----
 async function loadRules() {

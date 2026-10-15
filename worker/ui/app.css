@@ -315,6 +315,8 @@ tbody tr.row-open:hover td { background: var(--panel); }
 .review-card .review-why { color: var(--muted); font-size: 15px; }
 .review-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .review-card.done { opacity: .55; }
+.review-subhead { font-family: var(--serif); font-weight: 500; font-size: 17px; margin: 28px 0 4px; }
+.review-status { color: var(--muted); font-size: 14px; }
 output.preview { display: block; font-size: 14px; color: var(--muted); }
 output.preview:empty { display: none; }
 output.preview ul { margin: 4px 0 0; padding-left: 18px; }

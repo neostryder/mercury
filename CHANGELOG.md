@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 15 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)
+
 ### Fixed
 
 - [Visible] [Pipeline] **Mail from an authenticated sender that matches a standing accept rule is delivered instead of held when the classifier calls it phishing.** Real Walmart order and delivery messages were held at 421 and paged Telegram as URGENT because the classifier read them as impersonation. The accept rule now wins when the judge names it by its exact text, the sender passed DMARC, the injection screen did not flag the message, and the classifier scores credential or payment requests and injection attempts below 0.70. If any of those fails, the message is still held. Redeploy the backend to pick this up. (#88)
