@@ -184,3 +184,23 @@ class ApprovalStore:
         )
         newest = max(open_briefs, key=lambda pair: pair[1].get("created_at", 0.0), default=None)
         return newest[0] if newest else None
+
+    def find_open_brief_for_message(self, sender_domain: str, subject: str) -> str | None:
+        """The newest undecided verdict report for a message from this sender
+        domain with this subject, or None. The report is the only place a held
+        message's raw copy is kept, and the dashboard knows a message only by
+        its sender and subject."""
+        wanted = f"Subject: {subject}"
+        matches = [
+            (brief_id, brief)
+            for brief_id, brief in self._load()["briefs"].items()
+            if brief.get("status") == "open"
+            and not brief.get("message_decision")
+            and brief.get("message_metadata", {}).get("sender_domain") == sender_domain
+            and any(
+                turn.get("speaker") == "loremaster" and wanted in turn.get("text", "").splitlines()
+                for turn in brief.get("history", [])[:1]
+            )
+        ]
+        newest = max(matches, key=lambda pair: pair[1].get("created_at", 0.0), default=None)
+        return newest[0] if newest else None

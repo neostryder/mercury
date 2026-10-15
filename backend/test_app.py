@@ -1584,6 +1584,18 @@ class TelegramDecisionTests(unittest.TestCase):
         self.assertIsNone(brief["action"])
         self.assertEqual(self.finalize.await_count, 0)
 
+    def test_deliver_brief_runs_the_deliver_decision_once(self):
+        asyncio.run(self.telegram.send_trackable_report(
+            "Mercury report",
+            "From: news@example.com",
+            {"sender_address": "news@example.com", "sender_domain": "example.com", "raw_message": "Subject: Test"},
+        ))
+        brief_id = self.store.brief_for_message(101)
+        self.assertTrue(asyncio.run(self.telegram.deliver_brief(brief_id)))
+        self.assertEqual(self.execute_decision.await_args.args[0], "deliver")
+        self.assertFalse(asyncio.run(self.telegram.deliver_brief(brief_id)))
+        self.assertEqual(self.execute_decision.await_count, 1)
+
 
 JUDGE_REPLY = """VERDICT: LEGIT
 DISPOSITION: 250
@@ -1607,7 +1619,6 @@ STRUCTURED_RULES = {
     "421": [],
     "250": [],
 }
-
 
 def _structured(verdict="PHISH", confidence=0.97, severity=3.0, category="PHISHING"):
     return {

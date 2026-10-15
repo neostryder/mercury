@@ -746,7 +746,12 @@ async function handleDashboard(pathname, search, env, request) {
         }
         const stored = await recordReviewLabel(env, messageId, verdict, verdict === 'wrong' ? correct : null, 'sample');
         if (!stored) return json({ ok: false, error: 'no message with that id' }, 404);
-        return json({ ok: true });
+        // A held or rejected message that should have been accepted is delivered now.
+        let delivery = null;
+        if (verdict === 'wrong' && correct === '250') {
+          delivery = await deliverAccepted(env, messageId);
+        }
+        return json({ ok: true, delivery });
       }
       // A fixed pseudo-random order per outcome, so each outcome's sample is
       // an unbiased draw from that outcome and the queue is stable between
@@ -770,7 +775,10 @@ async function handleDashboard(pathname, search, env, request) {
         ORDER BY l.labeled_at DESC
         LIMIT ${REVIEWED_LIMIT}
       `).all()).results ?? [];
-      return json({ days: REVIEW_WINDOW_DAYS, rows: [...rejected, ...accepted, ...deferred], reviewed });
+      // The sample is drawn per outcome, then shown newest first across all three.
+      const rows = [...rejected, ...accepted, ...deferred]
+        .sort((x, y) => String(y.received_at).localeCompare(String(x.received_at)));
+      return json({ days: REVIEW_WINDOW_DAYS, rows, reviewed });
     }
 
     if (pathname === '/dashboard/api/review/metrics') {
@@ -1051,7 +1059,7 @@ async function proxyIngest(backendUrl, bodyText, env) {
 
 const RULE_STATS_DAYS = 90;
 const REVIEW_WINDOW_DAYS = 14;
-const REVIEWED_LIMIT = 15;
+const REVIEWED_LIMIT = 50;
 const SENDER_LIST_DISPOSITIONS = { whitelist: '250', greylist: '421', blacklist: '550' };
 
 function senderAddress(fromDisplay) {
@@ -1081,6 +1089,27 @@ async function recordReviewLabel(env, messageId, verdict, correctDisposition, so
 // reversing a rule means a real Worker-to-backend call - authenticated the
 // same way the backend's own calls into this Worker's /log route are
 // (X-Mercury-Secret against the shared secret both sides hold).
+// Asks the backend to deliver a message the filter held or rejected. Returns a
+// sentence for the dashboard, or null when the message was accepted already.
+async function deliverAccepted(env, messageId) {
+  const message = await env.MERCURY_LOG.prepare(
+    'SELECT from_domain, subject, enforced_disposition FROM messages WHERE id = ?',
+  ).bind(messageId).first();
+  if (!message || message.enforced_disposition === '250') return null;
+  try {
+    const resp = await fetch(`${env.BACKEND_BASE_URL}/messages/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+      body: JSON.stringify({ from_domain: message.from_domain, subject: message.subject }),
+    });
+    const result = resp.ok ? await resp.json() : null;
+    if (result?.delivered) return 'Delivered to your inbox.';
+    return `Not delivered: ${result?.reason ?? 'the backend refused the request'}.`;
+  } catch (err) {
+    return 'Not delivered: the backend is unreachable.';
+  }
+}
+
 async function reverseRule(rule, env) {
   let resp;
   try {

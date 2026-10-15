@@ -806,9 +806,10 @@ async function reviewClick(e) {
   var card = btn.closest('[data-review-id]');
   card.querySelectorAll('button[data-review]').forEach(function (b) { b.disabled = true; });
   try {
-    await fetchJson('/dashboard/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    var saved = await fetchJson('/dashboard/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message_id: Number(card.dataset.reviewId), verdict: btn.dataset.review, correct_disposition: btn.dataset.correct || null }) });
     await loadReview();
+    if (saved && saved.delivery) toast(saved.delivery);
   } catch (err) {
     card.querySelectorAll('button[data-review]').forEach(function (b) { b.disabled = false; });
     toast('The label was not saved: ' + (err.message || err));

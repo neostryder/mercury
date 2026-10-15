@@ -421,6 +421,16 @@ class TelegramApprovals:
 
         await self._answer_callback(callback_id)
 
+    async def deliver_brief(self, brief_id: str) -> bool:
+        """Runs the Deliver button for a brief without a Telegram tap. False
+        when the brief is gone, resolved, or already decided."""
+        brief = self._store.get_brief(brief_id)
+        if not brief or brief["status"] == "resolved" or brief.get("message_decision"):
+            return False
+        self._store.update_brief(brief_id, message_decision="deliver")
+        await self._run_message_decision(brief_id, brief, "deliver")
+        return True
+
     async def _run_message_decision(self, brief_id: str, brief: dict, decision: str) -> None:
         if decision in ("unsubscribe", "deliver"):
             await self._send("Approved - working on it now...")

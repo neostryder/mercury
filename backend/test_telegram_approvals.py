@@ -358,6 +358,43 @@ class MostRecentOpenBriefTests(unittest.TestCase):
         self.assertEqual(self.store.most_recent_open_brief(), open_brief)
 
 
+class FindOpenBriefForMessageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-find-open-brief-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _report(self, domain, subject, decided=False):
+        brief_id = self.store.create_brief("body", message_metadata={"sender_domain": domain})
+        self.store.append_turn(brief_id, "loremaster", f"Mercury report\nFrom: x\nSubject: {subject}\nVerdict: LEGIT")
+        if decided:
+            self.store.update_brief(brief_id, message_decision="deliver")
+        return brief_id
+
+    def test_finds_the_report_by_sender_domain_and_subject(self):
+        brief_id = self._report("walmart.com", "Your order shipped")
+        self._report("walmart.com", "Another subject")
+        self.assertEqual(self.store.find_open_brief_for_message("walmart.com", "Your order shipped"), brief_id)
+
+    def test_a_different_sender_domain_does_not_match(self):
+        self._report("walmart.com", "Your order shipped")
+        self.assertIsNone(self.store.find_open_brief_for_message("example.com", "Your order shipped"))
+
+    def test_a_subject_that_only_contains_the_wanted_one_does_not_match(self):
+        self._report("walmart.com", "Re: Your order shipped")
+        self.assertIsNone(self.store.find_open_brief_for_message("walmart.com", "Your order shipped"))
+
+    def test_an_already_decided_or_resolved_report_does_not_match(self):
+        self._report("walmart.com", "Your order shipped", decided=True)
+        resolved = self._report("walmart.com", "Your order shipped")
+        self.store.resolve_brief(resolved)
+        self.assertIsNone(self.store.find_open_brief_for_message("walmart.com", "Your order shipped"))
+
+
 class ReplyToUntrackedMessageFallsBackToOpenBriefTests(unittest.TestCase):
     """A reply to a message Mercury never tracked - too old to still be in
     the index, or a reply to something Loremaster said rather than Mercury -

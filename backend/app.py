@@ -2399,6 +2399,26 @@ async def reverse_rule_endpoint(request: Request, x_mercury_secret: str | None =
     return {"ok": True, "removed": rule}
 
 
+@app.post("/messages/accept")
+async def accept_message(request: Request, x_mercury_secret: str | None = Header(None)):
+    """Called by the Worker dashboard when a held or rejected message is
+    labeled as one that should have been accepted. Delivers the copy kept with
+    its verdict report, as the report's Deliver button does. Only a message
+    that paged keeps a copy, so any other gets a reason instead."""
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    payload = await request.json()
+    sender_domain, subject = payload.get("from_domain") or "", payload.get("subject") or ""
+    brief_id = approval_store.find_open_brief_for_message(sender_domain, subject)
+    if brief_id is None:
+        return {"ok": True, "delivered": False, "reason": "no copy of this message is kept"}
+    if not (approval_store.get_brief(brief_id) or {}).get("message_metadata", {}).get("raw_message"):
+        return {"ok": True, "delivered": False, "reason": "the kept copy has expired"}
+    delivered = await telegram_approvals.deliver_brief(brief_id)
+    return {"ok": True, "delivered": delivered, "reason": None if delivered else "already handled"}
+
+
 @app.post("/rules/propose")
 async def propose_rule(request: Request, x_mercury_secret: str | None = Header(None)):
     """Called by the Thunderbird extension when a message is flagged with a

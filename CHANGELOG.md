@@ -4,7 +4,13 @@
 
 ### Added
 
-- [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 15 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)
+- [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 50 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)
+
+### Changed
+
+- [Visible] [Dashboard] **A deferred (421) or rejected (550) message you label "Should be accepted" on the Review page now goes to your inbox.** Before, the label only recorded your answer. It uses the same delivery as the Deliver + whitelist button on a Telegram report, and a note on the page tells you whether the message arrived. Mercury only keeps a copy of a message that sent a Telegram report, and drops it after seven days. Every rejection, and any deferral that did not page you, has no copy to send, so the note says nothing was delivered and the label is saved anyway. Redeploy the Worker and rebuild the backend to pick this up. (#89)
+
+- [Visible] [Dashboard] **The Review page sample is sorted newest first.** Every message in the sample now sits in one list by the time it arrived, whatever its outcome, so it reads in the same order as Recently reviewed. Before, rejected messages came first, then accepted, then deferred, with no order inside each group. The messages are still chosen at random for each outcome. Redeploy the Worker to pick this up. (#89)
 
 ### Fixed
 
