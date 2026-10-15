@@ -53,7 +53,7 @@ import httpx
 
 ENDPOINT = os.environ.get("STRUCTURED_JUDGE_URL",
                           "https://api.typesafe.ai/v1/systemone")
-MODEL = os.environ.get("STRUCTURED_JUDGE_MODEL", "jev-latest")
+MODEL = os.environ.get("STRUCTURED_JUDGE_MODEL", "jev-preview")
 RETRY_BACKOFF = float(os.environ.get("STRUCTURED_JUDGE_RETRY_BACKOFF", "0.4"))
 
 # Mirrors app.py's CATEGORIES. Each option carries a description because an

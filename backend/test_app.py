@@ -1622,7 +1622,7 @@ def _structured(verdict="PHISH", confidence=0.97, severity=3.0, category="PHISHI
                     "solicits_money": 0.1},
         "rule_ids": {"r550_0": "550"},
         "latency_ms": 310,
-        "model": "jev-1.13.0",
+        "model": "jev-1.14.0",
     }
 
 
