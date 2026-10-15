@@ -35,6 +35,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from link_filter import blocked_hostname, defang, defang_hostnames
 from providers.judge import Judge
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ DASHBOARD_LINK = "https://mercury.rpgm.tools/"
 PAGE_SIZE = 100
 MAX_PAGES = 20
 LOOKBACK = timedelta(hours=24)
+MAX_DEFANGED_HOSTNAMES = 10
 
 
 def _dashboard_base_url() -> str | None:
@@ -272,6 +274,13 @@ def _fmt_time(value: str | None) -> str:
     return parsed.astimezone(PHOENIX_TZ).strftime("%b %-d, %-I:%M %p")
 
 
+def _quoted(value: object) -> str:
+    """Text that came from filtered mail or from the judge, escaped and with its
+    hostnames defanged so ForwardEmail's outbound link filter cannot reject the
+    digest over a spam domain it quotes."""
+    return _esc(defang_hostnames(str(value) if value is not None else ""))
+
+
 def _truncate(value: object, limit: int) -> str:
     text = str(value) if value is not None else ""
     if len(text) <= limit:
@@ -308,7 +317,7 @@ def _ledger_table(ledger: list[dict]) -> str:
         "<tr>"
         f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(_fmt_time(item.get("at")))}</td>'
         f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;font-weight:600;vertical-align:top;white-space:nowrap;">{_esc(item.get("kind"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:260px;">{_esc(_truncate(item.get("detail"), 200))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:260px;">{_quoted(_truncate(item.get("detail"), 200))}</td>'
         "</tr>"
         for item in ledger
     )
@@ -329,9 +338,9 @@ def _action_required_table(items: list[dict]) -> str:
         "<tr>"
         f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;white-space:nowrap;color:#6b7684;font-size:12px;vertical-align:top;">{_esc(_fmt_time(m.get("received_at")))}</td>'
         f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;font-weight:600;white-space:nowrap;">{_esc(m.get("alert_level"))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:160px;">{_esc(_truncate(m.get("from_display"), 40))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:220px;">{_esc(_truncate(m.get("subject"), 60))}</td>'
-        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:280px;font-size:13px;color:#4b5563;">{_esc(_truncate(m.get("reasoning"), 180))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:160px;">{_quoted(_truncate(m.get("from_display"), 40))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:220px;">{_quoted(_truncate(m.get("subject"), 60))}</td>'
+        f'<td style="padding:8px 12px;border-top:1px solid #e6e8eb;vertical-align:top;max-width:280px;font-size:13px;color:#4b5563;">{_quoted(_truncate(m.get("reasoning"), 180))}</td>'
         "</tr>"
         for m in items
     )
@@ -377,7 +386,7 @@ def render_html(stats: dict, insights: str) -> str:
 {cap_note}
 
 <div style="margin-top:24px;font-size:15px;line-height:1.5;background:#f0f4f8;border-radius:8px;padding:16px 20px;">
-{_esc(insights)}
+{_quoted(insights)}
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
@@ -401,17 +410,42 @@ def render_html(stats: dict, insights: str) -> str:
 </div>"""
 
 
-def send_email(subject: str, html_body: str) -> None:
-    """Synchronous (smtplib has no async API) - call via asyncio.to_thread."""
+def _digest_message(subject: str, html_body: str) -> MIMEMultipart:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = DIGEST_FROM
     msg["To"] = DIGEST_TO
     msg.attach(MIMEText(f"Mercury daily digest. View it at {DASHBOARD_LINK}", "plain"))
     msg.attach(MIMEText(html_body, "html"))
-    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
+    return msg
+
+
+def send_email(subject: str, html_body: str) -> None:
+    """Synchronous (smtplib has no async API) - call via asyncio.to_thread.
+
+    The quoted text is already defanged, so a 554 naming a blocked hostname
+    means one slipped through in a shape the pattern does not catch; defang
+    that hostname in the whole body and retry, a few times, rather than lose
+    the day's digest."""
+    defanged: set[str] = set()
+    while True:
+        try:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(_digest_message(subject, html_body))
+            return
+        except smtplib.SMTPDataError as error:
+            hostname = blocked_hostname(error)
+            if (
+                not hostname
+                or hostname.lower() in defanged
+                or len(defanged) >= MAX_DEFANGED_HOSTNAMES
+            ):
+                raise
+            defanged.add(hostname.lower())
+            subject = defang(subject, hostname)
+            html_body = defang(html_body, hostname)
+            logger.warning("Daily digest: link filter blocked %s, retrying defanged", hostname)
 
 
 async def run_digest_once(judge: Judge) -> None:
