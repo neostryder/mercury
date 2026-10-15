@@ -1698,6 +1698,50 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertIn("An ordinary receipt from a known retailer.", result["reasoning"])
         self.assertIn("Deferred rather than delivered", result["reasoning"])
 
+    ACCEPT_RULE = "A receipt or delivery update from a merchant that sent it."
+
+    def _accept_run(self, *, authenticated, rule_match=None, signals=None, label="SAFE"):
+        reply = JUDGE_REPLY.replace("RULE_MATCH: NONE", f"RULE_MATCH: {rule_match or 'NONE'}")
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value=reply))
+        s = _structured()
+        s["signals"].update(signals or {})
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=s))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        rules = dict(STRUCTURED_RULES, **{"250": [self.ACCEPT_RULE]})
+        return asyncio.run(app.judge_email(
+            "From: help@walmart.com\n\nYour delivery should arrive by 9:59am",
+            {"label": label, "score": 0.99}, rules, authenticated=authenticated))
+
+    def test_an_authenticated_sender_under_an_accept_rule_is_delivered(self):
+        """2026-10-15: two real Walmart messages scored as phishing because the
+        classifier read the brand's own mail as impersonating it. The judge
+        matched the recipient's accept rule and the sender passed DMARC."""
+        result = self._accept_run(authenticated=True, rule_match=self.ACCEPT_RULE)
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(result["verdict"], "LEGIT")
+        self.assertEqual(result["alert"], "NONE")
+        self.assertEqual(result["triggered_rule"], self.ACCEPT_RULE)
+        self.assertIn("Delivered under the recipient's standing accept rule", result["reasoning"])
+
+    def test_an_unauthenticated_sender_under_an_accept_rule_is_still_held(self):
+        result = self._accept_run(authenticated=False, rule_match=self.ACCEPT_RULE)
+        self.assertEqual(result["disposition"], "421")
+        self.assertIn("Deferred rather than delivered", result["reasoning"])
+
+    def test_an_authenticated_sender_the_judge_matched_to_no_rule_is_still_held(self):
+        result = self._accept_run(authenticated=True)
+        self.assertEqual(result["disposition"], "421")
+
+    def test_a_credential_request_keeps_the_hold_even_under_an_accept_rule(self):
+        result = self._accept_run(authenticated=True, rule_match=self.ACCEPT_RULE,
+                                  signals={"requests_credentials_or_payment": 0.9})
+        self.assertEqual(result["disposition"], "421")
+
+    def test_a_flagged_injection_keeps_the_hold_even_under_an_accept_rule(self):
+        result = self._accept_run(authenticated=True, rule_match=self.ACCEPT_RULE,
+                                  label="INJECTION")
+        self.assertEqual(result["disposition"], "421")
+
     def test_the_judge_bounces_what_the_classifier_only_deferred(self):
         """The 2026-10-02 miss: PHISH at 24% and threat evidence exactly 2.0
         deferred a romantic solicitation that the judge, matching a standing

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- [Visible] [Pipeline] **Mail from an authenticated sender that matches a standing accept rule is delivered instead of held when the classifier calls it phishing.** Real Walmart order and delivery messages were held at 421 and paged Telegram as URGENT because the classifier read them as impersonation. The accept rule now wins when the judge names it by its exact text, the sender passed DMARC, the injection screen did not flag the message, and the classifier scores credential or payment requests and injection attempts below 0.70. If any of those fails, the message is still held. Redeploy the backend to pick this up. (#88)
+
 - [Visible] [Digest] **The daily digest is delivered even when the mail it quotes contains a blocked hostname.** ForwardEmail rejected any digest with a hostname on Cloudflare Family DNS's block list, and the rejected digest was lost for the day. Hostnames in quoted mail and in the insights paragraph now appear as host[.]tld, and when a 554 reply still names a hostname, that hostname is defanged and the digest is sent again, for up to ten hostnames. Redeploy the backend to pick this up. (#87)
 
 ## [1.1.1] - 2026-10-11

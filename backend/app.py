@@ -1537,7 +1537,8 @@ def _deterministic_verdict(match) -> tuple[dict, dict]:
 
 async def judge_email(redacted_content: str, injection: dict,
                       rules: dict[str, list[str]], facts: dict | None = None,
-                      shadow_id: str | None = None) -> dict:
+                      shadow_id: str | None = None,
+                      authenticated: bool = False) -> dict:
     def _rule_block(disposition: str) -> str:
         return "\n".join(f"- {rule}" for rule in rules.get(disposition, [])) or "(none yet)"
 
@@ -1688,6 +1689,12 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 
     disposition = judged["disposition"]
     held = decision["disposition"] == "550" and disposition == "250"
+    outranked = held and verdict_policy.accept_rule_outranks_classifier(
+        structured, judged, rules, authenticated, injection["label"])
+    if outranked:
+        # The judge matched the recipient's own accept rule for an authenticated
+        # sender, so the classifier's rejection does not hold the message.
+        held = False
     if held:
         # One model's word does not deliver mail the classifier was about to
         # bounce. Deferring it puts it in front of the recipient instead, under
@@ -1705,6 +1712,10 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     )
     if held:
         result["reasoning"] += (" Deferred rather than delivered because the "
+                                "classifier had rejected it.")
+    elif outranked:
+        result["reasoning"] += (" Delivered under the recipient's standing accept rule "
+                                "because the sender is authenticated, although the "
                                 "classifier had rejected it.")
     if failed_over:
         result["reasoning"] += (" The classifier's findings came from the calibrated "
@@ -2092,6 +2103,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                 redacted_content[:6000], injection, policy["semantic_rules"],
                 facts=sender_facts.describe(sender_domain, recipient_class, recipient_detail),
                 shadow_id=laya_shadow.shadow_id(dedup_key),
+                authenticated=sender_domain_is_authenticated(payload.get("dmarc"), sender_domain),
             )
             if authentication_skip:
                 verdict["reasoning"] = f"{authentication_skip} {verdict['reasoning']}"

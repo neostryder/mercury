@@ -195,6 +195,30 @@ def needs_review(structured: dict, decision: dict) -> bool:
     return False
 
 
+def accept_rule_outranks_classifier(structured: dict, judged: dict,
+                                    rules: dict[str, list[str]],
+                                    authenticated: bool, injection_label: str) -> bool:
+    """Whether the recipient's own accept rule beats a classifier rejection.
+
+    The language-model judge matched one of the recipient's standing accept rules
+    by its exact text, the sender's domain passed DMARC against the From header,
+    and nothing in the message asks for credentials or payment or tries to steer
+    the judge. A real retailer's receipt or delivery update meets all four, and
+    the classifier scoring it as a phish (it reads a brand's own mail as
+    impersonating the brand) must not hold it. Mail that fails any one of them
+    keeps the hold, so a lookalike domain or a credential request still reaches
+    the recipient for review.
+    """
+    rule = judged.get("triggered_rule")
+    if not authenticated or not rule or rule not in rules.get("250", []):
+        return False
+    if injection_label == "INJECTION":
+        return False
+    signals = structured.get("signals") or {}
+    return (signals.get("requests_credentials_or_payment", 0.0) < SIGNAL_PRESENT
+            and signals.get("attempts_injection", 0.0) < INJECTION_PRESENT)
+
+
 def _probabilities(answer: dict | None) -> str:
     probs = (answer or {}).get("probabilities") or {}
     if not probs:
