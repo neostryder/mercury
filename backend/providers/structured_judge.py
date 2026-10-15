@@ -54,6 +54,9 @@ import httpx
 ENDPOINT = os.environ.get("STRUCTURED_JUDGE_URL",
                           "https://api.typesafe.ai/v1/systemone")
 MODEL = os.environ.get("STRUCTURED_JUDGE_MODEL", "jev-preview")
+# Redacted mail goes to hosted Jev, as it did before the gateway; declare it so the
+# gateway's student-wording check does not send a message about a "course" to Laya.
+GATEWAY_DATA_TIER = os.environ.get("STRUCTURED_JUDGE_GATEWAY_TIER", "internal")
 RETRY_BACKOFF = float(os.environ.get("STRUCTURED_JUDGE_RETRY_BACKOFF", "0.4"))
 
 # Mirrors app.py's CATEGORIES. Each option carries a description because an
@@ -233,8 +236,13 @@ class EndpointPool:
 class SystemOneStructuredJudge:
     def __init__(self, api_key: str | None, timeout: float = 15.0,
                  endpoint: str = ENDPOINT, name: str = "jev",
-                 pool: EndpointPool | None = None):
+                 pool: EndpointPool | None = None,
+                 gateway_url: str | None = None, gateway_token: str | None = None):
         self._key = api_key
+        # The Augur gateway holds the key and the model alias. When both are set,
+        # a call goes there first and falls back to the direct endpoint above.
+        self._gateway_url = gateway_url
+        self._gateway_token = gateway_token
         self._timeout = timeout
         self._endpoint = endpoint
         self._pool = pool
@@ -276,7 +284,41 @@ class SystemOneStructuredJudge:
             questions["matched_rule"] = _rule_question(rule_criteria)
         return questions
 
+    async def _post_gateway(self, payload: dict) -> tuple[bool, dict | None]:
+        """One pass through the Augur gateway. Returns (handled, answer).
+
+        handled is False only when the caller may go direct: the gateway is
+        unreachable, or it failed on its own (502/503 from the gateway itself
+        without x-augur-refused). A refusal or any other status is final.
+        """
+        headers = {"Content-Type": "application/json",
+                   "Authorization": "Bearer " + self._gateway_token,
+                   "X-Augur-Consumer": "mercury",
+                   "X-Augur-Data": GATEWAY_DATA_TIER}
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    r = await client.post(self._gateway_url, headers=headers, json=payload)
+            except Exception:                                 # noqa: BLE001
+                return False, None
+            if r.status_code in (429, 529) and attempt < 2:
+                await asyncio.sleep(RETRY_BACKOFF * (2 ** attempt))
+                continue
+            if (r.status_code in (502, 503) and "x-augur-gateway" in r.headers
+                    and "x-augur-refused" not in r.headers):
+                return False, None
+            try:
+                r.raise_for_status()
+                return True, r.json()
+            except Exception:                                 # noqa: BLE001
+                return True, None
+        return True, None
+
     async def _post(self, payload: dict) -> dict | None:
+        if self._gateway_url and self._gateway_token:
+            handled, body = await self._post_gateway(payload)
+            if handled or not self._key:
+                return body
         headers = {"Content-Type": "application/json"}
         if self._key:
             headers["Authorization"] = "Bearer " + self._key
@@ -393,9 +435,11 @@ def get_structured_judge() -> StructuredJudge | None:
     if os.environ.get("STRUCTURED_JUDGE_ENABLED", "false").lower() != "true":
         return None
     key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")
-    if not key:
+    gateway_url = os.environ.get("STRUCTURED_JUDGE_GATEWAY_URL") or None
+    gateway_token = os.environ.get("STRUCTURED_JUDGE_GATEWAY_TOKEN") or None
+    if not (key or (gateway_url and gateway_token)):
         return None
-    return SystemOneStructuredJudge(key)
+    return SystemOneStructuredJudge(key, gateway_url=gateway_url, gateway_token=gateway_token)
 
 
 def get_laya_judge() -> StructuredJudge | None:

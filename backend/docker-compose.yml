@@ -27,6 +27,10 @@ services:
       - STRUCTURED_JUDGE_ENABLED=${STRUCTURED_JUDGE_ENABLED:-false}
       - STRUCTURED_JUDGE_AUTHORITATIVE=${STRUCTURED_JUDGE_AUTHORITATIVE:-false}
       - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+      # Augur's Jev gateway. When both are set the judge calls it first and goes
+      # direct only if it cannot be reached or fails on its own.
+      - STRUCTURED_JUDGE_GATEWAY_URL=${STRUCTURED_JUDGE_GATEWAY_URL:-}
+      - STRUCTURED_JUDGE_GATEWAY_TOKEN=${STRUCTURED_JUDGE_GATEWAY_TOKEN:-}
       # Second structured-judge backend. Unset means no shadow at all; failover
       # also needs a calibration laya_shadow.py has judged ready.
       - LAYA_URL=${LAYA_URL:-}
