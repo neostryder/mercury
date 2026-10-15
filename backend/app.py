@@ -1345,6 +1345,11 @@ async def execute_message_decision(
     metadata = brief.get("message_metadata", {})
     sender_domain = metadata.get("sender_domain")
     current_disposition = metadata.get("enforced_disposition") or metadata.get("disposition")
+    # Delivered from the dashboard, where the recipient's answer is a label
+    # and not a request to add the sender to a list.
+    deliver_only = decision == "deliver_only"
+    if deliver_only:
+        decision = "deliver"
 
     if decision == "dismiss":
         event_log.log_event("actions", {
@@ -1443,8 +1448,15 @@ async def execute_message_decision(
         "result": delivery_result,
         "domain": sender_domain,
     })
+    if _delivered(delivery_result) and metadata.get("raw_message"):
+        # The mail host was told 421 and will retry; the retry must see this
+        # message as accepted so it is not delivered a second time.
+        dedup_store.record(
+            _dedup_key(metadata["raw_message"], ""), 250,
+            {"ok": True, "verdict": metadata.get("verdict"), "enforced": "250", "delivered": True},
+        )
     outcome = f"Deliver decision: {delivery_result}."
-    return outcome, await _sender_list_followup("whitelist", brief)
+    return outcome, None if deliver_only else await _sender_list_followup("whitelist", brief)
 
 
 def _change_text(change: dict) -> str:
@@ -2207,6 +2219,24 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
                     "shadow_id": laya_shadow.shadow_id(dedup_key),
                 },
             )
+        elif alert_eligible and raw_message:
+            # A deferred message that did not page keeps a sealed copy for seven
+            # days, so a label of "should be accepted" can still deliver it.
+            held_id = approval_store.create_brief(
+                action_content[:8000],
+                message_metadata={
+                    "sender_address": sender_address,
+                    "sender_domain": sender_domain,
+                    "raw_message": raw_message,
+                    "verdict": verdict["verdict"],
+                    "category": verdict["category"],
+                    "disposition": verdict["disposition"],
+                    "enforced_disposition": enforced_disposition,
+                    "already_delivered": False,
+                },
+            )
+            approval_store.append_turn(held_id, "loremaster", f"From: {redact(from_display)}\nSubject: {subject}")
+            approval_store.update_brief(held_id, status="held")
 
         response_content = {
             "ok": True,

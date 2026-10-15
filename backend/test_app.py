@@ -152,6 +152,21 @@ class AppTests(unittest.TestCase):
             payload["dmarc"] = {"status": {"result": "pass"}}
         return payload
 
+    def test_a_deferred_message_that_did_not_page_keeps_a_held_copy(self):
+        self.store.put_sender("greylist", "example.com")
+        held_store = ApprovalStore(self.temp_dir / "held_approvals.json")
+        original = app.approval_store
+        app.approval_store = held_store
+        try:
+            with patch.object(app.event_log, "log_event"), patch.object(app.telegram_approvals, "send_trackable_report", new=AsyncMock()):
+                response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            brief_id = held_store.find_open_brief_for_message("example.com", "A routine update")
+        finally:
+            app.approval_store = original
+        self.assertEqual(response.status_code, 421)
+        self.assertIsNotNone(brief_id)
+        self.assertIn("Subject: A routine update", held_store.get_brief(brief_id)["message_metadata"]["raw_message"])
+
     def test_deterministic_sender_match_skips_classifier_and_judge(self):
         self.store.put_sender("blacklist", "example.com")
         app.classifier = SimpleNamespace(
@@ -1592,7 +1607,7 @@ class TelegramDecisionTests(unittest.TestCase):
         ))
         brief_id = self.store.brief_for_message(101)
         self.assertTrue(asyncio.run(self.telegram.deliver_brief(brief_id)))
-        self.assertEqual(self.execute_decision.await_args.args[0], "deliver")
+        self.assertEqual(self.execute_decision.await_args.args[0], "deliver_only")
         self.assertFalse(asyncio.run(self.telegram.deliver_brief(brief_id)))
         self.assertEqual(self.execute_decision.await_count, 1)
 

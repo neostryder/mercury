@@ -53,17 +53,23 @@ class ApprovalStore:
         data.setdefault("briefs", {})
         data.setdefault("message_index", {})
         now = time.time()
-        for brief in data["briefs"].values():
+        expired = []
+        for brief_id, brief in data["briefs"].items():
             metadata = brief.setdefault("message_metadata", {})
             brief.setdefault("changes", [])
             brief.setdefault("message_decision", None)
             brief.setdefault("created_at", 0.0)
             if now - brief["created_at"] > RAW_MESSAGE_TTL_SECONDS:
+                if brief.get("status") == "held":
+                    expired.append(brief_id)
                 metadata.pop("raw_message", None)
                 metadata.pop("raw_message_sealed", None)
             elif self._fernet and "raw_message" in metadata:
                 # A file written before encryption existed.
                 metadata["raw_message_sealed"] = self._seal(metadata.pop("raw_message"))
+        # A held copy has no use once its raw message is gone.
+        for brief_id in expired:
+            del data["briefs"][brief_id]
         return data
 
     def _save(self, data: dict) -> None:
@@ -194,7 +200,7 @@ class ApprovalStore:
         matches = [
             (brief_id, brief)
             for brief_id, brief in self._load()["briefs"].items()
-            if brief.get("status") == "open"
+            if brief.get("status") in ("open", "held")
             and not brief.get("message_decision")
             and brief.get("message_metadata", {}).get("sender_domain") == sender_domain
             and any(

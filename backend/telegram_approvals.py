@@ -428,11 +428,11 @@ class TelegramApprovals:
         if not brief or brief["status"] == "resolved" or brief.get("message_decision"):
             return False
         self._store.update_brief(brief_id, message_decision="deliver")
-        await self._run_message_decision(brief_id, brief, "deliver")
+        await self._run_message_decision(brief_id, brief, "deliver_only")
         return True
 
     async def _run_message_decision(self, brief_id: str, brief: dict, decision: str) -> None:
-        if decision in ("unsubscribe", "deliver"):
+        if decision in ("unsubscribe", "deliver", "deliver_only"):
             await self._send("Approved - working on it now...")
         try:
             outcome, followup_change = await self._execute_message_decision(

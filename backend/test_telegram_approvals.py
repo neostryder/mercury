@@ -388,6 +388,14 @@ class FindOpenBriefForMessageTests(unittest.TestCase):
         self._report("walmart.com", "Re: Your order shipped")
         self.assertIsNone(self.store.find_open_brief_for_message("walmart.com", "Your order shipped"))
 
+    def test_a_held_copy_matches_and_expires_with_its_raw_message(self):
+        brief_id = self._report("walmart.com", "Your order shipped")
+        self.store.update_brief(brief_id, status="held")
+        self.assertEqual(self.store.find_open_brief_for_message("walmart.com", "Your order shipped"), brief_id)
+        self.assertIsNone(self.store.most_recent_open_brief())
+        self.store.update_brief(brief_id, created_at=1.0)
+        self.assertIsNone(self.store.get_brief(brief_id))
+
     def test_an_already_decided_or_resolved_report_does_not_match(self):
         self._report("walmart.com", "Your order shipped", decided=True)
         resolved = self._report("walmart.com", "Your order shipped")
