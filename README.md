@@ -26,14 +26,28 @@ redeploy, if a bad disposition ever needs to be walked back fast.
 
 ## How it works
 
+```mermaid
+flowchart TD
+    FE["ForwardEmail webhook"] --> W["Worker gate (Cloudflare edge)"]
+    W -->|"no token in URL"| R421a["421: retry later"]
+    W --> B["Backend ingest"]
+    W -.->|"backend down"| DOWN{"CUSTODY_REQUIRED?"}
+    DOWN -->|"no"| A250a["250: accept"]
+    DOWN -->|"yes"| R421b["421: retry later"]
+    B --> LISTS{"Authenticated sender-list match?<br/>(dmarc field must pass)"}
+    LISTS -->|"blacklist"| D550["550: hard bounce"]
+    LISTS -->|"greylist"| D421["421: soft defer"]
+    LISTS -->|"whitelist"| D250["250: accept"]
+    LISTS -->|"no match"| RED["Redact the recipient's own addresses"]
+    RED --> CLS["Prompt-injection classifier<br/>(SAFE or INJECTION)"]
+    CLS --> JDG["Judge: SPAM, PHISH, LEGIT, or UNSURE<br/>plus rule buckets"]
+    JDG --> D550
+    JDG --> D421
+    JDG --> D250
+    D250 --> IMAP["IMAP delivery to the mailbox"]
 ```
-ForwardEmail -> Worker gate -> backend -> authenticated sender lists
-                                  |                 |
-                                  |                 +-> final disposition
-                                  +-> classifier -> semantic judge -> disposition
-                                                         |
-                                                  semantic rule buckets
-```
+
+*Source of truth: `backend/app.py` (`ingest`), `backend/filtering.py`, and `worker/src/index.js`. `MERCURY_SHADOW_MODE=true` forces every verdict to 250 and skips delivery. The full pipeline is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).*
 
 1. Your mail host's incoming-mail webhook calls a small **Worker gate**
    running on Cloudflare's edge, not your own machine. See
