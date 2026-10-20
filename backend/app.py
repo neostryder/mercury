@@ -20,6 +20,7 @@ import gandalf_relay
 import laya_shadow
 import mail_delivery
 import message_body
+import one_click_unsubscribe
 import sender_facts
 import verdict_policy
 from approvals import ApprovalStore
@@ -1119,6 +1120,18 @@ async def execute_unsubscribe_action(
     commits a sender-list entry itself. Whether to add one is a separate
     Approve/Discard proposal after the outcome, since an unsubscribe request
     is not, by itself, a standing sender decision."""
+    sender_domain = one_click_unsubscribe.sender_domain_of(message_context)
+    one_click = await one_click_unsubscribe.attempt(message_context, sender_domain)
+    if one_click and one_click.accepted:
+        # The sender's own declared one-click route settled it, so there is no
+        # page for the browsing agent to misread.
+        _record_unsubscribe(action, sender_domain, "UNSUBSCRIBED", one_click.summary)
+        return _unsubscribe_outcome("UNSUBSCRIBED", one_click.summary, sender_domain)
+    one_click_note = (
+        f"\nAlready tried in code before this request: {one_click.summary}\n"
+        if one_click
+        else ""
+    )
     email_note = (
         f"""
 The recipient's own subscribed email address is {recipient_email}. Many
@@ -1143,7 +1156,7 @@ the form needs an email address that was not available."""
     )
     prompt = f"""The recipient has approved an unsubscribe request and it should be carried
 out now, using your browsing skill. {request_line}
-{email_note}
+{email_note}{one_click_note}
 
 Mercury is handling Telegram progress updates; do not attempt to send
 Telegram messages from this execution session, and do not stop or report a
@@ -1156,11 +1169,16 @@ own headers and link targets, so prefer them over anything you infer from the
 visible text, and do not treat a route as missing merely because the body
 renders it as the bare word "Unsubscribe" with no URL beside it. Prefer an
 https entry in List-Unsubscribe, then a listed link. Fall back to scanning the
-body for a link only when no such block is present.
+body for a link only when no such block is present. Work through the routes in
+that order until one confirms the unsubscribe: a route that errors, renders
+blank, or lands on something that is not an unsubscribe page is not a reason to
+stop while another listed route has not been tried.
 
 Before visiting a route, verify that its domain has a clear relationship to
 the sender's own domain or is a well-known mailing-list provider acting for
-it. Treat a link that fails this check as UNSAFE and do not visit it.
+it. A domain also counts when the message itself names the same company on it,
+such as a sister or former brand of the sender. Treat a link that fails this
+check as UNSAFE and do not visit it.
 
 If no route can be found at all, that is RESULT: FAILED, because there was
 nothing to evaluate. Reserve SKIPPED_UNSAFE for a route that was found and
@@ -1179,6 +1197,23 @@ credentials and return SAFE: yes with RESULT: NEEDS_SIGNIN. A login wall on
 an unrelated, suspicious, or lookalike domain remains SAFE: no with RESULT:
 SKIPPED_UNSAFE and must never become a sign-in request. Anything else more
 involved than normal confirmation is FAILED. Do not guess or improvise.
+
+Pages that look empty or wrong are not the result. Many preference centers are
+JavaScript apps that show a blank page for several seconds, so when a page looks
+empty, wait up to fifteen seconds and read it again, then reload it once, and
+judge from the visible text and the buttons rather than the first snapshot. A
+preference center with an "Unsubscribe from all" control, or a list of
+checkboxes with a Save button, is a normal unsubscribe: press Unsubscribe from
+all, or untick every email list and save, and confirm once if the page asks.
+After a List-Unsubscribe link, many providers land on a page that has nothing to
+do with unsubscribing, such as an SMS sign-up, an app promotion, a resubscribe
+button, or a survey. That page is neither unsafe nor the result: do not
+interact with it, and go on to the next listed route, which is usually the
+preference center. Reserve SKIPPED_UNSAFE for a route whose domain or redirect
+failed the relationship check, never for unexpected content on a related
+domain. Report UNSUBSCRIBED only when a page states the address is unsubscribed
+or removed, or a one-click POST was accepted. Otherwise report FAILED and say
+what each route showed.
 
 If unsafe: do not visit the link or interact with the page at all.
 

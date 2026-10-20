@@ -1501,6 +1501,62 @@ SUMMARY: The confirmation page asked for the subscribed email address."""))
         self.assertIn("FAILED", outcome)
         self.assertEqual(followup["recommendation"], "none")
 
+    def test_an_accepted_one_click_post_settles_it_without_the_browsing_agent(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(side_effect=AssertionError("agent must not run")))
+        events = []
+        with (
+            patch.object(
+                app.one_click_unsubscribe,
+                "attempt",
+                AsyncMock(return_value=app.one_click_unsubscribe.OneClickResult(True, "The provider accepted it (HTTP 302).")),
+            ),
+            patch.object(
+                app.event_log,
+                "log_event",
+                side_effect=lambda table, fields: events.append((table, fields)),
+            ),
+        ):
+            outcome, followup = asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from fandango.com",
+                "Message\nFrom: Fandango <fandango@movies.fandango.com>\nSubject: x",
+            ))
+
+        self.assertIn("UNSUBSCRIBED", outcome)
+        self.assertEqual(events[0][1]["result"], "UNSUBSCRIBED")
+        self.assertEqual(events[0][1]["domain"], "movies.fandango.com")
+        self.assertEqual(followup["recommendation"], "none")
+
+    def test_a_refused_one_click_post_is_passed_to_the_agent_as_a_note(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: movies.fandango.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Pressed Unsubscribe from all on the preference center."""))
+        refused = app.one_click_unsubscribe.OneClickResult(False, "A one-click POST to links.fandango.com returned HTTP 404.")
+        with patch.object(app.one_click_unsubscribe, "attempt", AsyncMock(return_value=refused)):
+            outcome, _ = asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from fandango.com", "From: a@movies.fandango.com"
+            ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("Already tried in code before this request: A one-click POST to links.fandango.com returned HTTP 404.", prompt)
+        self.assertIn("UNSUBSCRIBED", outcome)
+
+    def test_prompt_tells_the_agent_how_to_treat_blank_and_unrelated_pages(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: example.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Done."""))
+
+        asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from example.com", "From: news@example.com"
+        ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("wait up to fifteen seconds", prompt)
+        self.assertIn('"Unsubscribe from all" control', prompt)
+        self.assertIn("SMS sign-up", prompt)
+        self.assertIn("go on to the next listed route", prompt)
+
 
 class TelegramDecisionTests(unittest.TestCase):
     def setUp(self):
