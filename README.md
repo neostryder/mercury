@@ -113,6 +113,27 @@ it in the matching `get_*()` function to use something else:
 | Structured judge (optional) | `providers/structured_judge.py` | TypeSafe System One | `classify(content, rules, injection) -> typed answers with probabilities, or None`; a second backend via `LAYA_URL` shadows it |
 | Notifications | `providers/notifier.py` | Telegram bot message | send one plain-text message |
 
+```mermaid
+flowchart TD
+    MSG["Redacted message<br/>plus injection score"] --> ON{"STRUCTURED_JUDGE_ENABLED?"}
+    ON -->|"no"| LLM1["Language-model judge decides"]
+    ON -->|"yes"| SJ["Structured judge answers<br/>(typed answers with probabilities)"]
+    SJ --> AUTH{"STRUCTURED_JUDGE_AUTHORITATIVE?"}
+    AUTH -->|"no"| BOTH["Both judges run;<br/>judge_comparisons row records disagreements"]
+    BOTH --> KEEP["Language-model disposition is enforced"]
+    AUTH -->|"yes"| CLEAR{"Ordinary mail?<br/>Low unwanted, dangerous, severity,<br/>and no SPAM or PHISH lean"}
+    CLEAR -->|"yes"| FAST["Cleared: reasoning built from the<br/>structured answers, 250 in under a second"]
+    CLEAR -->|"no"| LLM2["Language-model judge decides,<br/>given the structured probabilities"]
+    LLM2 --> GUARD{"Structured result was 550<br/>and judge says 250?"}
+    GUARD -->|"yes"| DEFER["421: defer instead"]
+    GUARD -->|"no"| ENF["Judge's disposition is enforced"]
+    LLM2 -.->|"judge down or unreadable"| STAND["Structured decision stands"]
+    SJ -.->|"LAYA_URL set"| LAYA["Second backend shadows the same call<br/>in the background (laya_shadow.py)"]
+    LAYA -.->|"LAYA_FAILOVER, primary down,<br/>score clears the bar"| LDEC["Second backend may decide"]
+```
+
+*Source of truth: this section, `backend/verdict_policy.py`, `backend/laya_shadow.py`, and `backend/providers/structured_judge.py`. The thresholds are named `MERCURY_REVIEW_*` environment variables.*
+
 The **structured judge** is off unless `STRUCTURED_JUDGE_ENABLED=true`, and with
 it unset the pipeline is exactly what it was. It exists because the judge above
 returns free text that gets parsed back into fields by six regexes, each with a
@@ -227,6 +248,27 @@ disposition. The dashboard can view, add, move, and remove every entry type
 without a redeploy.
 
 ## Approval loop
+
+```mermaid
+flowchart TD
+    FLAG["Flag a message in Thunderbird<br/>and describe what should happen"] --> BRIEF["Open a brief with the judge"]
+    BRIEF --> ASK{"Intent unclear?"}
+    ASK -->|"yes"| TGQ["Ask over Telegram"]
+    TGQ --> BRIEF
+    ASK -->|"no"| PROP["Propose: sender-list entry, semantic rule,<br/>custom action, one-time action, or GANDALF handoff"]
+    PROP --> REPLY{"Your reply"}
+    REPLY -->|"Approve or yes"| COMMIT["Commit the policy to the rules ledger<br/>and run the action"]
+    REPLY -->|"Discard or no"| END["Brief ends, nothing written"]
+    REPLY -->|"anything else"| BRIEF
+    COMMIT --> UNSUB{"Unsubscribe needs a sign-in?"}
+    UNSUB -->|"NEEDS_SIGNIN on a verified sender"| FORM["10-minute single-use form link in the brief"]
+    UNSUB -->|"suspicious login domain"| SKIP["SKIPPED_UNSAFE: no form"]
+    UNSUB -->|"no"| DONE["Outcome reported in the brief"]
+    FORM --> DONE
+    DONE -->|"a later reply"| BRIEF
+```
+
+*Source of truth: this section, `backend/approvals.py`, and `backend/telegram_approvals.py`. The five report buttons (Unsubscribe, Soft-bounce, Hard-bounce, Deliver + whitelist, Do nothing) act on that one message only, and a suggested list entry is a second Approve or Discard.*
 
 Flagging a message in Thunderbird doesn't write anything by itself, and
 your instruction isn't forced into a rule whether you meant one or not.
