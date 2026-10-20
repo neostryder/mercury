@@ -21,6 +21,32 @@ in the way a home server or a single VPS can be. Any always-on edge/serverless
 platform your mail host's webhook can be pointed at would serve the same
 purpose; Cloudflare Workers is what I already had DNS on.
 
+```mermaid
+flowchart LR
+    FE["ForwardEmail"] -->|"webhook POST"| W
+    subgraph CF["Cloudflare"]
+        W["Worker gate"]
+        D1[("D1 event log")]
+        UI["Dashboard<br/>(behind Access)"]
+        W --- D1
+        W --- UI
+    end
+    subgraph HOME["Self-hosted"]
+        B["FastAPI backend<br/>(no Cloudflare credentials)"]
+        GW["Gateway shim"]
+        CL["Injection classifier"]
+        AG["Judge agent"]
+        B --> CL
+        B --> GW --> AG
+    end
+    W -->|"ingest, waits for verdict"| B
+    B -->|"/log (fire and forget)"| W
+    B -->|"IMAP APPEND"| MB["Real mailbox"]
+    B -->|"alerts and approvals"| TG["Telegram"]
+```
+
+*Source of truth: the sections below, `worker/wrangler.toml`, and `gateway/`. The backend writes the event log only through the Worker's `/log` route, and a logging failure never changes delivery.*
+
 ## Pipeline
 
 1. Your mail host POSTs the parsed message to the Worker's public hostname, at a path ending in the `MERCURY_WEBHOOK_TOKEN` secret (`/webhook/<token>`). The backend trusts whatever the Worker forwards, including the payload's own `dmarc` result, so a request without the token gets a 421, which defers mail from a misconfigured mail host instead of bouncing it. `WEBHOOK_ALLOW_TOKENLESS=true` keeps the bare path open while a mail host's configured URL is being switched over.

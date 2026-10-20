@@ -171,8 +171,10 @@ address this:
 
 If you swap in your own classifier, it only needs to implement the tiny
 contract above - the model used for the reference classifier in my own
-deployment is `protectai/deberta-v3-base-prompt-injection-v2`, run locally
-so message content never leaves your own infrastructure for this step.
+deployment is `meta-llama/Llama-Prompt-Guard-2-86M`, run locally so message
+content never leaves your own infrastructure for this step. See
+[`docs/injection-classifier.md`](docs/injection-classifier.md) for the model
+choice.
 
 ## Redaction
 
