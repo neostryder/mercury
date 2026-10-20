@@ -47,6 +47,8 @@ flowchart TD
     D250 --> IMAP["IMAP delivery to the mailbox"]
 ```
 
+![How Mercury works, dark-skin view](docs/img/mercury-how-it-works.png)
+
 *Source of truth: `backend/app.py` (`ingest`), `backend/filtering.py`, and `worker/src/index.js`. `MERCURY_SHADOW_MODE=true` forces every verdict to 250 and skips delivery. The full pipeline is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).*
 
 1. Your mail host's incoming-mail webhook calls a small **Worker gate**
