@@ -181,7 +181,7 @@ function readHash() {
 }
 function writeHash() {
   var params = new URLSearchParams();
-  if (state.view === 'activity') {
+  if (state.view === 'activity' || state.view === 'review') {
     if (state.outcome) params.set('outcome', state.outcome);
     if (state.q) params.set('q', state.q);
   }
@@ -195,7 +195,7 @@ function showView() {
   document.querySelectorAll('[data-nav]').forEach(function (a) {
     if (a.dataset.nav === state.view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
-  document.querySelectorAll('#outcome-chips .chip').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.outcome === state.outcome)); });
+  document.querySelectorAll('#outcome-chips .chip, #review-chips .chip').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.outcome === state.outcome)); });
   document.querySelectorAll('#audit-chips .chip').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.audit === state.audit)); });
   document.querySelectorAll('[data-audit-panel]').forEach(function (p) { p.hidden = p.dataset.auditPanel !== state.audit; });
   byId('q').value = state.q;
@@ -745,6 +745,7 @@ async function previewPolicyChange(button) {
 
 // ---- review ----
 var OUTCOME_LABEL = { '250': 'Accepted', '421': 'Deferred', '550': 'Rejected' };
+var reviewData = null;
 async function loadReview() {
   var list = byId('review-list');
   var metrics = byId('review-metrics');
@@ -767,14 +768,30 @@ async function loadReview() {
     if (o.reversal) line += '; ' + o.reversal + ' more marked wrong by removing their rule';
     return '<dt>' + OUTCOME_LABEL[k] + '</dt><dd>' + esc(line) + '</dd>';
   }).join('');
-  var rows = both[0].rows;
-  list.innerHTML = rows.length ? rows.map(function (m) { return reviewCard(m, null); }).join('')
-    : '<div class="empty">Every recent message in the sample is reviewed.</div>';
-  var reviewed = both[0].reviewed || [];
+  reviewData = both[0];
+  renderReviewLists();
+}
+// The outcome chips narrow both lists to one outcome without another fetch.
+function renderReviewLists() {
+  if (!reviewData) return;
+  var pick = function (m) { return !state.outcome || m.enforced_disposition === state.outcome; };
+  var word = state.outcome ? OUTCOME_LABEL[state.outcome].toLowerCase() + ' ' : '';
+  var rows = reviewData.rows.filter(pick);
+  byId('review-list').innerHTML = rows.length ? rows.map(function (m) { return reviewCard(m, null); }).join('')
+    : '<div class="empty">' + (state.outcome ? 'No ' + word + 'messages are waiting for a mark.' : 'Every recent message in the sample is reviewed.') + '</div>';
+  var reviewed = (reviewData.reviewed || []).filter(pick);
   byId('review-done').innerHTML = reviewed.length ? reviewed.map(function (m) {
     return reviewCard(m, { verdict: m.label_verdict, correct: m.label_correct });
-  }).join('') : '<div class="empty">Nothing reviewed yet. Answer a message in the sample to list it here.</div>';
+  }).join('') : '<div class="empty">' + (state.outcome ? 'Nothing ' + word + 'has been reviewed yet.' : 'Nothing reviewed yet. Answer a message in the sample to list it here.') + '</div>';
 }
+byId('review-chips').addEventListener('click', function (e) {
+  var chip = e.target.closest('[data-outcome]');
+  if (!chip) return;
+  state.outcome = chip.dataset.outcome;
+  writeHash();
+  showView();
+  renderReviewLists();
+});
 // One card per message. `label` is null for a message still waiting for a
 // label, or the label it already carries, which adds a status line, marks the
 // current answer, and offers an undo.

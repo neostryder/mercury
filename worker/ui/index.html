@@ -165,6 +165,12 @@
     <div class="section-head"><h2 id="h-review">Review</h2></div>
     <p class="lede">A random sample of recent decisions from each outcome. Marking them gives a real error rate per outcome.</p>
     <div class="panel spaced"><h3 class="panel-title">Error rates, last 90 days</h3><div class="panel-body"><dl class="facts" id="review-metrics"><dt>Loading</dt><dd>...</dd></dl></div></div>
+    <div class="chips spaced" role="group" aria-label="Filter by outcome" id="review-chips">
+      <button type="button" class="chip" data-outcome="" aria-pressed="true">All</button>
+      <button type="button" class="chip" data-outcome="250" aria-pressed="false">Accepted</button>
+      <button type="button" class="chip" data-outcome="421" aria-pressed="false">Deferred</button>
+      <button type="button" class="chip" data-outcome="550" aria-pressed="false">Rejected</button>
+    </div>
     <div class="review-list" id="review-list"><div class="empty">Loading...</div></div>
     <h3 class="review-subhead">Recently reviewed</h3>
     <p class="lede">Pick a different answer to change a label, or undo it to put the message back in the sample.</p>

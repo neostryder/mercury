@@ -4,6 +4,8 @@
 
 ### Added
 
+- [Visible] [Dashboard] **The Review page can be filtered to one outcome.** Chips above the sample (All, Accepted, Deferred, Rejected) narrow both the sample and Recently reviewed to a single outcome, so you can work through one result at a time. The choice stays in the page address, so a reload or a shared link keeps it. Redeploy the Worker to pick this up. (#91)
+
 - [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 50 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)
 
 ### Changed
