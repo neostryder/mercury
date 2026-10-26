@@ -41,11 +41,11 @@ GATEWAY_SECRET = os.environ["AGENT_GATEWAY_SECRET"]
 CHAT_COMMAND = shlex.split(os.environ["AGENT_CHAT_COMMAND"])
 # A real browsing task (a multi-step unsubscribe: check the route, visit it,
 # fill a form, confirm) can easily run past a minute. This must stay well
-# under the backend's own HttpAgentGatewayJudge timeout (judge.py), so a
+# under the backend's own HttpAgentGatewayJudge timeout (judge.py, 300s), so a
 # genuinely slow agent call surfaces here as this 504 - which the backend
 # can name as "the agent took too long" - rather than as the backend's own
 # blunter connection-level timeout with no such context.
-TIMEOUT = float(os.environ.get("AGENT_GATEWAY_TIMEOUT", "240"))
+TIMEOUT = float(os.environ.get("AGENT_GATEWAY_TIMEOUT", "290"))
 
 
 class Handler(BaseHTTPRequestHandler):
