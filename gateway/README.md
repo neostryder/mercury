@@ -27,6 +27,8 @@ Set `AGENT_GATEWAY_SECRET` to a random shared secret; the backend must be config
 
 A request body over 1 MB (`AGENT_GATEWAY_MAX_BODY`) gets 413. When the command exits non-zero or prints nothing, the gateway answers 502 instead of passing an empty reply to the backend.
 
+For a task that runs for minutes, such as a browsing agent, `POST /agent/jobs` answers 202 with a job id at once and runs the command in the background; `GET /agent/jobs/<id>` reports `running`, `done` with the reply, `error`, or `timeout`. A job is limited to 25 minutes (`AGENT_GATEWAY_JOB_TIMEOUT`), at most four run at once (`AGENT_GATEWAY_MAX_JOBS`), and the gateway forgets a job after an hour or when it restarts. `POST /agent` still holds the connection open for quick calls, up to `AGENT_GATEWAY_TIMEOUT` (290 seconds).
+
 ## Running it reliably
 
 Run it under whatever your platform's supervised-background-process

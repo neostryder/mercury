@@ -77,6 +77,7 @@ except ModuleNotFoundError:
 
 import app
 from approvals import ApprovalStore
+from providers.judge import JudgeNoAnswer, JudgeReportedError
 from credential_prompts import CredentialPromptStore
 from dedup import IngestDedupStore
 from filtering import FilteringPolicyStore, empty_policy
@@ -1484,6 +1485,67 @@ SUMMARY: Submitted the form."""))
         prompt = app.judge.ask.await_args.args[0]
         self.assertIn("do not attempt to send\nTelegram messages", prompt)
         self.assertNotIn("Telegram-sending capability", prompt)
+
+    def test_a_judge_with_background_jobs_runs_the_browsing_agent_through_them(self):
+        app.judge = SimpleNamespace(
+            ask=AsyncMock(side_effect=AssertionError("must use ask_long")),
+            ask_long=AsyncMock(return_value="""SAFE: yes
+DOMAIN: example.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Submitted the form."""),
+        )
+
+        outcome, _ = asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from example.com", "From: news@example.com"
+        ))
+
+        self.assertIn("UNSUBSCRIBED", outcome)
+        self.assertEqual(app.judge.ask_long.await_count, 1)
+
+    def test_an_agent_that_never_reports_back_is_taken_as_unsubscribed(self):
+        app.judge = SimpleNamespace(
+            ask_long=AsyncMock(side_effect=JudgeNoAnswer("the agent did not report back in time")),
+        )
+        events = []
+
+        with patch.object(
+            app.event_log,
+            "log_event",
+            side_effect=lambda table, fields: events.append((table, fields)),
+        ):
+            outcome, followup = asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from example.com", "From: News <news@example.com>"
+            ))
+
+        self.assertIn("Unsubscribe: UNSUBSCRIBED.", outcome)
+        self.assertIn("Assumed done: the agent did not report back in time", outcome)
+        self.assertEqual(events[0][1]["result"], "UNSUBSCRIBED")
+        self.assertEqual(events[0][1]["domain"], "example.com")
+        self.assertEqual(followup["recommendation"], "none")
+
+    def test_an_agent_that_reports_an_error_is_not_taken_as_unsubscribed(self):
+        app.judge = SimpleNamespace(
+            ask_long=AsyncMock(side_effect=JudgeReportedError("agent exited 1")),
+        )
+
+        with self.assertRaises(JudgeReportedError):
+            asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from example.com", "From: news@example.com"
+            ))
+
+    def test_prompt_tells_the_agent_to_stop_at_a_saved_confirmation(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: example.com
+RESULT: UNSUBSCRIBED
+SUMMARY: Submitted the form."""))
+
+        asyncio.run(app.execute_unsubscribe_action(
+            "Unsubscribe from example.com", "From: news@example.com"
+        ))
+
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn("that statement is the result", prompt)
+        self.assertIn("Do not reopen the page to check the saved state", prompt)
 
     def test_missing_recipient_email_tells_the_prompt_not_to_guess_one(self):
         app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
