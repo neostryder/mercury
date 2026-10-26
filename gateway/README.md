@@ -53,6 +53,8 @@ way: a wrapper script pulls the secret from a secrets manager and execs
 the gateway, and the `launchd` job (`RunAtLoad` + `KeepAlive`) points at
 that wrapper rather than the Python script directly.
 
+That wrapper sets `AGENT_CHAT_COMMAND` to `hermes chat -Q --query-file - --reasoning medium --run-budget 180`. At 80% of the 180-second budget the agent gets a wrap-up notice, which cuts short the re-checking a browsing agent does once it has its answer. The budget is advice, not a hard stop, and a run that ignores it still ends at the job limit.
+
 If your backend's Docker runtime itself sits on a VM (Colima, Lima,
 Rancher Desktop, and similar), a container-level restart policy (`restart:
 unless-stopped` in `docker-compose.yml`) only covers the container - it

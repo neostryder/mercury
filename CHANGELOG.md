@@ -10,6 +10,8 @@
 
 ### Changed
 
+- [Visible] [Pipeline] **The browsing agent has a three-minute run budget.** The gateway's agent now runs at medium reasoning and gets a wrap-up notice at 144 seconds, so a saved unsubscribe is reported instead of re-checked. Update the gateway's launch command to pick this up.
+
 - [Visible] [Dashboard] **Labeling a deferred (421) or rejected (550) message "Should be accepted" on the Review page delivers it to your inbox right away.** It goes through the same delivery as the Deliver + whitelist button on a Telegram report, minus the offer to whitelist the sender, and a note on the page says whether the message arrived. Every deferred message now keeps a sealed copy for seven days, whether or not it sent a Telegram report. A rejected message keeps no copy, so its note says nothing was delivered, and the label is saved anyway. Once a deferred message is delivered this way it also counts as accepted, so when the mail host retries it, the retry does not land in your inbox a second time. Redeploy the Worker and rebuild the backend to pick this up. (#89)
 
 - [Visible] [Dashboard] **The Review page sample is sorted newest first.** Every message in the sample now sits in one list by the time it arrived, whatever its outcome, so it reads in the same order as Recently reviewed. Before, rejected messages came first, then accepted, then deferred, with no order inside each group. The messages are still chosen at random for each outcome. Redeploy the Worker to pick this up. (#89)
