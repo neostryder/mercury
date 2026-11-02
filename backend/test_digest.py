@@ -150,5 +150,141 @@ class LinkFilterTests(unittest.TestCase):
         self.assertEqual(server.send_message.call_count, 1)
 
 
+class DigestInsightOutputTests(unittest.TestCase):
+    """The paragraph that comes back is checked, not just the prompt."""
+
+    def _stats(self) -> dict:
+        return {
+            "summary": {
+                "last24h": {"total": 18, "hardBounces": 7, "urgent": 0, "actions": 10},
+                "last7d": {"ruleChanges": 0},
+            },
+            "recent_messages": [],
+            "hard_bounces": [],
+            "rule_count": 59,
+            "verdict_counts": {"LEGIT": 11, "SPAM": 7},
+            "category_counts": {"OTHER": 18},
+            "action_required": [],
+        }
+
+    def _paragraph(self, text: str) -> str:
+        class _Judge:
+            async def ask(self, prompt: str) -> str:
+                return text
+
+        return asyncio.run(digest.build_insights(self._stats(), _Judge()))
+
+    def test_a_false_ranking_is_removed(self):
+        out = self._paragraph(
+            "Hard bounces were the largest category this window, outnumbering "
+            "legitimate mail. The mix is unremarkable otherwise."
+        )
+        self.assertNotIn("largest", out.lower())
+        self.assertNotIn("outnumbering", out.lower())
+        self.assertIn("unremarkable", out)
+
+    def test_a_false_correspondence_is_removed(self):
+        out = self._paragraph(
+            "The action count tracks the hard-bounce rate, which reflects how "
+            "the filtering rules are performing."
+        )
+        self.assertNotIn("tracks", out.lower())
+        self.assertNotIn("reflects", out.lower())
+
+    def test_a_paragraph_with_only_claim_sentences_falls_back_to_the_statistics(self):
+        out = self._paragraph("Hard bounces were the largest share of all messages.")
+        self.assertNotIn("largest", out.lower())
+        self.assertIn("18", out)
+        self.assertIn("7", out)
+
+    def test_an_honest_paragraph_survives_untouched(self):
+        text = "Two senders accounted for the new rules; the rest of the window was uneventful."
+        out = self._paragraph(text)
+        self.assertEqual(out, text)
+
+    def test_a_numeric_bound_is_not_treated_as_a_ranking(self):
+        text = "At least 10 rules applied during this window, and the day was uneventful."
+        out = self._paragraph(text)
+        self.assertEqual(out, text)
+
+    def test_prose_without_a_counter_is_not_scoped_in(self):
+        text = "Most tools in the pipeline are uneventful, which is worth noting."
+        out = self._paragraph(text)
+        self.assertEqual(out, text)
+
+    def test_an_inflected_correspondence_is_removed(self):
+        out = self._paragraph(
+            "The action count reflect the hard-bounce rate, which track how "
+            "the filtering rules are performing."
+        )
+        self.assertNotIn("reflect", out.lower())
+        self.assertNotIn("track", out.lower())
+
+    def test_an_inflected_ranking_is_removed(self):
+        out = self._paragraph(
+            "Hard bounces exceed the message count, and two senders shares "
+            "the new rules. The mix is unremarkable otherwise."
+        )
+        self.assertNotIn("exceed", out.lower())
+        self.assertNotIn("shares", out.lower())
+        self.assertIn("unremarkable", out)
+
+    def test_a_correspondence_word_without_a_counter_is_not_scoped_in(self):
+        text = "The tool will explain the result and track each change."
+        out = self._paragraph(text)
+        self.assertEqual(out, text)
+
+    def test_an_inflection_does_not_strip_honest_prose(self):
+        text = "Two senders accounted for the new rules; the rest of the window was uneventful."
+        out = self._paragraph(text)
+        self.assertEqual(out, text)
+
+
+class DigestInsightPromptTests(unittest.TestCase):
+    """The insights prompt must not invite a trend, a cause, or a directive."""
+
+    def _stats(self) -> dict:
+        return {
+            "summary": {
+                "last24h": {"total": 31, "hardBounces": 15, "urgent": 0, "actions": 17},
+                "last7d": {"ruleChanges": 0},
+            },
+            "recent_messages": [],
+            "hard_bounces": [],
+            "rule_count": 59,
+            "verdict_counts": {"LEGIT": 15, "SPAM": 13},
+            "category_counts": {"OTHER": 31},
+            "action_required": [],
+        }
+
+    def _prompt(self) -> str:
+        captured: dict[str, str] = {}
+
+        class _Judge:
+            async def ask(self, prompt: str) -> str:
+                captured["prompt"] = prompt
+                return "A paragraph."
+
+        asyncio.run(digest.build_insights(self._stats(), _Judge()))
+        return captured["prompt"]
+
+    def test_prompt_forbids_trend_cause_and_directive(self):
+        prompt = self._prompt()
+        lowered = prompt.lower()
+        self.assertIn("do not assert a trend", lowered)
+        self.assertIn("do not infer a cause", lowered)
+        self.assertIn("do not issue maintenance advice", lowered)
+        self.assertIn("no prior day, no baseline", lowered)
+
+    def test_prompt_does_not_ask_for_a_spike_or_drop(self):
+        lowered = self._prompt().lower()
+        self.assertNotIn("a spike or drop in", lowered)
+
+    def test_prompt_still_supplies_the_statistics(self):
+        prompt = self._prompt()
+        self.assertIn("Messages in the last 24 hours: 31", prompt)
+        self.assertIn("Hard bounces: 15", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

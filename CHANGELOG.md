@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- [Visible] [Digest] **The insights paragraph in the daily digest now reports only what the stats show.** It no longer describes trends, causes, or maintenance advice, ranks counters against each other, or claims that one counter explains another. If every sentence is removed, the digest shows a plain summary built from the stats.
 - [Visible] [Pipeline] **Accepted mail is no longer appended to the mailbox more than once.** The mail host's IMAP server sometimes aborts or times out an APPEND and still commits it, sometimes minutes later, so a retry stored a second copy, and one three-week scan found 12 Message-Ids with two to five copies. Delivery now searches the mailbox for the Message-Id before every APPEND, waits 5 minutes after a failed attempt before trying again, and gives IMAP connections a 45 second timeout (`MERCURY_IMAP_TIMEOUT_SECONDS`). Rebuild the backend container to pick this up. (#95)
 
 - [Visible] [Pipeline] **A slow approved unsubscribe no longer shows up as a failed decision.** Mercury now hands the browsing task to the agent gateway as a background job and checks on it for up to 27 minutes. If the agent never reports back, Mercury treats the unsubscribe as done and says so; only an error or a failure the agent reports counts against it. The browsing prompt also tells the agent to stop at a page that says the change was saved. Rebuild the backend and redeploy the gateway to pick this up.

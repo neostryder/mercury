@@ -224,6 +224,177 @@ async def gather_stats() -> dict:
     }
 
 
+# Terms the insights paragraph may not use to rank counters or to assert that
+# one counter explains or matches another. Sentences containing them are dropped.
+_RANK_CLAIM_TERMS = (
+    "largest",
+    "biggest",
+    "highest",
+    "lowest",
+    "most",
+    "least",
+    "fewest",
+    "top",
+    "outnumber",
+    "outnumbers",
+    "outnumbered",
+    "majority",
+    "share",
+    "exceeds",
+    "exceeded",
+    "dominant",
+    "greater than",
+    "more than",
+    "fewer than",
+    "compared to",
+    "than any other",
+)
+
+_CORRESPONDENCE_CLAIM_TERMS = (
+    "because",
+    "due to",
+    "driven by",
+    "as a result of",
+    "thanks to",
+    "led to",
+    "caused by",
+    "in response to",
+    "correlated with",
+    "tracks",
+    "tracked",
+    "mirrored",
+    "in step with",
+    "in parallel with",
+    "reflects",
+    "explains",
+    "corresponds to",
+    "in line with",
+)
+
+# Inflected forms that a plain term list would miss. Each entry is (label, pattern).
+_RANK_CLAIM_INFLECTIONS = (
+    ("exceed", r"\bexceed(?:s|ed|ing)?\b"),
+    ("outnumber", r"\boutnumber(?:s|ed|ing)?\b"),
+    ("dominate", r"\bdominat(?:e|es|ed|ing)\b"),
+    ("share", r"\bshares\b"),
+)
+
+_CORRESPONDENCE_CLAIM_INFLECTIONS = (
+    ("track", r"\btrack(?:s|ed|ing)?\b"),
+    ("mirror", r"\bmirror(?:s|ed|ing)?\b"),
+    ("reflect", r"\breflect(?:s|ed|ing)?\b"),
+    ("explain", r"\bexplain(?:s|ed|ing)?\b"),
+    ("correspond", r"\bcorrespond(?:s|ed|ing)?\s+to\b"),
+    ("lead to", r"\b(?:led|leads|lead|leading)\s+to\b"),
+    ("cause", r"\bcaus(?:es|ed|ing)\b"),
+    ("drive", r"\bdr(?:ives|iving|ove|iven)\b"),
+    ("correlate", r"\bcorrelat(?:e|es|ed|ing)\b"),
+)
+
+# A sentence that names none of these is not making a claim about this
+# window's counts, so no claim term in it is a violation.
+_COUNTER_NOUNS = (
+    "message",
+    "mail",
+    "bounce",
+    "rule",
+    "action",
+    "alert",
+    "verdict",
+    "categor",
+    "spam",
+    "phish",
+    "hostile",
+    "legit",
+    "clean",
+    "urgent",
+    "sender",
+    "domain",
+    "list",
+    "filter",
+    "polic",
+    "count",
+    "share",
+    "window",
+    "digest",
+    "pattern",
+)
+
+# "at least 10" and "at most 5" are numeric bounds, not ranking claims.
+_RANK_TERM_EXCEPTIONS = ("at least", "at most")
+
+
+def _mentions_a_counter(sentence: str) -> bool:
+    lowered = sentence.lower()
+    return any(noun in lowered for noun in _COUNTER_NOUNS)
+
+
+def _claim_violations(sentence: str) -> list[str]:
+    """The claim classes this sentence makes, if any.
+
+    A rank claim compares two counters against each other; a correspondence
+    claim asserts a relationship between counters the statistics do not
+    relate. Both are unreadable as prose, so they are matched on their
+    connectives rather than parsed out of the sentence.
+    """
+    if not _mentions_a_counter(sentence):
+        return []
+    lowered = sentence.lower()
+    found: list[str] = []
+    for term in _RANK_CLAIM_TERMS:
+        if not re.search(r"\b" + re.escape(term) + r"\b", lowered):
+            continue
+        if any(exc in lowered for exc in _RANK_TERM_EXCEPTIONS):
+            continue
+        found.append(f"rank claim ({term!r})")
+        break
+    for label, pattern in _RANK_CLAIM_INFLECTIONS:
+        if re.search(pattern, lowered):
+            found.append(f"rank claim ({label!r})")
+            break
+    for term in _CORRESPONDENCE_CLAIM_TERMS:
+        if re.search(r"\b" + re.escape(term) + r"\b", lowered):
+            found.append(f"correspondence claim ({term!r})")
+            break
+    for label, pattern in _CORRESPONDENCE_CLAIM_INFLECTIONS:
+        if re.search(pattern, lowered):
+            found.append(f"correspondence claim ({label!r})")
+            break
+    return found
+
+
+def _sentences(paragraph: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", paragraph) if s.strip()]
+
+
+def _strip_claim_violations(paragraph: str) -> tuple[str, list[str]]:
+    """Drop the sentences that make an unsupported claim; keep the rest."""
+    kept: list[str] = []
+    violations: list[str] = []
+    for sentence in _sentences(paragraph):
+        found = _claim_violations(sentence)
+        if found:
+            violations.extend(found)
+        else:
+            kept.append(sentence)
+    return " ".join(kept).strip(), violations
+
+
+def _safe_insights(stats: dict) -> str:
+    """A paragraph that cannot make an unsupported claim, built from the
+    statistics themselves rather than from the model."""
+    summary = stats.get("summary") or {}
+    last24h = summary.get("last24h") or {}
+    total = last24h.get("total", len(stats.get("recent_messages") or []))
+    bounces = last24h.get("hardBounces", len(stats.get("hard_bounces") or []))
+    actions = last24h.get("actions", 0)
+    return (
+        f"This window processed {total} messages, with {bounces} hard bounces "
+        f"and {actions} actions taken. The breakdown tables below carry the "
+        f"counts per category."
+    )
+
+
 async def build_insights(stats: dict, judge: Judge) -> str:
     summary = stats["summary"]
     last24h = summary.get("last24h", {})
@@ -244,21 +415,52 @@ async def build_insights(stats: dict, judge: Judge) -> str:
 email, sent once a day to the mailbox owner summarizing the last 24 hours of
 their self-hosted spam/phishing filtering pipeline.
 
-Given the aggregate statistics below, write a short paragraph (2 to 4
-sentences) calling out anything actually worth noticing - a spike or drop in
-volume, a pattern in what came in, something that needs attention. If
-nothing stands out, say so plainly instead of manufacturing significance.
-Do not just repeat the numbers back verbatim; they are already shown
-elsewhere in the email. Respond with only the paragraph itself, nothing
-else.
+The statistics below are counts for a single 24-hour window, plus one
+7-day rule-change count. Nothing here is a comparison against an earlier
+window: there is no prior day, no baseline, and no trend line. Write only
+what this window shows.
+
+Rules:
+- Report what this window contains. Do not assert a trend, a spike, a drop, a
+  rise, a decline, or a rate of change: no earlier window is supplied here, so
+  no such claim is supported by the evidence.
+- Do not infer a cause. The ratio of hard bounces to messages is what this
+  window shows; why that ratio holds, and what the owner should do about it,
+  are not in this data.
+- Do not issue maintenance advice, recommend pruning or cleanup, or propose
+  actions for the owner. This paragraph reports; it does not direct.
+- Do not rank the counters against each other. Do not call any category or
+  verdict the largest, the most, the majority, or say that one outnumbers
+  another; the breakdown tables already show the counts, and a ranking
+  asserts a comparison the single window cannot support.
+- Do not assert a relationship between counters the statistics do not
+  relate. The counts below are independent. Do not say one of them
+  explains, tracks, mirrors, or was caused by another.
+- Do not restate the numbers back verbatim; they are already shown elsewhere in
+  the email. Prefer what the breakdown reveals that a reader would not see in
+  the table.
+- If nothing in this window stands out, say so plainly in one sentence instead
+  of manufacturing significance.
+
+Respond with only the paragraph itself, nothing else.
 
 Statistics:
 {chr(10).join(context_lines)}
 """
     try:
-        return (await judge.ask(prompt)).strip()
+        paragraph = (await judge.ask(prompt)).strip()
     except Exception as exc:
         return f"Insights unavailable this run ({type(exc).__name__}: {exc})."
+
+    cleaned, violations = _strip_claim_violations(paragraph)
+    if violations:
+        logger.warning(
+            "Daily digest: dropped %d claim sentence(s) from the insights "
+            "paragraph (%s)",
+            len(violations),
+            "; ".join(violations),
+        )
+    return cleaned or _safe_insights(stats)
 
 
 def _esc(value: object) -> str:
