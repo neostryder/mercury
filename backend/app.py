@@ -18,6 +18,7 @@ import credential_prompts
 import digest
 import event_log
 import gandalf_relay
+import juhandu_bridge
 import laya_shadow
 import mail_delivery
 import message_body
@@ -268,12 +269,18 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(laya_shadow.run_forever())
         if laya_judge is not None else None
     )
+    juhandu_task = (
+        asyncio.create_task(juhandu_bridge.run_forever())
+        if juhandu_bridge.enabled() else None
+    )
     yield
     if poll_task:
         poll_task.cancel()
     digest_task.cancel()
     if laya_task:
         laya_task.cancel()
+    if juhandu_task:
+        juhandu_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -2240,6 +2247,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             )
             if _delivered(delivery_result):
                 delivered = True
+                juhandu_bridge.submit(raw_message, verdict["verdict"], verdict["category"])
                 await _run_custom_action(custom_action, delivery_result, action_content)
             elif _custody_required() and raw_message:
                 return await _defer_undelivered(
@@ -2488,6 +2496,7 @@ async def _redeliver(
     if _delivered(delivery_result):
         content = {"ok": True, "verdict": verdict, "enforced": "250", "redelivered": True}
         dedup_store.record(dedup_key, 250, content)
+        juhandu_bridge.submit(raw_message, verdict, category)
         try:
             await _run_custom_action(custom_action, delivery_result, action_content)
         except Exception:
