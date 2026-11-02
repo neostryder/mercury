@@ -549,6 +549,52 @@ RULE_MATCH: A concrete scam condition"""
         self.assertEqual(len(deliveries), 2)
         app.notifier.send.assert_awaited_once()
 
+    def test_a_delivered_message_is_offered_to_the_juhandu_bridge_once(self):
+        self._whitelisted_delivery_setup()
+        payload = self._payload()
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", return_value="delivered to INBOX"),
+            patch.object(app.event_log, "log_event"),
+            patch.object(app.juhandu_bridge, "submit") as submit,
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+            repeat = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        self.assertEqual((first.status_code, repeat.status_code), (250, 250))
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args.args[0], payload["raw"])
+
+    def test_an_undelivered_message_reaches_the_bridge_only_when_the_retry_delivers_it(self):
+        self._whitelisted_delivery_setup()
+        results = iter(["failed: OSError: mailbox unreachable", "delivered to INBOX"])
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=lambda *a, **k: next(results)),
+            patch.object(app.event_log, "log_event"),
+            patch.object(app, "DELIVERY_SETTLE_SECONDS", 0),
+            patch.object(app.juhandu_bridge, "submit") as submit,
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            submit.assert_not_called()
+            second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual((first.status_code, second.status_code), (421, 250))
+        submit.assert_called_once()
+
+    def test_a_bridge_failure_cannot_change_the_disposition(self):
+        self._whitelisted_delivery_setup()
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", return_value="delivered to INBOX"),
+            patch.object(app.event_log, "log_event"),
+            patch.object(app.juhandu_bridge, "enabled", return_value=True),
+            patch.object(app.juhandu_bridge, "wants", side_effect=RuntimeError("boom")),
+        ):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual(response.status_code, 250)
+
     def test_retry_inside_the_settle_period_does_not_append_again(self):
         self._whitelisted_delivery_setup()
         results = iter(["failed: TimeoutError: timed out", "delivered to INBOX"])

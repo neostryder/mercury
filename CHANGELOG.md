@@ -4,6 +4,7 @@
 
 ### Added
 
+- [Visible] [Pipeline] **Mercury can push accepted newsletters to Juhandu, a self-hosted feed reader, where they appear as reader items.** The push is off by default. To turn it on, rebuild the backend container and set `MERCURY_JUHANDU_PUSH`, `MERCURY_JUHANDU_URL`, and `MERCURY_JUHANDU_TOKEN`. Failed pushes are retried from an outbox file for up to 24 hours and never delay delivery.
 - [Visible] [Dashboard] **The Review page can be filtered to one outcome.** Chips above the sample (All, Accepted, Deferred, Rejected) narrow both the sample and Recently reviewed to a single outcome, so you can work through one result at a time. The choice stays in the page address, so a reload or a shared link keeps it. Redeploy the Worker to pick this up. (#91)
 
 - [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 50 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)

@@ -22,6 +22,14 @@ services:
       - MERCURY_DIGEST_SECRET=${MERCURY_DIGEST_SECRET}
       - MERCURY_DIGEST_SMTP_USER=${MERCURY_DIGEST_SMTP_USER}
       - MERCURY_DIGEST_SMTP_PASSWORD=${MERCURY_DIGEST_SMTP_PASSWORD}
+      # Newsletter mail pushed to Juhandu (backend/juhandu_bridge.py). Off by default.
+      - MERCURY_JUHANDU_PUSH=${MERCURY_JUHANDU_PUSH:-false}
+      - MERCURY_JUHANDU_URL=${MERCURY_JUHANDU_URL:-}
+      - MERCURY_JUHANDU_TOKEN=${MERCURY_JUHANDU_TOKEN:-}
+      - MERCURY_JUHANDU_CATEGORIES=${MERCURY_JUHANDU_CATEGORIES:-NEWSLETTER}
+      - MERCURY_JUHANDU_ACCESS_ID=${MERCURY_JUHANDU_ACCESS_ID:-}
+      - MERCURY_JUHANDU_ACCESS_SECRET=${MERCURY_JUHANDU_ACCESS_SECRET:-}
+      - MERCURY_JUHANDU_OUTBOX_PATH=/data/juhandu_outbox.json
       # Structured judge. Both default false, so an image built without them
       # behaves exactly as it did before.
       - STRUCTURED_JUDGE_ENABLED=${STRUCTURED_JUDGE_ENABLED:-false}
