@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from dedup import DEDUP_RETENTION_SECONDS, IngestDedupStore
+from dedup import DEDUP_RETENTION_SECONDS, PENDING_ABANDONED_SECONDS, IngestDedupStore
 
 
 class MutableClock:
@@ -46,6 +46,32 @@ class IngestDedupStoreTests(unittest.TestCase):
         self.clock.value += DEDUP_RETENTION_SECONDS + 1
 
         self.assertIsNone(self.store.claim("key-1"))
+
+    def test_a_claim_left_pending_by_a_dead_call_is_reclaimed(self):
+        self.store.claim("key-1")
+        self.clock.value += PENDING_ABANDONED_SECONDS - 1
+        self.assertEqual(self.store.claim("key-1")["status"], "pending")
+
+        self.clock.value += 2
+        self.assertIsNone(self.store.claim("key-1"))
+
+    def test_finished_entries_outlive_a_multi_day_mail_host_retry(self):
+        self.store.claim("key-1")
+        self.store.record("key-1", 250, {"ok": True})
+        self.clock.value += 4 * 24 * 60 * 60
+
+        self.assertEqual(self.store.claim("key-1")["status"], "done")
+
+    def test_restore_undelivered_keeps_the_original_attempt_time(self):
+        self.store.claim("key-1")
+        self.store.record_undelivered("key-1", "LEGIT", "OTHER")
+        self.clock.value += 30
+        entry = self.store.claim("key-1")
+        self.store.restore_undelivered("key-1", entry)
+
+        self.assertEqual(self.store.claim("key-1"), {
+            "status": "undelivered", "at": 1000.0, "verdict": "LEGIT", "category": "OTHER",
+        })
 
     def test_different_keys_do_not_interfere(self):
         self.store.claim("key-1")

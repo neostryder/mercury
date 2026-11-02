@@ -1,4 +1,5 @@
 import asyncio
+import time
 import json
 import os
 import shutil
@@ -443,7 +444,7 @@ RULE_MATCH: A concrete scam condition"""
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
         deliveries = []
 
-        def deliver(*args):
+        def deliver(*args, **kwargs):
             deliveries.append(args)
             return f"delivered to {args[4]}"
 
@@ -467,7 +468,7 @@ RULE_MATCH: A concrete scam condition"""
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
         deliveries = []
 
-        def deliver(*args):
+        def deliver(*args, **kwargs):
             deliveries.append(args)
             return "delivered to INBOX"
 
@@ -493,7 +494,7 @@ RULE_MATCH: A concrete scam condition"""
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = True
         deliveries = []
 
-        def deliver(*args):
+        def deliver(*args, **kwargs):
             deliveries.append(args)
             return "delivered to INBOX"
 
@@ -529,13 +530,14 @@ RULE_MATCH: A concrete scam condition"""
         results = iter(["failed: OSError: mailbox unreachable", "delivered to INBOX"])
         deliveries = []
 
-        def deliver(*args):
+        def deliver(*args, **kwargs):
             deliveries.append(args)
             return next(results)
 
         with (
             patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
             patch.object(app.event_log, "log_event"),
+            patch.object(app, "DELIVERY_SETTLE_SECONDS", 0),
         ):
             first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
             second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
@@ -546,6 +548,31 @@ RULE_MATCH: A concrete scam condition"""
         self.assertEqual(third.status_code, 250)
         self.assertEqual(len(deliveries), 2)
         app.notifier.send.assert_awaited_once()
+
+    def test_retry_inside_the_settle_period_does_not_append_again(self):
+        self._whitelisted_delivery_setup()
+        results = iter(["failed: TimeoutError: timed out", "delivered to INBOX"])
+        deliveries = []
+
+        def deliver(*args, **kwargs):
+            deliveries.append(kwargs)
+            return next(results)
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=deliver),
+            patch.object(app.event_log, "log_event"),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            early = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            still_early = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            with patch.object(app.time, "time", return_value=time.time() + app.DELIVERY_SETTLE_SECONDS + 1):
+                settled = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual([first.status_code, early.status_code, still_early.status_code], [421, 421, 421])
+        self.assertEqual(settled.status_code, 250)
+        self.assertEqual(len(deliveries), 2)
+        self.assertFalse(deliveries[0].get("search_all_folders"))
+        self.assertTrue(deliveries[1]["search_all_folders"])
 
     def test_payload_without_raw_is_accepted_since_a_retry_cannot_deliver_it(self):
         self._whitelisted_delivery_setup()
@@ -600,7 +627,7 @@ RULE_MATCH: A concrete scam condition"""
         self.store.put_custom_action("example.com", "Summarize it", None)
         deliveries = []
 
-        def deliver(*args):
+        def deliver(*args, **kwargs):
             deliveries.append(args)
             return "delivered to INBOX"
 

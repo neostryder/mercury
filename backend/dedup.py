@@ -19,14 +19,23 @@ delivery into the mailbox did not complete is recorded as "undelivered"
 instead, so the mail host's retry repeats only the delivery. Entries past
 DEDUP_RETENTION_SECONDS are dropped on the next load so the file does not
 grow without bound; a mail host retrying long after that window is treated
-as a new message rather than matched against stale state.
+as a new message rather than matched against stale state. A pending claim
+older than PENDING_ABANDONED_SECONDS is treated as abandoned.
 """
 import json
 import time
 from pathlib import Path
 from typing import Callable
 
-DEDUP_RETENTION_SECONDS = 6 * 60 * 60
+# A mail host keeps retrying a deferred message for days, so a finished entry
+# has to outlive that window or the retry runs the whole pipeline again.
+DEDUP_RETENTION_SECONDS = 5 * 24 * 60 * 60
+# The longest a call legitimately stays pending is the judge's run budget plus
+# one IMAP attempt. A claim older than this belongs to a call that died (a
+# restart, a crash), and blocking its retries for the whole retention window
+# would hold the message back for days. Delivery looks for an existing copy
+# first, so rerunning an abandoned claim cannot add a second one.
+PENDING_ABANDONED_SECONDS = 10 * 60
 
 
 class IngestDedupStore:
@@ -68,6 +77,12 @@ class IngestDedupStore:
         data = self._load()
         self._prune(data, now)
         entry = data["seen"].get(key)
+        if (
+            entry is not None
+            and entry.get("status") == "pending"
+            and now - entry.get("at", 0) > PENDING_ABANDONED_SECONDS
+        ):
+            entry = None
         if entry is not None:
             if entry.get("status") == "undelivered":
                 data["seen"][key] = {**entry, "status": "pending", "at": now}
@@ -102,6 +117,14 @@ class IngestDedupStore:
             "verdict": verdict,
             "category": category,
         }
+        self._save(data)
+
+    def restore_undelivered(self, key: str, entry: dict) -> None:
+        """Puts back an "undelivered" entry that claim() flipped to pending,
+        with its original timestamp, for a retry that did not attempt the
+        delivery."""
+        data = self._load()
+        data["seen"][key] = entry
         self._save(data)
 
     def release(self, key: str) -> None:

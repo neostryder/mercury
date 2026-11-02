@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2371,6 +2372,12 @@ def _delivered(delivery_result: str | None) -> bool:
     return bool(delivery_result) and delivery_result.startswith("delivered to ")
 
 
+# A mail host can commit an APPEND after the client reported it failed, with
+# the commit landing minutes later. A retry waits this long after the last
+# attempt before appending again, so that late copy is visible to the search.
+DELIVERY_SETTLE_SECONDS = 300
+
+
 async def _deliver_accepted(
     raw_message: str | None,
     verdict: str,
@@ -2380,6 +2387,7 @@ async def _deliver_accepted(
     subject: str,
     action_content: str,
     policy: dict,
+    retry: bool = False,
 ) -> tuple[str, dict | None]:
     """Appends an accepted message to the mailbox and logs the attempt.
     Returns the delivery result and the sender's standing custom action, which
@@ -2389,18 +2397,22 @@ async def _deliver_accepted(
     if custom_action and custom_action.get("native", {}).get("kind") == "folder":
         target_folder = custom_action["native"]["folder"]
     if raw_message:
+        started = time.monotonic()
         delivery_result = await asyncio.to_thread(
             mail_delivery.deliver_accepted_message,
             raw_message, verdict, category, "250", target_folder,
+            search_all_folders=retry,
         )
+        elapsed = f"{time.monotonic() - started:.1f}s"
     else:
         delivery_result = "skipped (no raw message in payload)"
+        elapsed = "0.0s"
     if mail_delivery.DELIVER_ACCEPTED_MAIL:
         event_log.log_event("actions", {
             "executed_at": _now(),
             "kind": "DELIVER",
             "details": subject,
-            "outcome_summary": delivery_result,
+            "outcome_summary": f"{delivery_result} ({'retry' if retry else 'first attempt'}, {elapsed})",
             "result": delivery_result,
             "domain": sender_domain,
         })
@@ -2463,9 +2475,15 @@ async def _redeliver(
         content = {"ok": True, "verdict": verdict, "enforced": "250", "delivered": False}
         dedup_store.record(dedup_key, 250, content)
         return JSONResponse(status_code=250, content=content)
+    if time.time() - existing.get("at", 0) < DELIVERY_SETTLE_SECONDS:
+        dedup_store.restore_undelivered(dedup_key, existing)
+        return JSONResponse(
+            status_code=421,
+            content={"ok": False, "verdict": verdict, "undelivered": "waiting for the previous attempt to settle"},
+        )
     delivery_result, custom_action = await _deliver_accepted(
         raw_message, verdict, category, sender_address, sender_domain,
-        subject, action_content, policy_store.load(),
+        subject, action_content, policy_store.load(), retry=True,
     )
     if _delivered(delivery_result):
         content = {"ok": True, "verdict": verdict, "enforced": "250", "redelivered": True}

@@ -17,14 +17,22 @@ audit in the chat history that led to this file existing.
 """
 import email
 import imaplib
+import logging
 import os
 import re
+import time
+
+logger = logging.getLogger(__name__)
 
 DELIVER_ACCEPTED_MAIL = os.environ.get("MERCURY_DELIVER_ACCEPTED_MAIL", "false").lower() == "true"
 IMAP_HOST = os.environ.get("MERCURY_MAILBOX_IMAP_HOST", "imap.forwardemail.net")
 IMAP_PORT = int(os.environ.get("MERCURY_MAILBOX_IMAP_PORT", "993"))
 IMAP_USER = os.environ.get("MERCURY_MAILBOX_IMAP_USER")
 IMAP_PASSWORD = os.environ.get("MERCURY_MAILBOX_IMAP_PASSWORD")
+# Without a socket timeout a stalled mail host holds the ingest call open
+# indefinitely. A timeout is only a failed attempt: the host may still commit
+# the APPEND later, which is why every delivery looks for an existing copy first.
+IMAP_TIMEOUT_SECONDS = float(os.environ.get("MERCURY_IMAP_TIMEOUT_SECONDS", "45"))
 
 
 def _add_headers(raw_message: str, headers: dict[str, str]) -> bytes:
@@ -37,6 +45,20 @@ def _add_headers(raw_message: str, headers: dict[str, str]) -> bytes:
     return (prefix + raw_message).encode("utf-8", errors="replace")
 
 
+def _folder_names(conn) -> list[str]:
+    typ, data = conn.list()
+    if typ != "OK":
+        return []
+    folders = []
+    for entry in data:
+        if not entry:
+            continue
+        text = entry.decode("utf-8", errors="replace") if isinstance(entry, bytes) else str(entry)
+        match = re.search(r'"([^"]*)"\s*$', text)
+        folders.append(match.group(1) if match else text.split()[-1])
+    return folders
+
+
 def list_folders() -> list[str]:
     """Real IMAP folder names in the mailbox, best-effort. Used to ground the
     brief judge's proposals so it never invents a folder that doesn't exist
@@ -47,24 +69,54 @@ def list_folders() -> list[str]:
     if not IMAP_USER or not IMAP_PASSWORD:
         return []
     try:
-        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_TIMEOUT_SECONDS)
         try:
             conn.login(IMAP_USER, IMAP_PASSWORD)
-            typ, data = conn.list()
-            if typ != "OK":
-                return []
-            folders = []
-            for entry in data:
-                if not entry:
-                    continue
-                text = entry.decode("utf-8", errors="replace") if isinstance(entry, bytes) else str(entry)
-                match = re.search(r'"([^"]*)"\s*$', text)
-                folders.append(match.group(1) if match else text.split()[-1])
-            return folders
+            return _folder_names(conn)
         finally:
-            conn.logout()
+            _close(conn)
     except Exception:
         return []
+
+
+def _close(conn) -> None:
+    """Ends the session without letting a failed logout change the outcome: a
+    message already appended must not be reported as undelivered because the
+    host dropped the connection afterwards."""
+    try:
+        conn.logout()
+    except Exception:
+        pass
+
+
+def message_id_of(raw_message: str) -> str | None:
+    try:
+        value = email.message_from_string(raw_message).get("Message-Id")
+    except Exception:
+        return None
+    value = " ".join(str(value).split()) if value else ""
+    return value or None
+
+
+def _imap_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _find_copy(conn, message_id: str, folders: list[str]) -> str | None:
+    """The first folder that already holds a message with this Message-Id.
+    The mail host can commit an APPEND after the client gave up on it, so a
+    delivery that was reported as failed may be in the mailbox already."""
+    if not message_id.isascii():
+        return None
+    wanted = _imap_quote(message_id)
+    for folder in folders:
+        typ, _ = conn.select(_imap_quote(folder), readonly=True)
+        if typ != "OK":
+            continue
+        typ, data = conn.search(None, "HEADER", "Message-ID", wanted)
+        if typ == "OK" and data and data[0] and data[0].strip():
+            return folder
+    return None
 
 
 def deliver_accepted_message(
@@ -73,11 +125,17 @@ def deliver_accepted_message(
     category: str,
     disposition: str,
     target_folder: str = "INBOX",
+    search_all_folders: bool = False,
 ) -> str:
     """Synchronous (imaplib has no async API) - call via asyncio.to_thread.
     Returns a short status string for logging; raises nothing outward, since
     a delivery failure here must not be treated as a pipeline error that
-    could somehow affect the disposition already decided."""
+    could somehow affect the disposition already decided.
+
+    Appends nothing when a copy with the same Message-Id is already in the
+    mailbox: the target folder and INBOX are searched, or every folder when
+    search_all_folders is set (a retry after a failed attempt, by which time a
+    copy may have been filed elsewhere)."""
     if not DELIVER_ACCEPTED_MAIL:
         return "skipped (MERCURY_DELIVER_ACCEPTED_MAIL is off)"
     if not IMAP_USER or not IMAP_PASSWORD:
@@ -90,15 +148,38 @@ def deliver_accepted_message(
         "X-Mercury-Category": category,
         "X-Mercury-Disposition": disposition,
     })
+    message_id = message_id_of(raw_message)
+    started = time.monotonic()
+    result = "failed: no result"
     try:
-        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_TIMEOUT_SECONDS)
         try:
             conn.login(IMAP_USER, IMAP_PASSWORD)
+            existing = None
+            if message_id:
+                folders = [target_folder]
+                if search_all_folders:
+                    folders += [name for name in _folder_names(conn) if name != target_folder]
+                elif target_folder != "INBOX":
+                    folders.append("INBOX")
+                existing = _find_copy(conn, message_id, folders)
+            if existing:
+                result = f"delivered to {existing}"
+                logger.warning("mail delivery skipped, copy already in %s: %s", existing, message_id)
+                return result
             typ, data = conn.append(target_folder, None, None, message_bytes)
             if typ != "OK":
-                return f"failed: APPEND returned {typ} {data}"
-            return f"delivered to {target_folder}"
+                result = f"failed: APPEND returned {typ} {data}"
+                return result
+            result = f"delivered to {target_folder}"
+            return result
         finally:
-            conn.logout()
+            _close(conn)
     except Exception as exc:
-        return f"failed: {type(exc).__name__}: {exc}"
+        result = f"failed: {type(exc).__name__}: {exc}"
+        return result
+    finally:
+        logger.warning(
+            "mail delivery attempt %s folder=%s message_id=%s took=%.1fs",
+            result[:120], target_folder, message_id, time.monotonic() - started,
+        )
