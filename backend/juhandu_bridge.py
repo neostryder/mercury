@@ -34,6 +34,10 @@ JUHANDU_TOKEN = os.environ.get("MERCURY_JUHANDU_TOKEN", "")
 # Only needed when the URL is the public hostname.
 ACCESS_ID = os.environ.get("MERCURY_JUHANDU_ACCESS_ID", "")
 ACCESS_SECRET = os.environ.get("MERCURY_JUHANDU_ACCESS_SECRET", "")
+# Juhandu answers 403 to a Host header it does not recognize. On the private
+# path the URL's host is host.docker.internal, so this sends the name Juhandu
+# listens on instead.
+HOST_HEADER = os.environ.get("MERCURY_JUHANDU_HOST", "")
 CATEGORIES = {
     name.strip().upper()
     for name in os.environ.get("MERCURY_JUHANDU_CATEGORIES", "NEWSLETTER").split(",")
@@ -145,6 +149,8 @@ def _fit(payload: dict) -> dict:
 
 def _headers() -> dict[str, str]:
     headers = {"Authorization": f"Bearer {JUHANDU_TOKEN}"}
+    if HOST_HEADER:
+        headers["Host"] = HOST_HEADER
     if ACCESS_ID and ACCESS_SECRET:
         headers["CF-Access-Client-Id"] = ACCESS_ID
         headers["CF-Access-Client-Secret"] = ACCESS_SECRET
