@@ -142,6 +142,18 @@ class SubmitTests(BridgeTestCase):
         self.assertEqual(door.requests[0].headers["cf-access-client-id"], "id.access")
         self.assertEqual(door.requests[0].headers["cf-access-client-secret"], "s3")
 
+    async def test_the_host_header_is_overridden_only_when_configured(self):
+        door = self.door(201)
+
+        bridge.submit(RAW, "LEGIT", "NEWSLETTER")
+        await self.settle()
+        with patch.object(bridge, "HOST_HEADER", "127.0.0.1:8795"):
+            bridge.submit(RAW, "LEGIT", "NEWSLETTER")
+            await self.settle()
+
+        self.assertEqual(door.requests[0].headers["host"], "juhandu.test")
+        self.assertEqual(door.requests[1].headers["host"], "127.0.0.1:8795")
+
     async def test_other_categories_and_a_disabled_push_send_nothing(self):
         door = self.door(201)
 
