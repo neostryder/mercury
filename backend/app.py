@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -519,6 +520,25 @@ def _recipient_email_from_candidates(candidates: object) -> str | None:
     return None
 
 
+async def _ask_judge_with_one_retry(prompt: str) -> str:
+    """Asks the judge, and once more when the gateway itself failed (it timed
+    out, was unreachable, or answered 502, 503 or 504). A stalled network or
+    agent call usually clears on the next try, and the person waiting on a
+    proposal would otherwise get an error for it. Only a proposal uses this:
+    the ingest path must answer the mail host quickly, so it never repeats a
+    judge call."""
+    try:
+        return await judge.ask(prompt)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code not in (502, 503, 504):
+            raise
+        reason = f"HTTP {exc.response.status_code}"
+    except httpx.TransportError as exc:
+        reason = type(exc).__name__
+    logging.getLogger(__name__).warning("agent gateway failed (%s); asking once more", reason)
+    return await judge.ask(prompt)
+
+
 def _parse_brief_response(content: str) -> dict:
     def _extract(field: str, later_fields: list[str]) -> str | None:
         if later_fields:
@@ -821,7 +841,7 @@ SEMANTIC_RULE: <250|421|550> | <standalone condition>, or NONE
 CUSTOM_ACTION: <domain-or-address> | <instruction> | FOLDER:<name|NONE>, or NONE
 ACTION: <MAILBOX: ... | UNSUBSCRIBE: ... | GANDALF: ... | NONE>
 CAVEAT: <a direct heads-up per above, or NONE>"""
-    content = await judge.ask(prompt)
+    content = await _ask_judge_with_one_retry(prompt)
     result = _parse_brief_response(content)
     notes = []
     for change in result["changes"]:
@@ -2445,12 +2465,7 @@ async def _run_custom_action(
             await execute_standing_custom_action(custom_action, action_content[:8000])
 
 
-async def _defer_undelivered(
-    dedup_key: str, verdict: str, category: str, subject: str, delivery_result: str,
-) -> JSONResponse:
-    """Answers 421 for an accepted message that is not in the mailbox, keeping
-    its verdict so the retry only repeats the delivery."""
-    dedup_store.record_undelivered(dedup_key, verdict, category)
+async def _alert_undelivered(subject: str, delivery_result: str) -> None:
     alert = (
         "\U0001f6a8 Mercury could not deliver an accepted message\n"
         f"Subject: {subject}\n"
@@ -2461,6 +2476,17 @@ async def _defer_undelivered(
         await notifier.send(alert[:4000])
     except Exception:
         pass
+
+
+async def _defer_undelivered(
+    dedup_key: str, verdict: str, category: str, subject: str, delivery_result: str,
+) -> JSONResponse:
+    """Answers 421 for an accepted message that is not in the mailbox, keeping
+    its verdict so the retry only repeats the delivery. The mail host's IMAP
+    server fails now and then and answers normally on the next try, so this
+    first failure is only logged (the DELIVER action carries it); the page
+    goes out if the retry fails as well."""
+    dedup_store.record_undelivered(dedup_key, verdict, category)
     return JSONResponse(
         status_code=421,
         content={"ok": False, "verdict": verdict, "undelivered": delivery_result},
@@ -2503,6 +2529,7 @@ async def _redeliver(
             pass
         return JSONResponse(status_code=250, content=content)
     dedup_store.record_undelivered(dedup_key, verdict, category)
+    await _alert_undelivered(subject, delivery_result)
     return JSONResponse(
         status_code=421,
         content={"ok": False, "verdict": verdict, "undelivered": delivery_result},

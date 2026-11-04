@@ -108,6 +108,68 @@ class MailDeliveryTests(unittest.TestCase):
 
         self.assertEqual(factory.call_args.kwargs["timeout"], mail_delivery.IMAP_TIMEOUT_SECONDS)
 
+    def test_a_refused_or_dropped_connection_is_retried_before_the_append(self):
+        good = FakeImap("host", 993)
+        broken_login = FakeImap("host", 993)
+        broken_login.login = lambda user, password: (_ for _ in ()).throw(
+            mail_delivery.imaplib.IMAP4.abort("socket error: EOF")
+        )
+        attempts = iter([ConnectionRefusedError(111, "Connection refused"), broken_login, good])
+
+        def connect(*args, **kwargs):
+            value = next(attempts)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        with (
+            patch.object(mail_delivery, "DELIVER_ACCEPTED_MAIL", True),
+            patch.object(mail_delivery, "IMAP_USER", "user"),
+            patch.object(mail_delivery, "IMAP_PASSWORD", "password"),
+            patch.object(mail_delivery, "IMAP_RETRY_PAUSE_SECONDS", 0),
+            patch.object(mail_delivery.imaplib, "IMAP4_SSL", side_effect=connect) as factory,
+        ):
+            result = mail_delivery.deliver_accepted_message(RAW, "LEGIT", "OTHER", "250")
+
+        self.assertEqual(result, "delivered to INBOX")
+        self.assertEqual(factory.call_count, 3)
+        self.assertEqual(good.appended_to, "INBOX")
+        self.assertIsNone(broken_login.appended_to)
+
+    def test_every_attempt_failing_is_reported_without_an_append(self):
+        with (
+            patch.object(mail_delivery, "DELIVER_ACCEPTED_MAIL", True),
+            patch.object(mail_delivery, "IMAP_USER", "user"),
+            patch.object(mail_delivery, "IMAP_PASSWORD", "password"),
+            patch.object(mail_delivery, "IMAP_RETRY_PAUSE_SECONDS", 0),
+            patch.object(mail_delivery.imaplib, "IMAP4_SSL", side_effect=TimeoutError("timed out")) as factory,
+        ):
+            result = mail_delivery.deliver_accepted_message(RAW, "LEGIT", "OTHER", "250")
+
+        self.assertEqual(result, "failed: TimeoutError: timed out")
+        self.assertEqual(factory.call_count, mail_delivery.IMAP_PREPARE_ATTEMPTS)
+
+    def test_a_failed_append_is_not_repeated_in_the_same_call(self):
+        class SlowAppend(FakeImap):
+            def append(self, folder, flags, date_time, message):
+                raise TimeoutError("The read operation timed out")
+
+        connection = SlowAppend("host", 993)
+        result, factory = deliver(connection)
+
+        self.assertEqual(result, "failed: TimeoutError: The read operation timed out")
+        self.assertEqual(factory.call_count, 1)
+
+    def test_a_refused_login_is_not_retried(self):
+        connection = FakeImap("host", 993)
+        connection.login = lambda user, password: (_ for _ in ()).throw(
+            mail_delivery.imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+        )
+        result, factory = deliver(connection)
+
+        self.assertTrue(result.startswith("failed: error: AUTHENTICATIONFAILED"))
+        self.assertEqual(factory.call_count, 1)
+
     def test_a_message_without_a_message_id_is_appended_without_a_search(self):
         connection = FakeImap("host", 993)
         with (
