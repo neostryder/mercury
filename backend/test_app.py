@@ -547,7 +547,53 @@ RULE_MATCH: A concrete scam condition"""
         self.assertEqual(second.status_code, 250)
         self.assertEqual(third.status_code, 250)
         self.assertEqual(len(deliveries), 2)
+        # The first failure was followed by a delivery, so nothing paged.
+        app.notifier.send.assert_not_awaited()
+
+    def test_a_proposal_asks_the_judge_once_more_after_a_gateway_failure(self):
+        import httpx
+
+        def status_error(code):
+            request = httpx.Request("POST", "http://gateway/agent")
+            return httpx.HTTPStatusError("failed", request=request, response=httpx.Response(code, request=request))
+
+        original = app.judge
+        try:
+            app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[status_error(504), "reply"]))
+            self.assertEqual(asyncio.run(app._ask_judge_with_one_retry("p")), "reply")
+            self.assertEqual(app.judge.ask.await_count, 2)
+
+            app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[httpx.ReadTimeout("slow"), "reply"]))
+            self.assertEqual(asyncio.run(app._ask_judge_with_one_retry("p")), "reply")
+
+            app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[status_error(504), status_error(504)]))
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(app._ask_judge_with_one_retry("p"))
+            self.assertEqual(app.judge.ask.await_count, 2)
+
+            app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[status_error(403)]))
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(app._ask_judge_with_one_retry("p"))
+            self.assertEqual(app.judge.ask.await_count, 1)
+        finally:
+            app.judge = original
+
+    def test_a_failed_retry_pages_but_a_failed_first_attempt_does_not(self):
+        self._whitelisted_delivery_setup()
+        results = iter(["failed: TimeoutError: timed out", "failed: TimeoutError: timed out"])
+
+        with (
+            patch.object(app.mail_delivery, "deliver_accepted_message", side_effect=lambda *a, **k: next(results)),
+            patch.object(app.event_log, "log_event"),
+            patch.object(app, "DELIVERY_SETTLE_SECONDS", 0),
+        ):
+            first = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+            app.notifier.send.assert_not_awaited()
+            second = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+
+        self.assertEqual((first.status_code, second.status_code), (421, 421))
         app.notifier.send.assert_awaited_once()
+        self.assertIn("could not deliver", app.notifier.send.call_args[0][0])
 
     def test_a_delivered_message_is_offered_to_the_juhandu_bridge_once(self):
         self._whitelisted_delivery_setup()
