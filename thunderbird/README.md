@@ -83,11 +83,7 @@ Two special requests get their own handling beyond a plain rule:
 - **Deleting existing mail** ("delete similar messages already in my Spam
   folder") is carried out as a separately-scoped action once approved, not
   folded into the standing rule.
-- **Unsubscribing** ("unsubscribe me if it's safe, otherwise hard bounce
-  the domain") has its safety evaluated first - a malicious-looking
-  unsubscribe link is never visited. See the "Executing an approved
-  unsubscribe" section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
-  for exactly how that evaluation works.
+- **Unsubscribing** ("unsubscribe me if it's safe, otherwise hard bounce the domain") has its safety checked first, and a malicious-looking unsubscribe link is never visited. When the unsubscribe is not safe, Mercury offers a sender-domain blacklist entry and a semantic block rule together on one Approve/Discard card, and neither applies until approved. The Unsubscribe quick-action button already includes this fallback in the sentence it fills in. The "Executing an approved unsubscribe" section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) covers how the safety check works.
 
 ## Sending address
 

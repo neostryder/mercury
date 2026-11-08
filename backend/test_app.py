@@ -1230,6 +1230,85 @@ class ExecuteMessageDecisionUnsubscribeTests(unittest.TestCase):
         self.assertIsNone(fake.await_args.args[-1])
 
 
+class SemanticBlockOfferTests(unittest.TestCase):
+    """An unsubscribe that could not be done safely also offers a semantic
+    rule, next to the blacklist entry that was always offered."""
+
+    UNSAFE = """SAFE: no
+DOMAIN: example.com
+RESULT: SKIPPED_UNSAFE
+SUMMARY: The unsubscribe link goes to an unrelated domain."""
+    RULE = ("RULE: The message is promotional marketing from the Example Deals brand "
+            "and contains no order confirmation, receipt, delivery notice, or "
+            "account-security information.")
+
+    def setUp(self):
+        self._judge = app.judge
+
+    def tearDown(self):
+        app.judge = self._judge
+
+    def _run_unsafe(self, rule_response, self_test_note=None):
+        app.judge = SimpleNamespace(ask=AsyncMock(side_effect=[self.UNSAFE, rule_response]))
+        with (
+            patch.object(app.one_click_unsubscribe, "attempt", AsyncMock(return_value=None)),
+            patch.object(app, "_rule_self_test", AsyncMock(return_value=self_test_note)),
+            patch.object(app.event_log, "log_event"),
+        ):
+            return asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from example.com", "From: Deals <deals@example.com>\nSubject: Sale"
+            ))
+
+    def test_an_unsafe_unsubscribe_carries_a_semantic_rule(self):
+        outcome, followup = self._run_unsafe(self.RULE)
+
+        self.assertIn("SKIPPED_UNSAFE", outcome)
+        self.assertEqual(followup["recommendation"], "hard")
+        self.assertIn("Example Deals brand", followup["semantic_rule"])
+
+    def test_a_rule_that_would_not_match_its_own_message_is_not_offered(self):
+        _, followup = self._run_unsafe(self.RULE, self_test_note="would not have matched")
+
+        self.assertEqual(followup["recommendation"], "hard")
+        self.assertNotIn("semantic_rule", followup)
+
+    def test_an_unusable_rule_answer_leaves_only_the_blacklist_offer(self):
+        for answer in ("RULE: NONE", "no idea", "RULE: too short"):
+            _, followup = self._run_unsafe(answer)
+            self.assertEqual(followup["recommendation"], "hard")
+            self.assertNotIn("semantic_rule", followup)
+
+    def test_a_plain_failure_does_not_ask_for_a_rule(self):
+        app.judge = SimpleNamespace(ask=AsyncMock(return_value="""SAFE: yes
+DOMAIN: example.com
+RESULT: FAILED
+SUMMARY: The form needs an email address."""))
+        with patch.object(app.one_click_unsubscribe, "attempt", AsyncMock(return_value=None)):
+            _, followup = asyncio.run(app.execute_unsubscribe_action(
+                "Unsubscribe from example.com", "From: news@example.com"
+            ))
+
+        self.assertEqual(followup["recommendation"], "none")
+        self.assertEqual(app.judge.ask.await_count, 1)
+
+    def test_the_unsubscribe_button_returns_both_changes(self):
+        followup = {"kind": "bounce_decision", "domain": "example.com",
+                    "recommendation": "hard", "semantic_rule": "A standalone rule sentence about promotions."}
+        blacklist = {"kind": "sender_list", "list": "blacklist", "selector": "example.com"}
+        with (
+            patch.object(app, "execute_unsubscribe_action",
+                         AsyncMock(return_value=("outcome", followup))),
+            patch.object(app, "_sender_list_followup", AsyncMock(return_value=blacklist)),
+        ):
+            outcome, changes = asyncio.run(app.execute_message_decision(
+                "unsubscribe", {"message_metadata": {}, "message_context": "..."}
+            ))
+
+        self.assertEqual(changes[0], blacklist)
+        self.assertEqual(changes[1]["kind"], "semantic_rule")
+        self.assertEqual(changes[1]["disposition"], "550")
+
+
 class RecipientEmailFromCandidatesTests(unittest.TestCase):
     """_recipient_email_from_candidates() picks the recipient's own address
     out of a flagged message's To/Cc/Delivered-To addresses when the mail

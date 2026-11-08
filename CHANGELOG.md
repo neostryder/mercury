@@ -4,12 +4,15 @@
 
 ### Added
 
+- [Visible] [Pipeline] **An unsubscribe skipped as unsafe now offers a semantic block rule next to the sender-domain blacklist entry.** The rule is one plain sentence describing the mail, such as marketing from one company on any sending domain, and it is stored with disposition 550. If the judge drafts nothing usable, or the rule fails the self-test against the flagged message, only the blacklist is offered. Both changes share one Approve/Discard card and apply only on approval. A benign FAILED offers nothing. The Unsubscribe button on Telegram briefs gets the same offer. An instruction that adds a fallback now proposes only the unsubscribe. Rebuild the backend container to pick this up.
 - [Visible] [Pipeline] **Mercury can push accepted newsletters to Juhandu, a self-hosted feed reader, where they appear as reader items.** The push is off by default. To turn it on, rebuild the backend container and set `MERCURY_JUHANDU_PUSH`, `MERCURY_JUHANDU_URL`, and `MERCURY_JUHANDU_TOKEN`. Failed pushes are retried from an outbox file for up to 24 hours and never delay delivery.
 - [Visible] [Dashboard] **The Review page can be filtered to one outcome.** Chips above the sample (All, Accepted, Deferred, Rejected) narrow both the sample and Recently reviewed to a single outcome, so you can work through one result at a time. The choice stays in the page address, so a reload or a shared link keeps it. Redeploy the Worker to pick this up. (#91)
 
 - [Visible] [Dashboard] **You can change or undo a review label.** A misclick on the Review page is no longer final. Your 50 newest labels show under Recently reviewed, where you can pick a different answer or press Undo to put the message back in the sample. Redeploy the Worker to pick this up. (#89)
 
 ### Changed
+
+- [Visible] [Extension] **The Unsubscribe quick-action now adds a fallback sentence asking for a semantic filter.** It fills in "Unsubscribe me from <sender domain>. If unsubscribe is unavailable find an appropriate semantic filter to block these safely." Nothing is blocked up front, because a rule is offered only after the unsubscribe proves unsafe and still needs approval. Install the next extension release to get it.
 
 - [Visible] [Pipeline] **The browsing agent has a three-minute run budget.** The gateway's agent now runs at medium reasoning and gets a wrap-up notice at 144 seconds, so a saved unsubscribe is reported instead of re-checked. Update the gateway's launch command to pick this up.
 

@@ -305,6 +305,48 @@ class UnsubscribeFollowupAndRecipientEmailTests(unittest.TestCase):
         )
 
 
+class UnsubscribeSemanticOfferTests(UnsubscribeFollowupAndRecipientEmailTests):
+    """A hard recommendation with a semantic rule proposes both changes in one
+    card, and a decision button that returns several changes does the same."""
+
+    RULE = "The message is promotional marketing from the Example Deals brand with no receipts."
+
+    def test_hard_recommendation_proposes_blacklist_and_semantic_rule_together(self):
+        self.execute_action.return_value = (
+            "Unsubscribe: SKIPPED_UNSAFE. The route looked like a phishing page.",
+            {"kind": "bounce_decision", "domain": "prcmarketresearch.com",
+             "recommendation": "hard", "semantic_rule": self.RULE},
+        )
+        brief_id = self._brief_with_action()
+
+        asyncio.run(self.telegram._approve(brief_id, self.store.get_brief(brief_id)))
+
+        brief = self.store.get_brief(brief_id)
+        self.assertEqual(brief["status"], "open")
+        self.assertEqual(
+            [change["kind"] for change in brief["changes"]], ["sender_list", "semantic_rule"]
+        )
+        self.assertEqual(brief["changes"][1]["disposition"], "550")
+        card = self.telegram._send.await_args_list[-1].args[0]
+        self.assertIn("blacklist: prcmarketresearch.com", card)
+        self.assertIn(self.RULE, card)
+        self.assertIn("reply to this message", card)
+
+    def test_a_decision_that_returns_a_list_of_changes_proposes_them_all(self):
+        changes = [
+            {"kind": "sender_list", "list": "blacklist", "selector": "example.com"},
+            {"kind": "semantic_rule", "disposition": "550", "rule": self.RULE},
+        ]
+        self.telegram._execute_message_decision = AsyncMock(return_value=("Unsubscribe: SKIPPED_UNSAFE.", changes))
+        brief_id = self.store.create_brief("From: a@example.com")
+
+        asyncio.run(self.telegram._run_message_decision(
+            brief_id, self.store.get_brief(brief_id), "unsubscribe"
+        ))
+
+        self.assertEqual(self.store.get_brief(brief_id)["changes"], changes)
+
+
 class UnsubscribeProposalAddressTests(unittest.TestCase):
     """The proposal card names the address the unsubscribe will be run for, so
     a missing one is visible before Approve rather than after a failure."""

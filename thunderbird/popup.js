@@ -8,7 +8,9 @@ function senderDomain() {
 }
 
 const QUICK_ACTION_TEXT = {
-  unsubscribe: () => `Unsubscribe me from ${senderDomain() || "this sender"}.`,
+  unsubscribe: () =>
+    `Unsubscribe me from ${senderDomain() || "this sender"}. ` +
+    "If unsubscribe is unavailable find an appropriate semantic filter to block these safely.",
   "bounce-domain": () => {
     const domain = senderDomain();
     return domain

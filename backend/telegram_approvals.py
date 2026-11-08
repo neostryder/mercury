@@ -452,24 +452,37 @@ class TelegramApprovals:
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
 
-        if followup_change:
+        followup_changes = (
+            followup_change if isinstance(followup_change, list)
+            else [followup_change] if followup_change else []
+        )
+        if followup_changes:
             await self._apply_brief_result(brief_id, {
                 "question": None,
-                "changes": [followup_change],
+                "changes": followup_changes,
                 "action": None,
                 "caveat": None,
-                "intro": (
-                    f"Also add {followup_change['selector']} to the "
-                    f"{followup_change['list']} going forward?"
-                ),
+                "intro": self._followup_intro(followup_changes),
             })
         else:
             self._store.resolve_brief(brief_id)
             self._store.update_brief(brief_id, changes=[], action=None, caveat=None)
 
+    @staticmethod
+    def _followup_intro(changes: list[dict]) -> str:
+        """The question that introduces a follow-up proposal after an action."""
+        if len(changes) == 1 and changes[0]["kind"] == "sender_list":
+            change = changes[0]
+            return f"Also add {change['selector']} to the {change['list']} going forward?"
+        return (
+            "Unsubscribing was not possible safely, so here are ways to block this "
+            "sender going forward. Approve adds everything listed; to keep only one, "
+            "reply to this message saying which."
+        )
+
     async def _approve(self, brief_id: str, brief: dict) -> None:
         result_lines = []
-        followup_change = None
+        followup_changes = []
         action_failed = False
         for change in brief.get("changes", []):
             await self._finalize(change, "filtering_proposal")
@@ -503,11 +516,17 @@ class TelegramApprovals:
                 and followup.get("kind") == "bounce_decision"
                 and followup.get("recommendation") == "hard"
             ):
-                followup_change = {
+                followup_changes.append({
                     "kind": "sender_list",
                     "list": "blacklist",
                     "selector": followup["domain"],
-                }
+                })
+                if followup.get("semantic_rule"):
+                    followup_changes.append({
+                        "kind": "semantic_rule",
+                        "disposition": followup.get("semantic_disposition", "550"),
+                        "rule": followup["semantic_rule"],
+                    })
         if not result_lines:
             result_lines.append("Approved, but there was nothing to add or do.")
         text = "\n".join(result_lines)
@@ -521,16 +540,13 @@ class TelegramApprovals:
             # replying "yes") should retry the same action rather than
             # needing to be re-proposed from scratch.
             self._store.update_brief(brief_id, status="open", changes=[])
-        elif followup_change:
+        elif followup_changes:
             await self._apply_brief_result(brief_id, {
                 "question": None,
-                "changes": [followup_change],
+                "changes": followup_changes,
                 "action": None,
                 "caveat": None,
-                "intro": (
-                    f"Also add {followup_change['selector']} to the "
-                    f"{followup_change['list']} going forward?"
-                ),
+                "intro": self._followup_intro(followup_changes),
             })
         else:
             self._store.resolve_brief(brief_id)
