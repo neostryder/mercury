@@ -594,14 +594,9 @@ The backend parses a structured `SAFE / DOMAIN / RESULT / SUMMARY` reply
 (not free text, for the same reason the typed proposal fields are parsed
 rather than inferred) and accepts `UNSUBSCRIBED`, `FAILED`,
 `SKIPPED_UNSAFE`, or the intermediate `NEEDS_SIGNIN` result. No sender entry
-is committed at this point. A domain-bearing result carries its own
-`recommendation` - `hard` only for `SKIPPED_UNSAFE`, `none` otherwise - and
-only a `hard` recommendation is offered as a blacklist Approve/Discard
-proposal, so a benign `FAILED` (an unsubscribe form that needed an email
-address, say) is never mistaken for a reason to block a legitimate sender.
-When it is offered, it is still a normal proposal requiring its own
-approval, so the unsubscribe result never decides standing disposition on
-the recipient's behalf by itself.
+is committed at this point.
+
+`execute_unsubscribe_action` wraps `_run_unsubscribe_action`, and each domain-bearing result carries a `recommendation`: `hard` only for `SKIPPED_UNSAFE`, `none` otherwise. Only `hard` leads to a follow-up proposal. A benign `FAILED`, such as an unsubscribe form that needed an email address, gives no reason to block a legitimate sender. On `hard`, the wrapper calls `_semantic_block_rule`. It asks the judge for a single `RULE:` sentence and rejects empty, `NONE`, under-30-character, and over-700-character answers. A rule that passes those checks goes through `_rule_self_test` against the message context, and one that would not match its own message is dropped. Whatever remains is added to the follow-up as `semantic_rule`. The Telegram card then proposes the sender-list change and the `semantic_rule` change together, with disposition 550, under one Approve/Discard. Approving commits both, and neither applies before then, so the unsubscribe result never sets standing disposition for the recipient by itself. Without a rule, the card carries only the sender-list change.
 
 ## Prompt injection: why it shapes this design
 
