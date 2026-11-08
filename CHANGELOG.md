@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Pipeline] **Mercury monitors the Telegram relay plugin and reports when Approve and Discard taps stop arriving.** Every 5 minutes the plugin sends a heartbeat stating whether its handler runs first in its group, whether the gateway holds the relay secret, and how many updates it has seen. Mercury sends a Telegram message when the heartbeat is missing for 20 minutes or reports a problem, sends another on recovery, and ignores gaps for 30 minutes after a backend restart. The plugin now uses its own handler group (101), so another plugin's catch-all handler cannot block taps as it did from 2026-10-25. To pick this up, rebuild the backend container, copy gateway/telegram_relay_plugin/ into the gateway's plugins folder, and restart the gateway.
+
 ## [1.2.0] - 2026-11-08
 
 ### Added

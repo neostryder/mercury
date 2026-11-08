@@ -1009,6 +1009,16 @@ class TelegramRelayTests(unittest.TestCase):
         with self.assertLogs(level="ERROR"):
             asyncio.run(run())
 
+    def test_a_heartbeat_is_recorded_and_not_handled_as_an_update(self):
+        fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
+        report = {"handler_first": True, "secret_set": True, "updates_seen": 2}
+        with patch.object(app, "telegram_approvals", fake_telegram), \
+                patch.object(app.relay_health, "record_heartbeat") as record:
+            response = asyncio.run(app.telegram_relay(FakeRequest({"relay_health": report}), "test-secret"))
+        self.assertTrue(response["ok"])
+        record.assert_called_once_with(report)
+        fake_telegram.handle_relayed_update.assert_not_awaited()
+
     def test_rejects_a_wrong_secret(self):
         fake_telegram = SimpleNamespace(handle_relayed_update=AsyncMock())
         with patch.object(app, "telegram_approvals", fake_telegram):

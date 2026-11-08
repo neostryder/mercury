@@ -20,6 +20,7 @@ import digest
 import event_log
 import gandalf_relay
 import juhandu_bridge
+import relay_health
 import laya_shadow
 import mail_delivery
 import message_body
@@ -274,7 +275,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(juhandu_bridge.run_forever())
         if juhandu_bridge.enabled() else None
     )
+    relay_health_task = asyncio.create_task(relay_health.run_forever(notifier))
     yield
+    relay_health_task.cancel()
     if poll_task:
         poll_task.cancel()
     digest_task.cancel()
@@ -2751,6 +2754,10 @@ async def telegram_relay(request: Request, x_mercury_secret: str | None = Header
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
     update = await request.json()
+    if isinstance(update, dict) and "relay_health" in update:
+        # A heartbeat from the relay plugin, not a Telegram update.
+        relay_health.record_heartbeat(update["relay_health"])
+        return {"ok": True}
     # Acknowledged at once, then handled in the background: an approved action
     # can run the browsing agent for minutes, far longer than the forwarder
     # waits for an answer, and it would log a timeout for work that was
