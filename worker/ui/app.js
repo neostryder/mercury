@@ -335,7 +335,10 @@ function proposalCard(p) {
     '<div class="btns">' +
       '<button type="button" class="btn" data-approval-id="' + esc(p.id) + '" data-decision="approve">Approve</button>' +
       '<button type="button" class="btn secondary" data-approval-id="' + esc(p.id) + '" data-decision="discard">Discard</button>' +
-    '</div></article>';
+      (p.has_rule ? '<button type="button" class="btn secondary" data-preview-id="' + esc(p.id) + '">Preview the rule</button>' : '') +
+    '</div>' +
+    (p.has_rule ? '<div class="rule-preview" hidden></div>' : '') +
+    '</article>';
 }
 
 async function decideProposal(btn) {
@@ -355,7 +358,32 @@ async function decideProposal(btn) {
   }
 }
 
+// Tries a proposal's semantic rule on the newest saved messages and lists what it would catch.
+async function previewProposal(btn) {
+  var card = btn.closest('.letter');
+  var out = card.querySelector('.rule-preview');
+  btn.disabled = true;
+  out.hidden = false;
+  out.innerHTML = '<p class="meta">Trying the rule on your 25 newest saved messages. This takes a minute.</p>';
+  try {
+    var data = await fetchJson('/dashboard/api/approvals/' + encodeURIComponent(btn.dataset.previewId) + '/preview', { method: 'POST' });
+    out.innerHTML = data.previews.map(function (pv) {
+      var head = '<p class="meta">' + esc(pv.caught.length) + ' of ' + esc(pv.checked) + ' recent messages would be caught' +
+        (pv.unanswered ? ' (' + esc(pv.unanswered) + ' could not be checked)' : '') + '.</p>';
+      var rows = pv.caught.map(function (m) {
+        return '<li>' + esc(m.from_domain || '-') + ': ' + esc(m.subject || '(no subject)') + '</li>';
+      }).join('');
+      return head + (rows ? '<ul class="body">' + rows + '</ul>' : '');
+    }).join('');
+  } catch (err) {
+    out.innerHTML = '<p class="meta">The preview did not run: ' + esc(err.message || err) + '.</p>';
+  }
+  btn.disabled = false;
+}
+
 byId('attention').addEventListener('click', async function (e) {
+  var preview = e.target.closest('[data-preview-id]');
+  if (preview) { previewProposal(preview); return; }
   var decide = e.target.closest('[data-approval-id]');
   if (decide) { decideProposal(decide); return; }
   var btn = e.target.closest('[data-complete-id]');
