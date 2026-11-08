@@ -1,0 +1,9 @@
+name: mercury-telegram-relay
+version: "0.4.0"
+description: >
+  Forwards taps on Mercury's Telegram approval and decision buttons to Mercury's
+  relay endpoint. The gateway holds the shared bot's only getUpdates
+  connection, so Mercury cannot receive them itself. Text replies stay with
+  Loremaster. Needs MERCURY_RELAY_SECRET in the gateway environment; without
+  it, nothing is forwarded and one warning is logged.
+author: "RPGM Tools (Loremaster)"
