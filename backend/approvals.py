@@ -191,6 +191,17 @@ class ApprovalStore:
         newest = max(open_briefs, key=lambda pair: pair[1].get("created_at", 0.0), default=None)
         return newest[0] if newest else None
 
+    def open_proposals(self) -> list[tuple[str, dict]]:
+        """Open briefs holding a change or action that waits on Approve or
+        Discard, newest first."""
+        found = [
+            (brief_id, brief)
+            for brief_id, brief in self._load()["briefs"].items()
+            if brief.get("status") == "open" and (brief.get("changes") or brief.get("action"))
+        ]
+        found.sort(key=lambda pair: pair[1].get("created_at", 0.0), reverse=True)
+        return found
+
     def find_open_brief_for_message(self, sender_domain: str, subject: str) -> str | None:
         """The newest undecided verdict report for a message from this sender
         domain with this subject, or None. The report is the only place a held

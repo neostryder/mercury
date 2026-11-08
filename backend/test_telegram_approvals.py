@@ -129,6 +129,72 @@ class ResolvedBriefReopensTests(unittest.TestCase):
         self.assertNotEqual(sent_text, "Got it - nothing to add or do.")
 
 
+class WebApprovalTests(unittest.TestCase):
+    """The dashboard's Approve and Discard buttons run the same code as the
+    Telegram ones, so a broken relay never leaves a proposal stuck."""
+
+    CHANGE = {"kind": "sender_list", "list": "blacklist", "selector": "spam.example"}
+
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-web-approvals-data"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.mkdir()
+        self.store = ApprovalStore(self.temp_dir / "approvals.json")
+        self.finalize = AsyncMock()
+        self.advance = AsyncMock(return_value={**NO_OP_RESULT, "changes": [self.CHANGE]})
+        self.telegram = TelegramApprovals(
+            self.store,
+            advance=self.advance,
+            finalize=self.finalize,
+            execute_action=AsyncMock(),
+            execute_message_decision=AsyncMock(),
+        )
+        self.telegram._send = AsyncMock(side_effect=range(301, 330))
+        self.telegram._answer_callback = AsyncMock()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _propose(self) -> str:
+        brief_id, _, _ = asyncio.run(self.telegram.propose_new("Block this sender", "From: bad@spam.example"))
+        return brief_id
+
+    def test_lists_an_open_proposal_with_its_changes(self):
+        brief_id = self._propose()
+        pending = self.telegram.pending_proposals()
+        self.assertEqual([item["id"] for item in pending], [brief_id])
+        self.assertEqual(pending[0]["instruction"], "Block this sender")
+        self.assertIn("spam.example", pending[0]["changes"][0])
+
+    def test_lists_nothing_when_no_proposal_waits(self):
+        self.assertEqual(self.telegram.pending_proposals(), [])
+
+    def test_approve_commits_the_change_and_removes_it_from_the_list(self):
+        brief_id = self._propose()
+        self.assertTrue(asyncio.run(self.telegram.resolve_proposal(brief_id, "approve")))
+        self.assertEqual(self.finalize.await_count, 1)
+        self.assertEqual(self.store.get_brief(brief_id)["status"], "resolved")
+        self.assertEqual(self.telegram.pending_proposals(), [])
+
+    def test_discard_commits_nothing(self):
+        brief_id = self._propose()
+        self.assertTrue(asyncio.run(self.telegram.resolve_proposal(brief_id, "discard")))
+        self.assertEqual(self.finalize.await_count, 0)
+        self.assertEqual(self.telegram.pending_proposals(), [])
+
+    def test_a_second_tap_on_the_same_proposal_does_nothing(self):
+        brief_id = self._propose()
+        asyncio.run(self.telegram.resolve_proposal(brief_id, "approve"))
+        self.assertFalse(asyncio.run(self.telegram.resolve_proposal(brief_id, "approve")))
+        self.assertEqual(self.finalize.await_count, 1)
+
+    def test_unknown_brief_and_unknown_decision_are_refused(self):
+        brief_id = self._propose()
+        self.assertFalse(asyncio.run(self.telegram.resolve_proposal("missing", "approve")))
+        self.assertFalse(asyncio.run(self.telegram.resolve_proposal(brief_id, "maybe")))
+        self.assertEqual(self.finalize.await_count, 0)
+
+
 class StaleApprovalCannotBeReplayedTests(unittest.TestCase):
     """Once a proposal is approved or discarded, its changes/action must be
     cleared - otherwise a later, unrelated "yes" reply could silently

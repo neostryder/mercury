@@ -421,6 +421,41 @@ class TelegramApprovals:
 
         await self._answer_callback(callback_id)
 
+    def pending_proposals(self) -> list[dict]:
+        """The proposals waiting on Approve or Discard, in a form a web page can
+        show: what would change, what would run, and the instruction that
+        started it. The flagged message itself is left out."""
+        pending = []
+        for brief_id, brief in self._store.open_proposals():
+            history = brief.get("history", [])
+            first_user = next((turn["text"] for turn in history if turn["speaker"] == "user"), "")
+            pending.append({
+                "id": brief_id,
+                "created_at": brief.get("created_at", 0.0),
+                "instruction": first_user[:300],
+                "changes": [self._change_text(change) for change in brief.get("changes", [])],
+                "action": brief.get("action"),
+                "caveat": brief.get("caveat"),
+            })
+        return pending
+
+    async def resolve_proposal(self, brief_id: str, decision: str) -> bool:
+        """Runs the Approve or Discard button for a proposal without a Telegram
+        tap. False when the brief is gone, resolved, or holds nothing to decide."""
+        brief = self._store.get_brief(brief_id)
+        if (
+            decision not in ("approve", "discard")
+            or not brief
+            or brief["status"] == "resolved"
+            or not (brief.get("changes") or brief.get("action"))
+        ):
+            return False
+        if decision == "approve":
+            await self._approve(brief_id, brief)
+        else:
+            await self._discard(brief_id, brief)
+        return True
+
     async def deliver_brief(self, brief_id: str) -> bool:
         """Runs the Deliver button for a brief without a Telegram tap. False
         when the brief is gone, resolved, or already decided."""

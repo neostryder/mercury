@@ -565,6 +565,7 @@ async function handleDashboard(pathname, search, env, request) {
 
   const messageDetailMatch = pathname.match(/^\/dashboard\/api\/messages\/(\d+)$/);
   const actionItemCompleteMatch = pathname.match(/^\/dashboard\/api\/action-items\/(\d+)\/complete$/);
+  const approvalDecisionMatch = pathname.match(/^\/dashboard\/api\/approvals\/([A-Za-z0-9_-]{1,64})\/(approve|discard)$/);
   const readBody = async () => {
     try {
       const text = await request.text();
@@ -848,6 +849,23 @@ async function handleDashboard(pathname, search, env, request) {
       return response;
     }
 
+    if (pathname === '/dashboard/api/approvals') {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405 });
+      return backendApprovalCall('GET', '/approvals/pending', env);
+    }
+
+    if (approvalDecisionMatch) {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      const [, briefId, decision] = approvalDecisionMatch;
+      const response = await backendApprovalCall('POST', `/approvals/${briefId}/${decision}`, env);
+      if (response.ok) {
+        await env.MERCURY_LOG.prepare(
+          'INSERT INTO admin_log (at, event, detail) VALUES (?, ?, ?)'
+        ).bind(new Date().toISOString(), `approval_${decision}d_from_dashboard`, `brief=${briefId}`).run();
+      }
+      return response;
+    }
+
     if (pathname === '/dashboard/api/action-items') {
       const result = await env.MERCURY_LOG.prepare(
         'SELECT * FROM action_items WHERE completed_at IS NULL ORDER BY id DESC LIMIT 100'
@@ -1108,6 +1126,25 @@ async function deliverAccepted(env, messageId) {
   } catch (err) {
     return 'Not delivered: the backend is unreachable.';
   }
+}
+
+// The Approve page's two calls to the backend. The dashboard is Access-gated and
+// the Origin check above covers a POST; this hop adds the backend's shared
+// secret, which never reaches browser JavaScript.
+async function backendApprovalCall(method, path, env) {
+  let resp;
+  try {
+    resp = await fetch(`${env.BACKEND_BASE_URL}${path}`, {
+      method,
+      headers: { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ ok: false, error: 'backend unreachable' }), {
+      status: 502,
+      headers: DASHBOARD_JSON_HEADERS,
+    });
+  }
+  return new Response(await resp.text(), { status: resp.status, headers: DASHBOARD_JSON_HEADERS });
 }
 
 async function reverseRule(rule, env) {

@@ -145,6 +145,7 @@ main { padding-top: 6px; padding-bottom: 60px; }
 .letter small { color: var(--brass); font-size: 13px; letter-spacing: .16em; text-transform: uppercase; }
 .letter .body { margin: 0; font-family: var(--serif); font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
 .letter .meta { color: var(--muted); font-size: 15px; }
+.letter ul.body { padding-left: 1.1em; display: grid; gap: 4px; font-size: 16px; }
 .letter .btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: auto; padding-top: 4px; }
 .letter.done { opacity: .55; }
 .letter.done .body { text-decoration: line-through; text-decoration-thickness: 1px; }

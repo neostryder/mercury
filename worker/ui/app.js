@@ -288,6 +288,7 @@ async function loadAttention() {
   var both = await Promise.all([
     fetchJson('/dashboard/api/action-items').then(function (r) { return { rows: r }; }, function (e) { return { error: e }; }),
     fetchJson('/dashboard/api/review').then(function (r) { return { rows: r.rows }; }, function () { return { rows: [] }; }),
+    fetchJson('/dashboard/api/approvals').then(function (r) { return { rows: r.proposals || [] }; }, function () { return { rows: [], failed: true }; }),
   ]);
   if (both[0].error) {
     box.innerHTML = loadFailed('what needs you', both[0].error);
@@ -295,8 +296,13 @@ async function loadAttention() {
   }
   var items = both[0].rows;
   var sample = both[1].rows.length;
-  setOpenCount(items.length);
-  var html = items.map(function (r, i) {
+  var proposals = both[2].rows;
+  setOpenCount(items.length + proposals.length);
+  var html = proposals.map(function (p) { return proposalCard(p); }).join('');
+  if (both[2].failed) {
+    html += '<article class="letter"><small>Proposals</small><p class="body">Mercury could not list the proposals waiting on Approve or Discard. Reload to try again.</p></article>';
+  }
+  html += items.map(function (r, i) {
     return '<article class="letter" data-id="' + esc(r.id) + '">' +
       '<span class="seal" aria-hidden="true">' + (i + 1) + '</span>' +
       '<small>' + esc(r.kind) + '</small>' +
@@ -316,7 +322,42 @@ async function loadAttention() {
   box.innerHTML = html || '<article class="letter calm"><p class="body">Nothing needs you right now.</p></article>';
 }
 
+// A proposal waiting on Approve or Discard, the same choice the Telegram card offers.
+function proposalCard(p) {
+  var lines = (p.changes || []).map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('');
+  if (p.action) lines += '<li>Then run: ' + esc(p.action) + '</li>';
+  return '<article class="letter" data-id="approval-' + esc(p.id) + '">' +
+    '<small>Waiting on you</small>' +
+    (p.instruction ? '<p class="body">' + esc(p.instruction) + '</p>' : '') +
+    '<ul class="body">' + lines + '</ul>' +
+    (p.caveat ? '<p class="meta">' + esc(p.caveat) + '</p>' : '') +
+    '<span class="meta">' + timeTag(p.created_at * 1000, 'relative') + '</span>' +
+    '<div class="btns">' +
+      '<button type="button" class="btn" data-approval-id="' + esc(p.id) + '" data-decision="approve">Approve</button>' +
+      '<button type="button" class="btn secondary" data-approval-id="' + esc(p.id) + '" data-decision="discard">Discard</button>' +
+    '</div></article>';
+}
+
+async function decideProposal(btn) {
+  var card = btn.closest('.letter');
+  var buttons = card.querySelectorAll('[data-approval-id]');
+  var decision = btn.dataset.decision;
+  buttons.forEach(function (b) { b.disabled = true; });
+  try {
+    await fetchJson('/dashboard/api/approvals/' + encodeURIComponent(btn.dataset.approvalId) + '/' + decision, { method: 'POST' });
+    card.classList.add('done');
+    card.querySelector('.btns').innerHTML = '<span class="meta">' + (decision === 'approve' ? 'Approved.' : 'Discarded.') + '</span>';
+    setOpenCount(document.querySelectorAll('#attention .letter[data-id]:not(.done)').length);
+    toast(decision === 'approve' ? 'Approved. Mercury is applying it.' : 'Discarded.');
+  } catch (err) {
+    buttons.forEach(function (b) { b.disabled = false; });
+    toast('That was not applied: ' + (err.message || err) + '. Reload to see what is still waiting.');
+  }
+}
+
 byId('attention').addEventListener('click', async function (e) {
+  var decide = e.target.closest('[data-approval-id]');
+  if (decide) { decideProposal(decide); return; }
   var btn = e.target.closest('[data-complete-id]');
   if (!btn) return;
   var card = btn.closest('.letter');
