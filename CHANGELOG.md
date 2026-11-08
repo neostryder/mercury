@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.2.0] - 2026-11-08
+
 ### Added
 
 - [Visible] [Pipeline] **An unsubscribe skipped as unsafe now offers a semantic block rule next to the sender-domain blacklist entry.** The rule is one plain sentence describing the mail, such as marketing from one company on any sending domain, and it is stored with disposition 550. If the judge drafts nothing usable, or the rule fails the self-test against the flagged message, only the blacklist is offered. Both changes share one Approve/Discard card and apply only on approval. A benign FAILED offers nothing. The Unsubscribe button on Telegram briefs gets the same offer. An instruction that adds a fallback now proposes only the unsubscribe. Rebuild the backend container to pick this up.
