@@ -1,0 +1,64 @@
+name: Push scan backstop
+
+# Deterministic security scans for pull requests. The same scans run locally in the pre-push hook; when that hook already scanned
+# the head commit it posts a "local-push-scan" commit status and this workflow skips every scan step.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  statuses: read
+
+concurrency:
+  group: push-scan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check for a local scan of this commit
+        id: local
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          state=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/status" --jq '[.statuses[] | select(.context == "local-push-scan")][0].state // ""')
+          if [ "$state" = "success" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "The pre-push hook already scanned ${HEAD_SHA}; skipping the CI scan." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.local.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        if: steps.local.outputs.skip != 'true'
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Secrets in the commits this pull request adds (gitleaks, built from main)
+        if: steps.local.outputs.skip != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@master
+          "$(go env GOPATH)/bin/gitleaks" git . --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --no-banner --exit-code 1
+
+      - name: Code scan, including risky high-privilege actions (semgrep, advisory)
+        if: steps.local.outputs.skip != 'true'
+        run: |
+          rules=.github/push-scan/risky-actions.yml
+          args=(--config p/security-audit)
+          if [ -f "$rules" ]; then args+=(--config "$rules"); fi
+          pipx run semgrep scan "${args[@]}" --metrics off --quiet --severity WARNING --severity ERROR --text . | tee semgrep.txt || true
+          { echo "### Semgrep leads (advisory)"; echo; echo '```'; head -c 60000 semgrep.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

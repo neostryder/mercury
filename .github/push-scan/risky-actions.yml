@@ -1,0 +1,61 @@
+rules:
+  - id: risky.js-shell-exec
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Runs a shell or system command (exec, execSync, spawn with shell). Check that the command is built from fixed text or a validated allowlist, and that it needs the privileges it runs with.
+    pattern-either:
+      - pattern: $CP.exec(...)
+      - pattern: $CP.execSync(...)
+      - pattern: exec(...)
+      - pattern: execSync(...)
+      - pattern: '$CP.spawn($C, $A, {..., shell: true, ...})'
+      - pattern: '$CP.spawnSync($C, $A, {..., shell: true, ...})'
+  - id: risky.js-recursive-delete
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Recursive delete. Check the target path is built from a fixed root, is checked to stay inside it, and cannot resolve to an empty or parent path.
+    pattern-either:
+      - pattern: '$FS.rmSync($P, {..., recursive: true, ...})'
+      - pattern: '$FS.rm($P, {..., recursive: true, ...}, ...)'
+      - pattern: '$FS.promises.rm($P, {..., recursive: true, ...})'
+      - pattern: rimraf(...)
+  - id: risky.py-shell-exec
+    languages: [python]
+    severity: WARNING
+    message: Runs a shell or system command. Check the command is fixed text or validated, and that it needs the privileges it runs with.
+    pattern-either:
+      - pattern: os.system(...)
+      - pattern: subprocess.$F(..., shell=True, ...)
+  - id: risky.py-recursive-delete
+    languages: [python]
+    severity: WARNING
+    message: Recursive delete. Check the target path is built from a fixed root and is checked to stay inside it.
+    pattern-either:
+      - pattern: shutil.rmtree(...)
+  - id: risky.bash-destructive-or-elevated
+    languages: [bash]
+    severity: WARNING
+    message: Elevated or destructive shell command. Check for a guard (path check, confirmation, dry run) and that elevation is really needed.
+    pattern-either:
+      - pattern: sudo ...
+      - pattern: rm -rf ...
+      - pattern: rm -fr ...
+      - pattern: chmod -R ...
+      - pattern: chown -R ...
+      - pattern: curl ... | sh
+      - pattern: curl ... | bash
+  - id: risky.go-exec-delete
+    languages: [go]
+    severity: WARNING
+    message: Runs a command or deletes a tree. Check the arguments are fixed or validated and the path is bounded.
+    pattern-either:
+      - pattern: exec.Command(...)
+      - pattern: os.RemoveAll(...)
+  - id: risky.rust-exec-delete
+    languages: [rust]
+    severity: WARNING
+    message: Runs a command or deletes a tree. Check the arguments are fixed or validated and the path is bounded.
+    pattern-either:
+      - pattern: Command::new(...)
+      - pattern: std::fs::remove_dir_all(...)
+      - pattern: fs::remove_dir_all(...)
