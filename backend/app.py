@@ -2667,6 +2667,30 @@ async def accept_message(request: Request, x_mercury_secret: str | None = Header
     return {"ok": True, "delivered": delivered, "reason": None if delivered else "already handled"}
 
 
+@app.get("/approvals/pending")
+async def pending_approvals(x_mercury_secret: str | None = Header(None)):
+    """Called by the Worker dashboard. Lists the proposals that wait on Approve
+    or Discard, so a broken Telegram relay never leaves one stuck."""
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {"ok": True, "proposals": telegram_approvals.pending_proposals()}
+
+
+@app.post("/approvals/{brief_id}/{decision}")
+async def decide_approval(
+    brief_id: str, decision: str, x_mercury_secret: str | None = Header(None)
+):
+    """Called by the Worker dashboard's Approve and Discard buttons. Runs the
+    same code as the Telegram buttons; a proposal already handled gets a 409."""
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if decision not in ("approve", "discard"):
+        raise HTTPException(status_code=404, detail="unknown decision")
+    if not await telegram_approvals.resolve_proposal(brief_id, decision):
+        raise HTTPException(status_code=409, detail="already handled or not found")
+    return {"ok": True, "decision": decision}
+
+
 @app.post("/rules/propose")
 async def propose_rule(request: Request, x_mercury_secret: str | None = Header(None)):
     """Called by the Thunderbird extension when a message is flagged with a

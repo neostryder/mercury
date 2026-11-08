@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Pipeline] **The dashboard's Briefing page lists every proposal waiting on Approve or Discard, with Approve and Discard buttons that work when the Telegram relay plugin stops forwarding taps.** Before this page, a proposal stayed stuck until the relay was fixed. The page shows the same list as the Telegram cards. Each card shows the instruction that started the proposal, the sender list entries and semantic rules it would add, any action that would run after approval, and how long ago it was proposed. The buttons run the same code as the Telegram buttons, so approving on the page adds the same changes and runs the same action. A proposal already decided in Telegram or on the page is refused with a message and does not run twice. The page sits behind the dashboard's existing Cloudflare Access sign-in. The Worker adds the backend's shared secret, and the secret never reaches the browser. The Open count on the Briefing page now includes waiting proposals. To pick this up, pull and rebuild the backend container, then run npm run deploy in worker/.
+
 ## [1.2.1] - 2026-11-08
 
 ### Added

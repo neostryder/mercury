@@ -1028,6 +1028,44 @@ class TelegramRelayTests(unittest.TestCase):
         fake_telegram.handle_relayed_update.assert_not_awaited()
 
 
+class WebApprovalEndpointTests(unittest.TestCase):
+    def test_pending_list_needs_the_shared_secret(self):
+        with self.assertRaises(app.HTTPException) as caught:
+            asyncio.run(app.pending_approvals("wrong-secret"))
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_pending_list_returns_the_proposals(self):
+        fake = SimpleNamespace(pending_proposals=lambda: [{"id": "b1"}])
+        with patch.object(app, "telegram_approvals", fake):
+            response = asyncio.run(app.pending_approvals("test-secret"))
+        self.assertEqual(response, {"ok": True, "proposals": [{"id": "b1"}]})
+
+    def test_decision_runs_the_approval_and_reports_it(self):
+        fake = SimpleNamespace(resolve_proposal=AsyncMock(return_value=True))
+        with patch.object(app, "telegram_approvals", fake):
+            response = asyncio.run(app.decide_approval("b1", "approve", "test-secret"))
+        self.assertEqual(response, {"ok": True, "decision": "approve"})
+        fake.resolve_proposal.assert_awaited_once_with("b1", "approve")
+
+    def test_decision_on_a_handled_proposal_is_a_conflict(self):
+        fake = SimpleNamespace(resolve_proposal=AsyncMock(return_value=False))
+        with patch.object(app, "telegram_approvals", fake):
+            with self.assertRaises(app.HTTPException) as caught:
+                asyncio.run(app.decide_approval("b1", "discard", "test-secret"))
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_decision_refuses_a_wrong_secret_and_an_unknown_decision(self):
+        fake = SimpleNamespace(resolve_proposal=AsyncMock(return_value=True))
+        with patch.object(app, "telegram_approvals", fake):
+            with self.assertRaises(app.HTTPException) as caught:
+                asyncio.run(app.decide_approval("b1", "approve", "wrong-secret"))
+            self.assertEqual(caught.exception.status_code, 403)
+            with self.assertRaises(app.HTTPException) as caught:
+                asyncio.run(app.decide_approval("b1", "maybe", "test-secret"))
+            self.assertEqual(caught.exception.status_code, 404)
+        fake.resolve_proposal.assert_not_awaited()
+
+
 class UnsubscribeRouteExtractionTests(unittest.TestCase):
     """A sender whose plain-text alternative is a link-stripped rendering of
     the HTML leaves the word "Unsubscribe" and no URL, so the route has to be
