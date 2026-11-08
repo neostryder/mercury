@@ -166,6 +166,16 @@ class WebApprovalTests(unittest.TestCase):
         self.assertEqual(pending[0]["instruction"], "Block this sender")
         self.assertIn("spam.example", pending[0]["changes"][0])
 
+    def test_marks_a_proposal_that_holds_a_semantic_rule(self):
+        self.advance.return_value = {**NO_OP_RESULT, "changes": [
+            self.CHANGE, {"kind": "semantic_rule", "disposition": "550", "rule": "The message is a recipe newsletter."}]}
+        self._propose()
+        self.assertTrue(self.telegram.pending_proposals()[0]["has_rule"])
+
+    def test_a_blacklist_only_proposal_is_not_previewable(self):
+        self._propose()
+        self.assertFalse(self.telegram.pending_proposals()[0]["has_rule"])
+
     def test_lists_nothing_when_no_proposal_waits(self):
         self.assertEqual(self.telegram.pending_proposals(), [])
 

@@ -2428,5 +2428,105 @@ class JudgeReplyParsingTests(unittest.TestCase):
         self.assertEqual((result["verdict"], result["disposition"]), ("UNSURE", "250"))
 
 
+class RulePreviewTests(unittest.TestCase):
+    CHANGE = {"kind": "semantic_rule", "disposition": "550",
+              "rule": "The message is a recipe newsletter."}
+
+    def setUp(self):
+        self.original = app.structured_judge
+        self.policy = patch.object(app.policy_store, "load",
+                                   return_value={"semantic_rules": dict(STRUCTURED_RULES)})
+        self.policy.start()
+
+    def tearDown(self):
+        self.policy.stop()
+        app.structured_judge = self.original
+
+    def _judge(self, caught_words, confidence=0.9):
+        async def match_rule(content, rules):
+            hit = any(word in content for word in caught_words)
+            return {"matched_rule": {"choice": "r550_1" if hit else "none", "confidence": confidence},
+                    "rule_ids": {"r550_0": "550", "r550_1": "550"}}
+        app.structured_judge = SimpleNamespace(match_rule=match_rule)
+
+    def _preview(self, messages):
+        return asyncio.run(app._preview_rule_matches(self.CHANGE, messages))
+
+    def test_lists_only_the_messages_the_new_rule_decides(self):
+        self._judge(["recipe"])
+        result = self._preview([
+            {"id": 1, "subject": "Weekly recipes", "from_domain": "a.example", "content": "ten recipe ideas"},
+            {"id": 2, "subject": "Invoice", "from_domain": "b.example", "content": "payment due"},
+        ])
+        self.assertEqual([m["id"] for m in result["caught"]], [1])
+        self.assertEqual((result["checked"], result["unanswered"]), (2, 0))
+
+    def test_a_weak_match_does_not_count_as_caught(self):
+        self._judge(["recipe"], confidence=0.1)
+        result = self._preview([{"id": 1, "subject": "s", "from_domain": "a", "content": "recipe"}])
+        self.assertEqual(result["caught"], [])
+
+    def test_empty_content_and_judge_failures_are_counted_as_unanswered(self):
+        async def broken(content, rules):
+            raise RuntimeError("down")
+        app.structured_judge = SimpleNamespace(match_rule=broken)
+        result = self._preview([
+            {"id": 1, "subject": "s", "from_domain": "a", "content": "recipe"},
+            {"id": 2, "subject": "s", "from_domain": "a", "content": ""},
+        ])
+        self.assertEqual((result["checked"], result["unanswered"], result["caught"]), (2, 2, []))
+
+    def test_only_the_newest_messages_up_to_the_cap_are_checked(self):
+        self._judge(["recipe"])
+        many = [{"id": i, "subject": "s", "from_domain": "a", "content": "recipe"}
+                for i in range(app.PREVIEW_MAX_MESSAGES + 10)]
+        self.assertEqual(self._preview(many)["checked"], app.PREVIEW_MAX_MESSAGES)
+
+    def test_reports_failure_when_the_judge_is_off(self):
+        app.structured_judge = None
+        self.assertFalse(self._preview([{"id": 1, "content": "x"}])["ok"])
+
+
+class PreviewEndpointTests(unittest.TestCase):
+    RULE = {"kind": "semantic_rule", "disposition": "550", "rule": "The message is a recipe newsletter."}
+
+    def _call(self, brief, body, secret="test-secret"):
+        store = SimpleNamespace(get_brief=lambda brief_id: brief)
+        with patch.object(app, "approval_store", store):
+            return asyncio.run(app.preview_approval("b1", FakeRequest(body), secret))
+
+    def test_needs_the_shared_secret(self):
+        with self.assertRaises(app.HTTPException) as caught:
+            self._call({"status": "open", "changes": [self.RULE]}, {"messages": []}, secret="wrong")
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_a_handled_or_missing_proposal_is_a_conflict(self):
+        for brief in (None, {"status": "resolved", "changes": [self.RULE]}):
+            with self.assertRaises(app.HTTPException) as caught:
+                self._call(brief, {"messages": []})
+            self.assertEqual(caught.exception.status_code, 409)
+
+    def test_a_proposal_without_a_semantic_rule_has_nothing_to_preview(self):
+        blacklist = {"kind": "sender_list", "list": "blacklist", "selector": "a.example"}
+        with self.assertRaises(app.HTTPException) as caught:
+            self._call({"status": "open", "changes": [blacklist]}, {"messages": []})
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_returns_one_preview_per_semantic_rule(self):
+        fake = AsyncMock(return_value={"ok": True, "rule": self.RULE["rule"], "checked": 1,
+                                       "unanswered": 0, "caught": []})
+        with patch.object(app, "_preview_rule_matches", fake):
+            response = self._call({"status": "open", "changes": [self.RULE]}, {"messages": [{"id": 1}]})
+        self.assertTrue(response["ok"])
+        self.assertEqual(len(response["previews"]), 1)
+
+    def test_a_judge_that_is_off_is_a_503(self):
+        fake = AsyncMock(return_value={"ok": False, "error": "the structured judge is off"})
+        with patch.object(app, "_preview_rule_matches", fake):
+            with self.assertRaises(app.HTTPException) as caught:
+                self._call({"status": "open", "changes": [self.RULE]}, {"messages": []})
+        self.assertEqual(caught.exception.status_code, 503)
+
+
 if __name__ == "__main__":
     unittest.main()

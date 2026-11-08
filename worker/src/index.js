@@ -565,6 +565,7 @@ async function handleDashboard(pathname, search, env, request) {
 
   const messageDetailMatch = pathname.match(/^\/dashboard\/api\/messages\/(\d+)$/);
   const actionItemCompleteMatch = pathname.match(/^\/dashboard\/api\/action-items\/(\d+)\/complete$/);
+  const approvalPreviewMatch = pathname.match(/^\/dashboard\/api\/approvals\/([A-Za-z0-9_-]{1,64})\/preview$/);
   const approvalDecisionMatch = pathname.match(/^\/dashboard\/api\/approvals\/([A-Za-z0-9_-]{1,64})\/(approve|discard)$/);
   const readBody = async () => {
     try {
@@ -854,6 +855,16 @@ async function handleDashboard(pathname, search, env, request) {
       return backendApprovalCall('GET', '/approvals/pending', env);
     }
 
+    if (approvalPreviewMatch) {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      // The newest saved messages, so the backend can try a proposed rule on them.
+      const recent = await env.MERCURY_LOG.prepare(
+        "SELECT id, from_domain, subject, full_content AS content FROM messages WHERE full_content IS NOT NULL AND full_content != '' ORDER BY id DESC LIMIT 25"
+      ).all();
+      return backendApprovalCall('POST', `/approvals/${approvalPreviewMatch[1]}/preview`, env,
+        JSON.stringify({ messages: recent.results ?? [] }));
+    }
+
     if (approvalDecisionMatch) {
       if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
       const [, briefId, decision] = approvalDecisionMatch;
@@ -1131,12 +1142,15 @@ async function deliverAccepted(env, messageId) {
 // The Approve page's two calls to the backend. The dashboard is Access-gated and
 // the Origin check above covers a POST; this hop adds the backend's shared
 // secret, which never reaches browser JavaScript.
-async function backendApprovalCall(method, path, env) {
+async function backendApprovalCall(method, path, env, body) {
   let resp;
   try {
     resp = await fetch(`${env.BACKEND_BASE_URL}${path}`, {
       method,
-      headers: { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+      headers: body === undefined
+        ? { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET }
+        : { 'Content-Type': 'application/json', 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+      body,
     });
   } catch (err) {
     return new Response(JSON.stringify({ ok: false, error: 'backend unreachable' }), {

@@ -961,6 +961,60 @@ async def _rule_self_test(change: dict, message_context: str) -> str | None:
             "matched it. {}".format(RULE_ADVICE))
 
 
+PREVIEW_CONCURRENCY = 6
+PREVIEW_MAX_MESSAGES = 40
+
+
+async def _preview_rule_matches(change: dict, messages: list[dict]) -> dict:
+    """Which of these saved messages would the proposed rule decide?
+
+    Each message is asked the live pipeline's rule-match question with the rule
+    added to the existing ones, the same trial _rule_self_test runs on the one
+    message a brief came from. A message counts as caught only when the new rule
+    is the one chosen at or above the confidence a rule needs to decide alone.
+    """
+    if structured_judge is None:
+        return {"ok": False, "error": "the structured judge is off"}
+    try:
+        current = policy_store.load()["semantic_rules"]
+    except Exception:
+        return {"ok": False, "error": "the rules could not be read"}
+    trial = {d: list(current.get(d, [])) for d in ("550", "421", "250")}
+    bucket = trial.setdefault(change["disposition"], [])
+    bucket.append(change["rule"])
+    new_id = "r{}_{}".format(change["disposition"], len(bucket) - 1)
+    threshold = verdict_policy.RULE_CONFIDENCE
+    gate = asyncio.Semaphore(PREVIEW_CONCURRENCY)
+
+    async def check(message: dict):
+        content = (message.get("content") or "").strip()
+        if not content:
+            return None
+        async with gate:
+            try:
+                tested = await structured_judge.match_rule(content[:6000], trial)
+            except Exception:
+                return None
+        return tested
+
+    batch = [m for m in messages if isinstance(m, dict)][:PREVIEW_MAX_MESSAGES]
+    results = await asyncio.gather(*(check(m) for m in batch))
+    caught, unanswered = [], 0
+    for message, tested in zip(batch, results):
+        if not tested:
+            unanswered += 1
+            continue
+        answer = tested["matched_rule"]
+        if answer.get("choice") == new_id and answer.get("confidence", 0.0) >= threshold:
+            caught.append({
+                "id": message.get("id"),
+                "subject": message.get("subject"),
+                "from_domain": message.get("from_domain"),
+                "confidence": round(answer.get("confidence", 0.0), 2),
+            })
+    return {"ok": True, "rule": change["rule"], "checked": len(batch), "unanswered": unanswered, "caught": caught}
+
+
 async def dispatch_action(
     action: str,
     message_context: str,
@@ -2674,6 +2728,33 @@ async def pending_approvals(x_mercury_secret: str | None = Header(None)):
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
     return {"ok": True, "proposals": telegram_approvals.pending_proposals()}
+
+
+@app.post("/approvals/{brief_id}/preview")
+async def preview_approval(
+    brief_id: str, request: Request, x_mercury_secret: str | None = Header(None)
+):
+    """Called by the Worker dashboard's Preview button. The Worker sends recent
+    saved messages; each semantic rule the proposal holds is tried on them, so
+    the owner sees what a rule would catch before approving it. Nothing is
+    saved and nothing is delivered."""
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    brief = approval_store.get_brief(brief_id)
+    if not brief or brief["status"] != "open":
+        raise HTTPException(status_code=409, detail="already handled or not found")
+    rules = [c for c in brief.get("changes", []) if c.get("kind") == "semantic_rule"]
+    if not rules:
+        raise HTTPException(status_code=400, detail="this proposal holds no semantic rule")
+    payload = await request.json()
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=400, detail="missing messages")
+    previews = [await _preview_rule_matches(change, messages) for change in rules]
+    failed = next((p for p in previews if not p.get("ok")), None)
+    if failed:
+        raise HTTPException(status_code=503, detail=failed["error"])
+    return {"ok": True, "previews": previews}
 
 
 @app.post("/approvals/{brief_id}/{decision}")

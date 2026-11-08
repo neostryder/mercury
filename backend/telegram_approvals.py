@@ -436,6 +436,7 @@ class TelegramApprovals:
                 "changes": [self._change_text(change) for change in brief.get("changes", [])],
                 "action": brief.get("action"),
                 "caveat": brief.get("caveat"),
+                "has_rule": any(c.get("kind") == "semantic_rule" for c in brief.get("changes", [])),
             })
         return pending
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Pipeline] **Proposal cards on the dashboard's Briefing page that hold a semantic rule now have a Preview the rule button, which shows what the rule would catch among recent saved messages.** Pressing the button runs the rule against the 25 newest saved messages, and the card then shows how many the rule would catch and lists each one by sender domain and subject. Each message gets the same rule-match question the live pipeline asks, with the proposed rule added to the existing rules. A message counts as caught only when the new rule is the one chosen at or above the confidence a rule needs to decide alone. Messages the judge could not answer are counted separately and shown as "could not be checked". A preview saves nothing, delivers nothing, and changes no message. Each press costs one judge call per saved message, up to 25, so the preview runs only when the button is pressed and takes up to about a minute. The preview reads the saved copy of each message and skips messages that have no saved copy. The preview also needs the structured judge turned on. If the structured judge is off, the card says the preview did not run. To pick this up, pull and rebuild the backend container, then run npm run deploy in worker/.
+
 ## [1.3.0] - 2026-11-08
 
 ### Added
