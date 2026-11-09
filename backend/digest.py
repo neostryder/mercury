@@ -291,6 +291,37 @@ _CORRESPONDENCE_CLAIM_INFLECTIONS = (
     ("correlate", r"\bcorrelat(?:e|es|ed|ing)\b"),
 )
 
+# The prompt also forbids a trend, a cause, and maintenance advice, so each of
+# those gets a matcher of its own. The window has no earlier window to compare
+# with, so any change-over-time wording is unsupported.
+_TREND_CLAIM_PATTERNS = (
+    ("trend", r"\b(?:trend|trends|trending|trended)\b"),
+    ("spike", r"\b(?:spike|spikes|spiked|spiking|surge|surges|surged|surging)\b"),
+    ("drop", r"\b(?:drop|drops|dropped|dropping|decline|declines|declined|declining)\b"),
+    ("rise", r"\b(?:rise|rises|rose|risen|rising|climb|climbs|climbed|climbing)\b"),
+    ("increase", r"\b(?:increase|increases|increased|increasing|decrease|decreases|decreased|decreasing)\b"),
+    ("change", r"\b(?:jump|jumps|jumped|grew|grow|grows|growth|fell|fall|falls|falling|uptick|downturn)\b"),
+    ("earlier window", r"\b(?:yesterday|previous day|prior day|earlier window|last week|baseline)\b"),
+    ("than usual", r"\b(?:than usual|than normal|than typical|than before|than earlier|up from|down from)\b"),
+    ("usual", r"\b(?:usually|normally|typically|as usual)\b"),
+)
+
+_CAUSE_CLAIM_PATTERNS = (
+    ("reason", r"\b(?:the reasons?|reasons? for|reasons? why|why)\b"),
+    ("stems from", r"\b(?:stem|stems|stemmed|stemming)\s+from\b"),
+    ("attributed to", r"\b(?:attributable|attributed|attributing)\s+to\b"),
+    ("result of", r"\b(?:resulting from|results? from|result of|owing to|on account of)\b"),
+    ("behind", r"\b(?:behind the|underlying)\b"),
+)
+
+_ADVICE_CLAIM_PATTERNS = (
+    ("should", r"\b(?:should|ought to|must|needs? to|need to be)\b"),
+    ("recommend", r"\b(?:recommend|recommends|recommended|recommendation|suggest|suggests|suggested|advise|advised|advisable)\b"),
+    ("consider", r"\b(?:consider|considering|you may want|you might want|you could|you can|it would be (?:wise|worth|good|prudent))\b"),
+    ("worth", r"\bworth\s+(?:reviewing|checking|pruning|auditing|looking|revisiting|investigating|a look|a review)\b"),
+    ("cleanup", r"\b(?:prune|pruning|prunes|pruned|clean up|cleanup|clean-up|tidy|tidying|consolidate|consolidating|declutter)\b"),
+)
+
 # A sentence that names none of these is not making a claim about this
 # window's counts, so no claim term in it is a violation.
 _COUNTER_NOUNS = (
@@ -329,18 +360,52 @@ def _mentions_a_counter(sentence: str) -> bool:
     return any(noun in lowered for noun in _COUNTER_NOUNS)
 
 
-def _claim_violations(sentence: str) -> list[str]:
+def _stat_numbers(stats: dict) -> frozenset[str]:
+    """The figures the digest already shows, as digit strings. 0 and 1 are left
+    out: they turn up in honest prose ("one sender", "0 urgent") too often to
+    mean a restatement."""
+    summary = stats.get("summary") or {}
+    values: list[object] = []
+    values.extend((summary.get("last24h") or {}).values())
+    values.append((summary.get("last7d") or {}).get("ruleChanges"))
+    values.append(stats.get("rule_count"))
+    values.extend((stats.get("verdict_counts") or {}).values())
+    values.extend((stats.get("category_counts") or {}).values())
+    values.append(len(stats.get("action_required") or []))
+    values.append(len(stats.get("recent_messages") or []))
+    values.append(len(stats.get("hard_bounces") or []))
+    return frozenset(
+        str(v) for v in values if isinstance(v, int) and not isinstance(v, bool) and v >= 2
+    )
+
+
+def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset()) -> list[str]:
     """The claim classes this sentence makes, if any.
 
     A rank claim compares two counters against each other; a correspondence
     claim asserts a relationship between counters the statistics do not
-    relate. Both are unreadable as prose, so they are matched on their
-    connectives rather than parsed out of the sentence.
+    relate; a trend, cause, or advice claim goes beyond a single window; a
+    restatement repeats two or more of the figures the tables already show.
+    All are unreadable as prose, so they are matched on their connectives and
+    figures rather than parsed out of the sentence.
     """
     if not _mentions_a_counter(sentence):
         return []
     lowered = sentence.lower()
     found: list[str] = []
+    for kind, patterns in (
+        ("trend claim", _TREND_CLAIM_PATTERNS),
+        ("cause claim", _CAUSE_CLAIM_PATTERNS),
+        ("advice", _ADVICE_CLAIM_PATTERNS),
+    ):
+        for label, pattern in patterns:
+            if re.search(pattern, lowered):
+                found.append(f"{kind} ({label!r})")
+                break
+    if stat_numbers:
+        repeated = {n for n in re.findall(r"\b\d+\b", lowered) if n in stat_numbers}
+        if len(repeated) >= 2:
+            found.append("restatement of the tables")
     for term in _RANK_CLAIM_TERMS:
         if not re.search(r"\b" + re.escape(term) + r"\b", lowered):
             continue
@@ -367,12 +432,14 @@ def _sentences(paragraph: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", paragraph) if s.strip()]
 
 
-def _strip_claim_violations(paragraph: str) -> tuple[str, list[str]]:
+def _strip_claim_violations(
+    paragraph: str, stat_numbers: frozenset[str] = frozenset()
+) -> tuple[str, list[str]]:
     """Drop the sentences that make an unsupported claim; keep the rest."""
     kept: list[str] = []
     violations: list[str] = []
     for sentence in _sentences(paragraph):
-        found = _claim_violations(sentence)
+        found = _claim_violations(sentence, stat_numbers)
         if found:
             violations.extend(found)
         else:
@@ -452,7 +519,7 @@ Statistics:
     except Exception as exc:
         return f"Insights unavailable this run ({type(exc).__name__}: {exc})."
 
-    cleaned, violations = _strip_claim_violations(paragraph)
+    cleaned, violations = _strip_claim_violations(paragraph, _stat_numbers(stats))
     if violations:
         logger.warning(
             "Daily digest: dropped %d claim sentence(s) from the insights "
