@@ -16,7 +16,8 @@ jobs:
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'dependabot/docker')
     runs-on: ubuntu-latest
     steps:
       - name: Merge when every check has passed
