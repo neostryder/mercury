@@ -240,6 +240,69 @@ class DigestInsightOutputTests(unittest.TestCase):
         self.assertEqual(out, text)
 
 
+class DigestInsightRuleCoverageTests(unittest.TestCase):
+    """Every rule in the insights prompt has a matcher: trend, cause, advice,
+    and restatement as well as ranking and correspondence."""
+
+    _stats = DigestInsightOutputTests._stats
+    _paragraph = DigestInsightOutputTests._paragraph
+
+    def test_a_trend_claim_is_removed(self):
+        for sentence in (
+            "Hard bounces spiked in this window.",
+            "The message count dropped compared with yesterday.",
+            "Spam verdicts rose in this window.",
+            "Actions taken were up from the baseline.",
+            "There was an uptick in sender activity.",
+            "Mail volume is trending toward fewer messages.",
+        ):
+            out = self._paragraph(sentence + " The rest of the window was uneventful.")
+            self.assertEqual(out, "The rest of the window was uneventful.", sentence)
+
+    def test_a_cause_claim_is_removed(self):
+        for sentence in (
+            "The reason for the hard bounces is a stale sender list.",
+            "The bounce count stems from a few dead domains.",
+            "Spam messages are attributable to one sender.",
+            "That is why the filter acted on ten messages.",
+        ):
+            out = self._paragraph(sentence + " The rest of the window was uneventful.")
+            self.assertEqual(out, "The rest of the window was uneventful.", sentence)
+
+    def test_advice_is_removed(self):
+        for sentence in (
+            "You should review the standing rules.",
+            "It is worth reviewing the sender list.",
+            "Consider pruning the rule list.",
+            "I recommend a cleanup of the filters.",
+        ):
+            out = self._paragraph(sentence + " The rest of the window was uneventful.")
+            self.assertEqual(out, "The rest of the window was uneventful.", sentence)
+
+    def test_a_restatement_of_the_tables_is_removed(self):
+        out = self._paragraph(
+            "The window held 18 messages, 7 hard bounces, and 10 actions. "
+            "Two senders accounted for the new rules."
+        )
+        self.assertEqual(out, "Two senders accounted for the new rules.")
+
+    def test_a_sentence_with_one_figure_is_kept(self):
+        text = "Every one of the 18 messages was read; nothing else stood out."
+        self.assertEqual(self._paragraph(text), text)
+
+    def test_small_numbers_are_not_a_restatement(self):
+        text = "One sender and zero urgent alerts made the window uneventful."
+        self.assertEqual(self._paragraph(text), text)
+
+    def test_an_honest_nothing_stands_out_sentence_survives(self):
+        text = "Nothing unusual stands out in this window."
+        self.assertEqual(self._paragraph(text), text)
+
+    def test_a_trend_word_without_a_counter_is_not_scoped_in(self):
+        text = "The weather was nice and the coffee dropped on the floor."
+        self.assertEqual(self._paragraph(text), text)
+
+
 class DigestInsightPromptTests(unittest.TestCase):
     """The insights prompt must not invite a trend, a cause, or a directive."""
 
