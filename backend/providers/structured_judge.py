@@ -51,6 +51,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from providers.cogitator_gateway import gateway_endpoints
+
 ENDPOINT = os.environ.get("STRUCTURED_JUDGE_URL",
                           "https://api.typesafe.ai/v1/systemone")
 MODEL = os.environ.get("STRUCTURED_JUDGE_MODEL", "jev-preview")
@@ -169,8 +171,12 @@ class EndpointPool:
 
     def __init__(self, endpoints: list[str], probe_timeout: float = 0.6,
                  busy_ttl: float = 5.0, down_ttl: float = 30.0, clock=time.monotonic,
-                 transport: httpx.AsyncBaseTransport | None = None):
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 endpoint_headers: dict[str, dict[str, str]] | None = None):
         self.endpoints = endpoints
+        # Gateway endpoints carry their own key and are not probed: the gateway
+        # relays to a backup node itself, and its own /load says nothing about the service.
+        self.endpoint_headers = endpoint_headers or {}
         self.transport = transport
         self.probe_timeout, self.busy_ttl, self.down_ttl = probe_timeout, busy_ttl, down_ttl
         self.clock = clock
@@ -192,6 +198,8 @@ class EndpointPool:
         self._skip[endpoint] = self.clock() + ttl
 
     async def _usable(self, client: httpx.AsyncClient, endpoint: str) -> bool:
+        if endpoint in self.endpoint_headers:
+            return True
         try:
             r = await client.get(self._base(endpoint) + "/load", timeout=self.probe_timeout)
         except Exception:                                     # noqa: BLE001
@@ -216,12 +224,16 @@ class EndpointPool:
             for endpoint in self.endpoints:
                 if self._skipped(endpoint) or not await self._usable(client, endpoint):
                     continue
+                gateway = endpoint in self.endpoint_headers
                 try:
-                    r = await client.post(endpoint, headers=headers, json=payload)
+                    r = await client.post(endpoint, headers={**headers, **self.endpoint_headers.get(endpoint, {})},
+                                          json=payload)
                 except Exception:                             # noqa: BLE001
                     self._mark(endpoint, self.down_ttl)
                     continue
-                if r.status_code >= 500:
+                if r.status_code >= 500 or (gateway and r.status_code in (401, 403, 404)):
+                    # A gateway without the service yet (404) or that refuses the key
+                    # (401, 403) is a setup gap: the next endpoint still gets its turn.
                     self._mark(endpoint, self.busy_ttl)
                     continue
                 if 400 <= r.status_code < 500:
@@ -453,6 +465,12 @@ def get_laya_judge() -> StructuredJudge | None:
     urls = [u.strip() for u in os.environ.get("LAYA_URL", "").split(",") if u.strip()]
     if not urls:
         return None
+    # The Cogitator gateways first (they fail over between nodes), then the
+    # direct engine ports as the last fallback. The gateway path mirrors the
+    # engine's: <base>/app/laya/v1/systemone.
+    gateway = gateway_endpoints("laya", urlsplit(urls[0]).path or "/v1/systemone")
+    headers = {url: hdrs for url, hdrs in gateway}
     return SystemOneStructuredJudge(
         None, timeout=float(os.environ.get("LAYA_TIMEOUT", "20")),
-        endpoint=urls[0], name="laya", pool=EndpointPool(urls))
+        endpoint=(gateway[0][0] if gateway else urls[0]), name="laya",
+        pool=EndpointPool([url for url, _ in gateway] + urls, endpoint_headers=headers))

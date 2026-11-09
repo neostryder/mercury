@@ -13,6 +13,9 @@ services:
       - MERCURY_RULES_LEDGER_PATH=/data/rules_ledger.json
       - MERCURY_IDENTITIES_PATH=/data/identities.json
       - PROMPT_INJECTION_CLASSIFIER_URL=${PROMPT_INJECTION_CLASSIFIER_URL}
+      # Cogitator gateways tried before the direct classifier and Laya ports (see providers/cogitator_gateway.py).
+      - COGITATOR_GATEWAY_URLS=${COGITATOR_GATEWAY_URLS:-}
+      - COGITATOR_MERCURY_KEY=${COGITATOR_MERCURY_KEY:-}
       - AGENT_GATEWAY_URL=${AGENT_GATEWAY_URL}
       - AGENT_GATEWAY_SECRET=${AGENT_GATEWAY_SECRET}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
