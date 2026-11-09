@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Pipeline] **Mercury reaches the prompt-injection classifier and Laya through the Cogitator gateway, which fails over between nodes.** Both checks used to call one engine port on one node (port 8009 for the classifier, 8010 for Laya), and on 2026-11-09 the classifier check failed with a connection error when Bilbo's classifier did not come back after a restart. COGITATOR_GATEWAY_URLS lists the gateway base URLs in the order to try them, and COGITATOR_MERCURY_KEY is sent as a bearer token. A connection error, a timeout, a 5xx answer, or a 401, 403, or 404 from a gateway moves to the next endpoint. The direct URLs in PROMPT_INJECTION_CLASSIFIER_URL and LAYA_URL stay last in the list, and PROMPT_INJECTION_CLASSIFIER_URL now accepts several comma-separated URLs. A failed endpoint is skipped for 30 seconds unless every endpoint has failed. When every endpoint fails, the classifier raises the last error and the same alert fires. With either setting empty, only the direct URLs are used. To pick this up, set both values in the backend .env, then pull and rebuild the backend container.
+
 ## [1.4.0] - 2026-11-08
 
 ### Added
