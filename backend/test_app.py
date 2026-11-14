@@ -52,6 +52,8 @@ except ModuleNotFoundError:
     fastapi_stub.HTTPException = HTTPException
     fastapi_stub.Request = Request
     responses_stub.JSONResponse = JSONResponse
+    responses_stub.PlainTextResponse = lambda content: SimpleNamespace(
+        body=content.encode("utf-8"), media_type="text/plain")
     sys.modules["fastapi"] = fastapi_stub
     sys.modules["fastapi.responses"] = responses_stub
 
@@ -81,6 +83,7 @@ from approvals import ApprovalStore
 from providers.judge import JudgeNoAnswer, JudgeReportedError
 from credential_prompts import CredentialPromptStore
 from dedup import IngestDedupStore
+from training_store import TrainingStore, message_key
 from filtering import FilteringPolicyStore, empty_policy
 from telegram_approvals import TelegramApprovals
 
@@ -123,9 +126,11 @@ class AppTests(unittest.TestCase):
         self.original_judge = app.judge
         self.original_notifier = app.notifier
         self.original_dedup_store = app.dedup_store
+        self.original_training_store = app.training_store
         self.original_delivery_enabled = app.mail_delivery.DELIVER_ACCEPTED_MAIL
         app.policy_store = self.store
         app.dedup_store = IngestDedupStore(self.temp_dir / "ingest_dedup.json")
+        app.training_store = TrainingStore(self.temp_dir / "training_rows.json")
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = False
 
     def tearDown(self):
@@ -134,6 +139,7 @@ class AppTests(unittest.TestCase):
         app.judge = self.original_judge
         app.notifier = self.original_notifier
         app.dedup_store = self.original_dedup_store
+        app.training_store = self.original_training_store
         app.mail_delivery.DELIVER_ACCEPTED_MAIL = self.original_delivery_enabled
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -153,6 +159,74 @@ class AppTests(unittest.TestCase):
         if authenticated:
             payload["dmarc"] = {"status": {"result": "pass"}}
         return payload
+
+    def test_training_capture_keeps_only_enforced_held_and_rejected_messages(self):
+        for disposition, shadow, expected in (("421", False, 1), ("550", False, 1),
+                                               ("250", False, 0), ("550", True, 0)):
+            with self.subTest(disposition=disposition, shadow=shadow):
+                app.dedup_store.path.unlink(missing_ok=True)
+                app.training_store.path.unlink(missing_ok=True)
+                payload = self._payload()
+                payload["text"] = "Private recipient text " * 500
+                facts = {"sender_domain": "example.com", "detail": "private recipient address"}
+                result = {"verdict": "PHISH", "disposition": disposition, "category": "PHISHING",
+                          "alert": "NONE", "triggered_rule": None, "reasoning": "Review required",
+                          "_structured": _structured()}
+                judge_email = AsyncMock(return_value=result)
+                with patch.object(app, "SHADOW_MODE", shadow), \
+                        patch.object(app, "judge_email", judge_email), \
+                        patch.object(app.sender_facts, "describe", return_value=facts), \
+                        patch.object(app, "redact", side_effect=lambda text: text.replace("Private recipient", "[REDACTED]")), \
+                        patch.object(app, "classifier", SimpleNamespace(check=AsyncMock(return_value={"label": "SAFE", "score": 0.0}))), \
+                        patch.object(app.event_log, "log_event") as log_event, \
+                        patch.object(app, "approval_store", ApprovalStore(self.temp_dir / "held.json")):
+                    response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+                self.assertEqual(response.status_code, 250 if shadow else int(disposition))
+                rows = app.training_store.rows()
+                self.assertEqual(len(rows), expected)
+                self.assertNotIn("_structured", result)
+                self.assertNotIn("_structured", json.dumps([call.args for call in log_event.call_args_list]))
+                if rows:
+                    row, = rows
+                    message = next(call.args[1] for call in log_event.call_args_list if call.args[0] == "messages")
+                    self.assertEqual(row["key"], message_key(message["received_at"], message["from_domain"], message["subject"]))
+                    self.assertEqual(row["state"]["email"], judge_email.await_args.args[0])
+                    self.assertLessEqual(len(row["state"]["email"]), 6000)
+                    self.assertNotIn("Private recipient", row["state"]["email"])
+                    self.assertNotIn("detail", row["state"]["facts"])
+                    self.assertEqual(row["structured"], _structured())
+
+    def test_deterministic_rejection_keeps_text_without_structured_answers(self):
+        self.store.put_sender("blacklist", "example.com")
+        with patch.object(app.event_log, "log_event"):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+        self.assertEqual(response.status_code, 550)
+        row, = app.training_store.rows()
+        self.assertIsNone(row["structured"])
+        self.assertIn("Your order has shipped.", row["state"]["email"])
+
+    def test_training_capture_failure_does_not_break_ingest_or_log_private_text(self):
+        self.store.put_sender("blacklist", "example.com")
+        with patch.object(app.training_store, "capture", side_effect=OSError("private content")), \
+                patch.object(app.event_log, "log_event") as log_event:
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+        self.assertEqual(response.status_code, 550)
+        failure = next(call.args[1] for call in log_event.call_args_list
+                       if call.args[0] == "admin_log" and call.args[1]["event"] == "training_capture_failed")
+        self.assertEqual(failure["detail"], "OSError")
+        self.assertNotIn("private content", json.dumps(failure))
+
+    def test_training_capture_and_failure_logging_can_both_fail_without_breaking_ingest(self):
+        self.store.put_sender("blacklist", "example.com")
+
+        def log_event(table, fields):
+            if fields.get("event") == "training_capture_failed":
+                raise OSError("logging unavailable")
+
+        with patch.object(app.training_store, "capture", side_effect=OSError("disk full")), \
+                patch.object(app.event_log, "log_event", side_effect=log_event):
+            response = asyncio.run(app.ingest(FakeRequest(self._payload()), "test-secret"))
+        self.assertEqual(response.status_code, 550)
 
     def test_a_deferred_message_that_did_not_page_keeps_a_held_copy(self):
         self.store.put_sender("greylist", "example.com")
@@ -995,6 +1069,147 @@ CAVEAT: NONE""")
         instruction_arg, message_context_arg, _ = fake_telegram.propose_new.call_args[0]
         self.assertEqual(instruction_arg, "bounce this pattern")
         self.assertIn("no message attached", message_context_arg)
+
+
+class TrainingEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = Path(__file__).parent / ".test-training-endpoints"
+        self.temp_dir.mkdir(exist_ok=True)
+        self.addCleanup(shutil.rmtree, self.temp_dir)
+        self.clock = MutableClock()
+        self.store = TrainingStore(self.temp_dir / "rows.json", clock=self.clock)
+        self.policy = FilteringPolicyStore(self.temp_dir / "policy.json")
+        for name, value in (("training_store", self.store), ("policy_store", self.policy)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.identity = {"received_at": "2026-11-14T12:30:00+02:00",
+                         "from_domain": "example.com", "subject": "A subject"}
+
+    def _capture(self, disposition="550", verdict="PHISH", structured=None, subject=None):
+        identity = dict(self.identity)
+        if subject is not None:
+            identity["subject"] = subject
+        self.store.capture(**identity, email="Redacted email", facts={"sender_domain": "example.com"},
+                           structured=structured,
+                           decision={"disposition": disposition, "verdict": verdict,
+                                     "category": "OTHER", "alert": "NONE", "reasoning": "test"})
+
+    def _label(self, verdict="right", correct_disposition=None, **identity):
+        payload = {**self.identity, "verdict": verdict, "correct_disposition": correct_disposition}
+        payload.update(identity)
+        return asyncio.run(app.label_training(FakeRequest(payload), "test-secret"))
+
+    def test_all_training_endpoints_require_the_shared_secret(self):
+        for secret in (None, "incorrect"):
+            for endpoint, args in ((app.label_training, (FakeRequest(self.identity),)),
+                                   (app.training_status, ()), (app.export_training, ())):
+                with self.subTest(endpoint=endpoint.__name__, secret=secret):
+                    with self.assertRaises(app.HTTPException) as caught:
+                        asyncio.run(endpoint(*args, x_mercury_secret=secret))
+                    self.assertEqual(caught.exception.status_code, 403)
+        self.assertFalse(self.store.path.exists())
+
+    def test_missing_row_returns_the_review_flow_reason(self):
+        self.assertEqual(self._label(), {"ok": True, "stored": False,
+                                        "reason": "no training text kept for this message"})
+
+    def test_label_mapping_uses_the_effective_correct_disposition(self):
+        cases = [
+            ("wrong", "250", "550", "PHISH", "PHISH", "LEGIT"),
+            ("wrong", "550", "421", "SPAM", "PHISH", "PHISH"),
+            ("wrong", "550", "421", "PHISH", "SPAM", "SPAM"),
+            ("wrong", "550", "421", "PHISH", None, "SPAM"),
+            ("wrong", "421", "550", "PHISH", "PHISH", "UNSURE"),
+            ("right", None, "250", "PHISH", "PHISH", "LEGIT"),
+            ("right", None, "550", "PHISH", "SPAM", "PHISH"),
+            ("right", None, "550", "SPAM", "PHISH", "SPAM"),
+            ("right", None, "550", "UNSURE", "PHISH", "SPAM"),
+            ("right", None, "421", "PHISH", "PHISH", "UNSURE"),
+        ]
+        for review, correct, disposition, recorded, structured, expected in cases:
+            with self.subTest(review=review, correct=correct, disposition=disposition,
+                              recorded=recorded, structured=structured):
+                self.store.path.unlink(missing_ok=True)
+                self._capture(disposition, recorded, _structured(structured) if structured else None)
+                self.assertEqual(self._label(review, correct), {"ok": True, "stored": True})
+                self.assertEqual(self.store.rows()[0]["label"]["verdict_choice"], expected)
+
+    def test_undo_clears_a_label_and_old_rows_expire(self):
+        self._capture()
+        self._label()
+        self.assertEqual(self._label("undo"), {"ok": True, "stored": True})
+        self.assertIsNone(self.store.rows()[0]["label"])
+        self._label()
+        self.clock.value += 31 * 86400
+        self.assertTrue(self._label("undo")["stored"])
+        self.assertEqual(self.store.rows(), [])
+
+    def test_invalid_label_inputs_are_rejected(self):
+        for fields in ({"verdict": "other"}, {"verdict": "wrong"},
+                       {"correct_disposition": 250}, {"correct_disposition": "500"},
+                       {"received_at": None}, {"subject": None}, {"from_domain": []}):
+            with self.subTest(fields=fields):
+                with self.assertRaises(app.HTTPException) as caught:
+                    self._label(**fields)
+                self.assertEqual(caught.exception.status_code, 400)
+        with self.assertRaises(app.HTTPException) as caught:
+            asyncio.run(app.label_training(FakeRequest([]), "test-secret"))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_status_counts_classes_and_only_unlabeled_expiries(self):
+        self._capture()
+        expiry = self.clock.value + 30 * 86400
+        self._label()
+        self.clock.value += 60
+        self._capture("421", subject="Unlabeled")
+        self.assertEqual(asyncio.run(app.training_status("test-secret")), {
+            "held_rows_kept": 2, "labeled_total": 1,
+            "labeled_by_class": {"LEGIT": 0, "SPAM": 0, "PHISH": 1, "UNSURE": 0},
+            "oldest_expiry": expiry + 60,
+        })
+        self.clock.value += 31 * 86400
+        status = asyncio.run(app.training_status("test-secret"))
+        self.assertEqual(status["held_rows_kept"], 1)
+        self.assertEqual(status["labeled_total"], 1)
+        self.assertIsNone(status["oldest_expiry"])
+
+    def test_export_uses_raw_answers_current_questions_and_utc_timestamps(self):
+        answers = {"verdict": {"choice": "PHISH", "probabilities": {"PHISH": 0.8, "SPAM": 0.2}},
+                   "dangerous": {"noul": 0.9, "confidence": 0.8}}
+        structured = {**_structured(), "answers": answers}
+        self._capture(structured=structured)
+        self._label("wrong", "250")
+        self._capture(subject="No label")
+        self.policy.add_semantic_rule("550", "Reject credential theft")
+        with patch.object(app.SystemOneStructuredJudge, "__init__", side_effect=AssertionError("no client")):
+            response = asyncio.run(app.export_training("test-secret"))
+        self.assertEqual(response.media_type, "text/plain")
+        self.assertTrue(response.body.endswith(b"\n"))
+        row, = [json.loads(line) for line in response.body.decode().splitlines()]
+        self.assertEqual(row, {
+            "id": "mercury-" + message_key(**self.identity)[:16], "pilot": "mercury_screen",
+            "ts": "2026-11-14T10:30:00Z",
+            "state": {"email": "Redacted email", "facts": {"sender_domain": "example.com"}},
+            "questions": app.SystemOneStructuredJudge._questions(
+                self.policy.load()["semantic_rules"], {"label": "SAFE", "score": 0.0}),
+            "jev": {"model": "jev-1.14.0", "answers": answers}, "human": {"verdict": "LEGIT"},
+        })
+        self.assertIn("r550_0", row["questions"]["matched_rule"]["criteria"])
+
+    def test_export_omits_jev_without_structured_answers(self):
+        self._capture()
+        self._label()
+        response = asyncio.run(app.export_training("test-secret"))
+        row = json.loads(response.body)
+        self.assertNotIn("jev", row)
+
+    def test_export_uses_unknown_model_and_omits_unavailable_raw_answers(self):
+        self._capture(structured={"verdict": {"choice": "PHISH"}})
+        self._label()
+        response = asyncio.run(app.export_training("test-secret"))
+        row = json.loads(response.body)
+        self.assertEqual(row["jev"], {"model": "unknown"})
 
 
 class TelegramRelayTests(unittest.TestCase):
@@ -2070,6 +2285,30 @@ class StructuredJudgeWiringTests(unittest.TestCase):
             STRUCTURED_RULES,
             authenticated=authenticated,
         ))
+
+    def test_raw_answers_survive_classification_for_training_without_changing_the_payload(self):
+        provider = app.SystemOneStructuredJudge(None)
+        answers = {"verdict": {"choice": "PHISH", "confidence": 0.97,
+                               "probabilities": {"PHISH": 0.97, "SPAM": 0.03}},
+                   "severity": {"score": 3.0}, "dangerous": {"noul": 0.8, "confidence": 0.9}}
+        post = AsyncMock(return_value={"answers": answers, "model": "test-model"})
+        with patch.object(provider, "_post", post):
+            result = asyncio.run(provider.classify("Redacted text", STRUCTURED_RULES,
+                                                  {"label": "SAFE", "score": 0.0}))
+        self.assertEqual(result["answers"], answers)
+        self.assertEqual(result["signals"]["dangerous"], 0.8)
+        payload = post.await_args.args[0]
+        self.assertEqual(set(payload), {"model", "state", "questions"})
+        self.assertEqual(payload["questions"], app.SystemOneStructuredJudge._questions(
+            STRUCTURED_RULES, {"label": "SAFE", "score": 0.0}))
+
+    def test_structured_answers_reach_the_caller_in_report_and_authoritative_modes(self):
+        structured = _structured("LEGIT", 0.99, 0.0, "TRANSACTIONAL")
+        app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=structured))
+        for authoritative in (False, True):
+            with self.subTest(authoritative=authoritative):
+                app.STRUCTURED_JUDGE_AUTHORITATIVE = authoritative
+                self.assertEqual(self._run()["_structured"], structured)
 
     def test_unconfigured_leaves_the_pipeline_exactly_as_it_was(self):
         app.structured_judge = None

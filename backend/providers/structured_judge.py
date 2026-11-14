@@ -263,7 +263,8 @@ class SystemOneStructuredJudge:
         # string the server chose to report.
         self.name = name
 
-    def _questions(self, rules: dict[str, list[str]], injection: dict) -> dict:
+    @staticmethod
+    def _questions(rules: dict[str, list[str]], injection: dict) -> dict:
         ids = rule_ids(rules)
         rule_criteria = {rid: text for rid, (_, text) in ids.items()}
         rule_criteria["none"] = NO_RULE_CRITERION
@@ -408,6 +409,7 @@ class SystemOneStructuredJudge:
         if "verdict" not in answers:
             return None
         out = {
+            "answers": answers,
             "verdict": answers["verdict"],
             "category": answers.get("category"),
             "severity": answers.get("severity"),
