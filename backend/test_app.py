@@ -1125,7 +1125,10 @@ class TrainingEndpointTests(unittest.TestCase):
             ("right", None, "550", "PHISH", "SPAM", "PHISH"),
             ("right", None, "550", "SPAM", "PHISH", "SPAM"),
             ("right", None, "550", "UNSURE", "PHISH", "SPAM"),
-            ("right", None, "421", "PHISH", "PHISH", "UNSURE"),
+            ("right", None, "421", "LEGIT", "PHISH", "PHISH"),
+            ("right", None, "421", "LEGIT", "SPAM", "SPAM"),
+            ("right", None, "421", "UNSURE", "UNSURE", "UNSURE"),
+            ("right", None, "421", "UNSURE", None, "UNSURE"),
         ]
         for review, correct, disposition, recorded, structured, expected in cases:
             with self.subTest(review=review, correct=correct, disposition=disposition,
