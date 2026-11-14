@@ -303,6 +303,101 @@ class DigestInsightRuleCoverageTests(unittest.TestCase):
         self.assertEqual(self._paragraph(text), text)
 
 
+class DigestInsightNegationTests(unittest.TestCase):
+    _stats = DigestInsightOutputTests._stats
+    _paragraph = DigestInsightOutputTests._paragraph
+
+    def test_without_explaining_keeps_the_whole_paragraph(self):
+        text = (
+            "The window was uneventful. Two senders accounted for the new rules. "
+            "The digest reports message counts WITHOUT EXPLAINING them. "
+            "The tables carry the details. Nothing unusual stands out."
+        )
+        self.assertEqual(self._paragraph(text), text)
+
+    def test_negated_claims_are_kept(self):
+        for sentence in (
+            "The rule count does not explain the action count.",
+            "These rule counts do not explain the action count.",
+            "The filter doesn't explain the verdicts.",
+            "The filters don't explain the verdicts.",
+            "The filter did not explain the verdicts.",
+            "The filter didn't explain the verdicts.",
+            "No cause is implied by these message counts.",
+            "Nothing here suggests a cause for these message counts.",
+            "The message count was not caused by the new rule.",
+            "The message count cannot be attributed to the new rule.",
+            "The message count can't be attributed to the new rule.",
+            "The filter never explains the verdicts.",
+            "None of these counts explains the verdicts.",
+            "Neither count explains the message verdicts.",
+            "The digest neither tracks nor explains the message counts.",
+            "There is no way to explain the message counts.",
+            "The digest is unable to explain the message counts.",
+            "The digest offers no advice to prune the sender list.",
+            "The message count is not rising.",
+            "The message counts are not rising.",
+            "The message count isn't rising.",
+            "The message counts aren't rising.",
+            "The message count was not rising.",
+            "The message count wasn't rising.",
+            "The action count does not stem from the rule count.",
+            "The action count is not the result of the rule count.",
+            "The digest does not recommend pruning the sender list.",
+            "The sender list is not worth reviewing.",
+            "The digest does not consider pruning the sender list.",
+            "No action should prune the sender list.",
+            "These rules do not dominate the sender counts.",
+            "The message count is not the largest.",
+            "The digest does not correlate sender counts.",
+            "The digest does not in any way explain the message counts.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(digest._claim_violations(sentence), [])
+                self.assertEqual(self._paragraph(sentence), sentence)
+
+    def test_asserted_claims_are_removed(self):
+        for sentence in (
+            "This explains the rise in message counts.",
+            "The messages were caused by the new rule.",
+            "You should prune the sender list.",
+            "The rule count is the largest.",
+            "The rules dominate the sender counts.",
+            "The rule count stems from sender activity.",
+            "The rule count is attributed to sender activity.",
+            "The message count is rising.",
+            "I recommend reviewing the sender list.",
+            "No outage occurred and the recorded rule activity explains the count.",
+            "No outage occurred, and this explains the message count.",
+            "No outage occurred; this explains the message count.",
+            "No outage occurred: this explains the message count.",
+            "No outage occurred but this explains the message count.",
+            "No outage occurred however this explains the message count.",
+            "The digest not only explains the message count.",
+            "The digest not only records mail but also explains the count.",
+            "The digest never explains mail, yet explains the action count.",
+            "The digest never recommends pruning, yet recommends a rule audit.",
+            "The count never rose, but rose in the message window.",
+            "The rule count is not the largest, but the action count is the largest.",
+            "The count does not stem from mail, but stems from sender activity.",
+            "The filter explains the message count without further details.",
+            "Without explaining the counts, you should prune the list.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertTrue(digest._claim_violations(sentence))
+                kept = "The rest of the window was uneventful."
+                self.assertEqual(self._paragraph(sentence + " " + kept), kept)
+
+    def test_negation_does_not_exempt_restated_figures(self):
+        sentence = "The digest does not explain the 18 messages and 7 hard bounces."
+        self.assertEqual(
+            digest._claim_violations(sentence, frozenset({"18", "7"})),
+            ["restatement of the tables"],
+        )
+        kept = "The rest of the window was uneventful."
+        self.assertEqual(self._paragraph(sentence + " " + kept), kept)
+
+
 class DigestInsightPromptTests(unittest.TestCase):
     """The insights prompt must not invite a trend, a cause, or a directive."""
 
