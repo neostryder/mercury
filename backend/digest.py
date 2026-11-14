@@ -379,6 +379,20 @@ def _stat_numbers(stats: dict) -> frozenset[str]:
     )
 
 
+def _has_unnegated_claim(pattern: str, sentence: str) -> bool:
+    for match in re.finditer(pattern, sentence):
+        # Negation applies only within a short, uninterrupted clause.
+        clause = re.split(r"[,;:.!?\n]|\b(?:but|however)\b", sentence[:match.start()])[-1]
+        words = re.findall(r"\b[\w']+\b", clause)[-5:]
+        if not re.search(
+            r"\b(?:no|not(?!\s+only\b)|never|without|nothing|none|neither|nor|"
+            r"cannot|can't|doesn't|don't|didn't|isn't|aren't|wasn't|unable\s+to)\b",
+            " ".join(words),
+        ):
+            return True
+    return False
+
+
 def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset()) -> list[str]:
     """The claim classes this sentence makes, if any.
 
@@ -399,7 +413,7 @@ def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset())
         ("advice", _ADVICE_CLAIM_PATTERNS),
     ):
         for label, pattern in patterns:
-            if re.search(pattern, lowered):
+            if _has_unnegated_claim(pattern, lowered):
                 found.append(f"{kind} ({label!r})")
                 break
     if stat_numbers:
@@ -407,22 +421,22 @@ def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset())
         if len(repeated) >= 2:
             found.append("restatement of the tables")
     for term in _RANK_CLAIM_TERMS:
-        if not re.search(r"\b" + re.escape(term) + r"\b", lowered):
+        if not _has_unnegated_claim(r"\b" + re.escape(term) + r"\b", lowered):
             continue
         if any(exc in lowered for exc in _RANK_TERM_EXCEPTIONS):
             continue
         found.append(f"rank claim ({term!r})")
         break
     for label, pattern in _RANK_CLAIM_INFLECTIONS:
-        if re.search(pattern, lowered):
+        if _has_unnegated_claim(pattern, lowered):
             found.append(f"rank claim ({label!r})")
             break
     for term in _CORRESPONDENCE_CLAIM_TERMS:
-        if re.search(r"\b" + re.escape(term) + r"\b", lowered):
+        if _has_unnegated_claim(r"\b" + re.escape(term) + r"\b", lowered):
             found.append(f"correspondence claim ({term!r})")
             break
     for label, pattern in _CORRESPONDENCE_CLAIM_INFLECTIONS:
-        if re.search(pattern, lowered):
+        if _has_unnegated_claim(pattern, lowered):
             found.append(f"correspondence claim ({label!r})")
             break
     return found
