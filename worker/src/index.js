@@ -94,7 +94,7 @@ export default {
       // cannot reach the dashboard.
       const denied = await checkAccessToken(request, env);
       if (denied) return denied;
-      return handleDashboard(pathname, search, env, request);
+      return handleDashboard(pathname, search, env, request, ctx);
     }
 
     const credentialMatch = pathname.match(/^\/credential\/([A-Za-z0-9_-]+)$/);
@@ -539,7 +539,7 @@ async function handleCredentialPrompt(request, token, env) {
   );
 }
 
-async function handleDashboard(pathname, search, env, request) {
+async function handleDashboard(pathname, search, env, request, ctx) {
   // The page moved to the root. The old address and the sign-in address (which
   // exists so the app can send an expired session through Access and back)
   // both land there. The redirect keeps any #fragment the browser holds.
@@ -744,10 +744,12 @@ async function handleDashboard(pathname, search, env, request) {
           const removed = await env.MERCURY_LOG.prepare(
             "DELETE FROM review_labels WHERE message_id = ? AND source = 'sample'",
           ).bind(messageId).run();
+          if (removed.meta?.changes) await forwardReviewLabel(env, messageId, 'undo', null, ctx);
           return json({ ok: true, removed: removed.meta?.changes ?? 0 });
         }
         const stored = await recordReviewLabel(env, messageId, verdict, verdict === 'wrong' ? correct : null, 'sample');
         if (!stored) return json({ ok: false, error: 'no message with that id' }, 404);
+        await forwardReviewLabel(env, messageId, verdict, verdict === 'wrong' ? correct : null, ctx);
         // A held or rejected message that should have been accepted is delivered now.
         let delivery = null;
         if (verdict === 'wrong' && correct === '250') {
@@ -848,6 +850,16 @@ async function handleDashboard(pathname, search, env, request) {
         await recordReviewLabel(env, messageId, 'wrong', null, 'reversal');
       }
       return response;
+    }
+
+    if (pathname === '/dashboard/api/training/status') {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405 });
+      return backendApprovalCall('GET', '/training/status', env);
+    }
+
+    if (pathname === '/dashboard/api/training/export') {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405 });
+      return backendTrainingExport(env);
     }
 
     if (pathname === '/dashboard/api/approvals') {
@@ -1111,6 +1123,48 @@ async function recordReviewLabel(env, messageId, verdict, correctDisposition, so
       correct_disposition = excluded.correct_disposition, source = excluded.source, labeled_at = excluded.labeled_at
   `).bind(messageId, message.enforced_disposition, verdict, correctDisposition, source, new Date().toISOString()).run();
   return true;
+}
+
+async function forwardReviewLabel(env, messageId, verdict, correctDisposition, ctx) {
+  try {
+    const pending = (async () => {
+      const message = await env.MERCURY_LOG.prepare(
+        'SELECT received_at, from_domain, subject FROM messages WHERE id = ?',
+      ).bind(messageId).first();
+      if (!message) return;
+      const resp = await fetch(`${env.BACKEND_BASE_URL}/training/label`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+        body: JSON.stringify({ ...message, verdict, correct_disposition: correctDisposition }),
+      });
+      if (!resp.ok || !(await resp.json()).ok) console.warn('Training label forwarding failed');
+    })().catch(() => console.warn('Training label forwarding failed'));
+    if (ctx?.waitUntil) ctx.waitUntil(pending); else await pending;
+  } catch (err) {
+    console.warn('Training label forwarding failed');
+  }
+}
+
+async function backendTrainingExport(env) {
+  let resp;
+  try {
+    resp = await fetch(`${env.BACKEND_BASE_URL}/training/export`, {
+      headers: { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ ok: false, error: 'backend unreachable' }), {
+      status: 502,
+      headers: DASHBOARD_JSON_HEADERS,
+    });
+  }
+  return new Response(resp.body, {
+    status: resp.status,
+    headers: {
+      ...DASHBOARD_JSON_HEADERS,
+      'Content-Type': 'text/plain; charset=utf-8',
+      ...(resp.ok ? { 'Content-Disposition': 'attachment; filename="mercury-training-rows.jsonl"' } : {}),
+    },
+  });
 }
 
 // Called from the dashboard message inspector. The rules ledger
