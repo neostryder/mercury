@@ -24,10 +24,14 @@ def verdict_choice(row: dict, verdict: str, correct_disposition: str | None) -> 
     disposition = correct_disposition if verdict == "wrong" else row["decision"]["disposition"]
     if disposition == "250":
         return "LEGIT"
+    structured_verdict = ((row.get("structured") or {}).get("verdict") or {}).get("choice")
     if disposition == "421":
+        # A hold the recipient confirmed keeps the classifier's block verdict.
+        if verdict == "right" and structured_verdict in ("PHISH", "SPAM"):
+            return structured_verdict
         return "UNSURE"
     if verdict == "wrong":
-        recorded = ((row.get("structured") or {}).get("verdict") or {}).get("choice")
+        recorded = structured_verdict
     else:
         recorded = row["decision"]["verdict"]
     return "PHISH" if recorded == "PHISH" else "SPAM"
