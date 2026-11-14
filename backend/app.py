@@ -2378,9 +2378,9 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         if sender_match and not authentication_skip:
             injection, verdict = _deterministic_verdict(sender_match)
         else:
-            injection = await classifier.check(redacted_content[:4000])
+            injection = await classifier.check(message_body.judge_excerpt(redacted_content, 4000))
             verdict = await judge_email(
-                redacted_content[:6000], injection, policy["semantic_rules"],
+                message_body.judge_excerpt(redacted_content, 6000), injection, policy["semantic_rules"],
                 facts=sender_facts.describe(sender_domain, recipient_class, recipient_detail),
                 shadow_id=laya_shadow.shadow_id(dedup_key),
                 authenticated=sender_domain_is_authenticated(payload.get("dmarc"), sender_domain),
