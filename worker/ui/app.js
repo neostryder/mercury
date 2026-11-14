@@ -815,7 +815,28 @@ async function previewPolicyChange(button) {
 // ---- review ----
 var OUTCOME_LABEL = { '250': 'Accepted', '421': 'Deferred', '550': 'Rejected' };
 var reviewData = null;
+async function loadTrainingStatus() {
+  var status = byId('training-status');
+  status.hidden = true;
+  try {
+    var res = await fetch('/dashboard/api/training/status', { redirect: 'manual', credentials: 'same-origin' });
+    if (!res.ok) return;
+    var data = await res.json();
+    if (!data || data.ok === false) return;
+    var counts = data.labeled_by_class || {};
+    var block = (counts.SPAM ?? 0) + (counts.PHISH ?? 0);
+    var line = 'Training rows: ' + (data.labeled_total ?? 0) + ' labeled (' + (counts.LEGIT ?? 0) + ' deliver, ' +
+      block + ' block, ' + (counts.UNSURE ?? 0) + ' unsure); text for ' + (data.held_rows_kept ?? 0) + ' held messages kept';
+    var expiry = data.oldest_expiry ? new Date(data.oldest_expiry * 1000).toISOString() : '';
+    status.innerHTML = esc(line) + (expiry ? '; earliest expiry ' + timeTag(expiry) : '') +
+      '. <a href="/dashboard/api/training/export">Download training rows</a>';
+    status.hidden = false;
+  } catch (err) {
+    status.hidden = true;
+  }
+}
 async function loadReview() {
+  loadTrainingStatus();
   var list = byId('review-list');
   var metrics = byId('review-metrics');
   var both;
