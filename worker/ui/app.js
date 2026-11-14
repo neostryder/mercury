@@ -824,9 +824,11 @@ async function loadTrainingStatus() {
     var data = await res.json();
     if (!data || data.ok === false) return;
     var counts = data.labeled_by_class || {};
-    var line = 'Training rows: ' + (data.labeled_total ?? 0) + ' labeled (' + (counts.deliver ?? 0) + ' deliver, ' +
-      (counts.block ?? 0) + ' block, ' + (counts.unsure ?? 0) + ' unsure); text for ' + (data.held_kept ?? 0) + ' held messages kept';
-    status.innerHTML = esc(line) + (data.oldest_expiry ? '; earliest expiry ' + timeTag(data.oldest_expiry) : '') +
+    var block = (counts.SPAM ?? 0) + (counts.PHISH ?? 0);
+    var line = 'Training rows: ' + (data.labeled_total ?? 0) + ' labeled (' + (counts.LEGIT ?? 0) + ' deliver, ' +
+      block + ' block, ' + (counts.UNSURE ?? 0) + ' unsure); text for ' + (data.held_rows_kept ?? 0) + ' held messages kept';
+    var expiry = data.oldest_expiry ? new Date(data.oldest_expiry * 1000).toISOString() : '';
+    status.innerHTML = esc(line) + (expiry ? '; earliest expiry ' + timeTag(expiry) : '') +
       '. <a href="/dashboard/api/training/export">Download training rows</a>';
     status.hidden = false;
   } catch (err) {

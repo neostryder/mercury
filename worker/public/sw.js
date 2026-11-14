@@ -1,11 +1,11 @@
 // The service worker keeps the page itself, never mail data. Every /dashboard/api
 // call goes to the network untouched; what the page remembers of the last summary
 // (counts only) lives in its own storage, not here.
-const VERSION = 'e052622f95';
+const VERSION = 'f4d4f5217d';
 const CACHE = 'mercury-shell-' + VERSION;
 const SHELL = [
   "/",
-  "/app.c0bad86977.js",
+  "/app.94992e090d.js",
   "/app.d97fa2809d.css",
   "/favicon.png",
   "/fonts/alegreya-sans-latin-400-normal.woff2",
