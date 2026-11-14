@@ -238,6 +238,36 @@ class AppTests(unittest.TestCase):
         self.assertIn("Octopath Traveler is 60% off", shown)
         self.assertNotIn("not available", shown)
 
+    def test_judge_inputs_keep_the_body_after_long_tracking_links(self):
+        payload = self._payload()
+        payload["text"] = ""
+        long_url = "https://tracker.example/click/" + "x" * 1000 + "?id=" + "y" * 1000
+        payload["html"] = (
+            '<p><a href="' + long_url + '">https://shop.example</a></p>'
+        ) * 4 + "<p>Your discount code is SAVE.</p>"
+        app.classifier = SimpleNamespace(
+            check=AsyncMock(return_value={"label": "SAFE", "score": 0.01})
+        )
+        judge_email = AsyncMock(return_value={
+            "verdict": "PHISH", "disposition": "550", "category": "PHISHING",
+            "alert": "NONE", "triggered_rule": None, "reasoning": "test verdict",
+        })
+        with patch.object(app, "judge_email", judge_email), \
+                patch.object(app.event_log, "log_event") as log_event:
+            response = asyncio.run(app.ingest(FakeRequest(payload), "test-secret"))
+
+        self.assertEqual(response.status_code, 550)
+        for shown, limit in ((app.classifier.check.await_args.args[0], 4000),
+                             (judge_email.await_args.args[0], 6000)):
+            with self.subTest(limit=limit):
+                self.assertTrue("Your discount code is SAVE." in shown)
+                self.assertIn("https://shop.example", shown)
+                self.assertIn("https://tracker.example/click/", shown)
+                self.assertLessEqual(len(shown), limit)
+        message = next(call.args[1] for call in log_event.call_args_list
+                       if call.args[0] == "messages")
+        self.assertIn(long_url, message["full_content"])
+
     def test_blacklist_pattern_match_surfaces_the_pattern_as_the_triggered_rule(self):
         self.store.add_blacklist_pattern(r"^\d{2,}[a-z0-9.-]*\.[a-z]{2,}$")
         app.classifier = SimpleNamespace(
