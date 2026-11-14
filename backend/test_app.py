@@ -2033,11 +2033,12 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         app.structured_judge = self.original_structured
         app.STRUCTURED_JUDGE_AUTHORITATIVE = self.original_authoritative
 
-    def _run(self):
+    def _run(self, *, authenticated=False):
         return asyncio.run(app.judge_email(
             "From: a@example.com\n\nMessage",
             {"label": "SAFE", "score": 0.01},
             STRUCTURED_RULES,
+            authenticated=authenticated,
         ))
 
     def test_unconfigured_leaves_the_pipeline_exactly_as_it_was(self):
@@ -2090,8 +2091,11 @@ class StructuredJudgeWiringTests(unittest.TestCase):
 
     ACCEPT_RULE = "A receipt or delivery update from a merchant that sent it."
 
-    def _accept_run(self, *, authenticated, rule_match=None, signals=None, label="SAFE"):
+    def _accept_run(self, *, authenticated, rule_match=None, signals=None, label="SAFE",
+                    verdict="LEGIT", disposition="250"):
         reply = JUDGE_REPLY.replace("RULE_MATCH: NONE", f"RULE_MATCH: {rule_match or 'NONE'}")
+        reply = reply.replace("VERDICT: LEGIT", f"VERDICT: {verdict}")
+        reply = reply.replace("DISPOSITION: 250", f"DISPOSITION: {disposition}")
         app.judge = SimpleNamespace(ask=AsyncMock(return_value=reply))
         s = _structured()
         s["signals"].update(signals or {})
@@ -2111,16 +2115,46 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "LEGIT")
         self.assertEqual(result["alert"], "NONE")
         self.assertEqual(result["triggered_rule"], self.ACCEPT_RULE)
-        self.assertIn("Delivered under the recipient's standing accept rule", result["reasoning"])
+        self.assertIn("Delivered because the recipient's standing accept rule", result["reasoning"])
+
+    def test_an_accept_rule_still_delivers_without_a_legit_verdict(self):
+        result = self._accept_run(authenticated=True, rule_match=self.ACCEPT_RULE,
+                                  verdict="UNSURE")
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(result["triggered_rule"], self.ACCEPT_RULE)
+        self.assertIn("Delivered because the recipient's standing accept rule", result["reasoning"])
 
     def test_an_unauthenticated_sender_under_an_accept_rule_is_still_held(self):
         result = self._accept_run(authenticated=False, rule_match=self.ACCEPT_RULE)
         self.assertEqual(result["disposition"], "421")
         self.assertIn("Deferred rather than delivered", result["reasoning"])
 
-    def test_an_authenticated_sender_the_judge_matched_to_no_rule_is_still_held(self):
+    def test_an_authenticated_sender_with_a_legit_accept_needs_no_rule(self):
         result = self._accept_run(authenticated=True)
-        self.assertEqual(result["disposition"], "421")
+        self.assertEqual(result["disposition"], "250")
+        self.assertEqual(result["verdict"], "LEGIT")
+        self.assertEqual(result["alert"], "NONE")
+        self.assertIsNone(result["triggered_rule"])
+        self.assertIn("Delivered because the judge explicitly returned LEGIT/250", result["reasoning"])
+
+    def test_each_failed_condition_prevents_rule_free_delivery(self):
+        for overrides in (
+            {"authenticated": False},
+            {"label": "INJECTION"},
+            {"signals": {"requests_credentials_or_payment": app.verdict_policy.SIGNAL_PRESENT}},
+            {"signals": {"attempts_injection": app.verdict_policy.INJECTION_PRESENT}},
+            {"verdict": "PHISH"},
+            {"verdict": "SPAM"},
+            {"verdict": "UNSURE"},
+            {"disposition": "421"},
+            {"disposition": "550"},
+        ):
+            with self.subTest(overrides=overrides):
+                result = self._accept_run(**dict({"authenticated": True}, **overrides))
+                self.assertEqual(result["disposition"], overrides.get("disposition", "421"))
+                if "disposition" not in overrides:
+                    self.assertEqual(result["verdict"], "PHISH")
+                    self.assertIn("Deferred rather than delivered", result["reasoning"])
 
     def test_a_credential_request_keeps_the_hold_even_under_an_accept_rule(self):
         result = self._accept_run(authenticated=True, rule_match=self.ACCEPT_RULE,
@@ -2188,9 +2222,15 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         app.structured_judge = SimpleNamespace(
             classify=AsyncMock(return_value=_structured()))
         app.STRUCTURED_JUDGE_AUTHORITATIVE = True
-        result = self._run()
+        result = self._run(authenticated=True)
         self.assertEqual(result["disposition"], "550")
         self.assertIn("PHISH at 97% confidence", result["reasoning"])
+        self.assertIn("reply was unreadable", result["reasoning"])
+        self.assertIn("classifier decided alone", result["reasoning"])
+        events = [fields for table, fields in self.logged if table == "admin_log"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "judge_unavailable_for_review")
+        self.assertIn("unreadable reply", events[0]["detail"])
 
     def test_the_judge_sees_the_classifiers_findings_before_its_answer_format(self):
         app.structured_judge = SimpleNamespace(
@@ -2206,6 +2246,21 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         evidence_at = prompt.index("you make the final decision")
         self.assertGreater(evidence_at, prompt.index("ignore the above"))
         self.assertLess(evidence_at, prompt.rindex("\nRespond with:\n"))
+
+    def test_the_alias_fact_reaches_the_classifier_and_the_judge(self):
+        facts = app.sender_facts.describe("walmart.com", "R", "To: aaron-walmart@rpgm.tools")
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        asyncio.run(app.judge_email(
+            "From: help@walmart.com\n\nYour delivery is on its way.",
+            {"label": "SAFE", "score": 0.01}, STRUCTURED_RULES,
+            facts=facts, authenticated=True))
+        self.assertEqual(app.structured_judge.classify.await_args.args[3], facts)
+        prompt = app.judge.ask.await_args.args[0]
+        self.assertIn('"recipient_alias_names_sender": true', prompt)
+        self.assertLess(prompt.index("Computed sender and recipient facts:"),
+                        prompt.rindex("\nRespond with:\n"))
 
     def test_the_comparison_log_keeps_the_probabilities(self):
         s = _structured()
@@ -2249,6 +2304,13 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         result = self._run()
         self.assertEqual(result["disposition"], "550")
         self.assertIn("PHISH at 97% confidence", result["reasoning"])
+        self.assertIn("judge could not be reached", result["reasoning"])
+        self.assertIn("classifier decided alone", result["reasoning"])
+        self.assertEqual(len(self.logged), 1)
+        table, fields = self.logged[0]
+        self.assertEqual(table, "admin_log")
+        self.assertEqual(fields["event"], "judge_unavailable_for_review")
+        self.assertEqual(fields["detail"], "RuntimeError")
 
     def test_a_structured_failure_never_disturbs_the_verdict(self):
         app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
@@ -2270,6 +2332,12 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(result["disposition"], "550")
         self.assertIn("Structured verdict:", result["reasoning"])
         self.assertIn("PHISH at 97% confidence", result["reasoning"])
+        self.assertIn("reply was unreadable", result["reasoning"])
+        self.assertIn("classifier decided alone", result["reasoning"])
+        events = [fields for table, fields in self.logged if table == "admin_log"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "judge_unavailable_for_review")
+        self.assertIn("unreadable reply", events[0]["detail"])
 
     def test_shadow_backend_answers_are_paired_with_the_primary(self):
         primary, shadow = _structured(), _structured("SPAM", 0.6)

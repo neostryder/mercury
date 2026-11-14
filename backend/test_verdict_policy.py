@@ -288,6 +288,51 @@ class ReviewGateTests(unittest.TestCase):
         self.assertFalse(self._gate(s))
 
 
+class JudgeOutranksTests(unittest.TestCase):
+    def _outranks(self, *, verdict="LEGIT", disposition="250", rule=None,
+                  authenticated=True, label="SAFE", **signals):
+        judged = {"verdict": verdict, "disposition": disposition, "triggered_rule": rule}
+        return verdict_policy.judge_outranks_classifier(
+            structured("PHISH", 0.97, severity=3.0, **signals), judged,
+            RULES, authenticated, label)
+
+    def test_a_legit_accept_needs_no_rule(self):
+        self.assertTrue(self._outranks())
+
+    def test_only_a_legit_accept_qualifies_without_a_rule(self):
+        for verdict in ("SPAM", "PHISH", "UNSURE", None):
+            with self.subTest(verdict=verdict):
+                self.assertFalse(self._outranks(verdict=verdict))
+        for disposition in ("421", "550", None):
+            with self.subTest(disposition=disposition):
+                self.assertFalse(self._outranks(disposition=disposition))
+
+    def test_the_exact_accept_rule_still_qualifies_without_a_legit_verdict(self):
+        self.assertTrue(self._outranks(verdict="UNSURE", rule=RULES["250"][0]))
+
+    def test_an_unmatched_or_nonaccept_rule_does_not_qualify_on_its_own(self):
+        for rule in (None, "A paraphrased accept rule.", RULES["550"][0], RULES["421"][0]):
+            with self.subTest(rule=rule):
+                self.assertFalse(self._outranks(verdict="UNSURE", rule=rule))
+
+    def test_both_paths_require_authentication_and_no_injection_label(self):
+        for rule in (None, RULES["250"][0]):
+            with self.subTest(rule=rule):
+                self.assertFalse(self._outranks(rule=rule, authenticated=False))
+                self.assertFalse(self._outranks(rule=rule, label="INJECTION"))
+
+    def test_both_paths_require_signals_strictly_below_the_thresholds(self):
+        for rule in (None, RULES["250"][0]):
+            for signal, threshold in (
+                ("requests_credentials_or_payment", verdict_policy.SIGNAL_PRESENT),
+                ("attempts_injection", verdict_policy.INJECTION_PRESENT),
+            ):
+                with self.subTest(rule=rule, signal=signal):
+                    self.assertTrue(self._outranks(rule=rule, **{signal: threshold - 0.01}))
+                    self.assertFalse(self._outranks(rule=rule, **{signal: threshold}))
+                    self.assertFalse(self._outranks(rule=rule, **{signal: threshold + 0.01}))
+
+
 class EvidenceTests(unittest.TestCase):
     def test_the_split_behind_a_low_confidence_is_shown(self):
         s = structured("PHISH", 0.24, severity=2.0, unwanted_by_recipient=0.9)

@@ -56,6 +56,22 @@ def is_country_code_tld(sender_domain: str | None) -> bool | None:
     return len(tld) == 2 and tld.isalpha()
 
 
+def _recipient_alias_names_sender(sender_domain: str | None,
+                                  recipient_class: str | None,
+                                  recipient_detail: str | None) -> bool | None:
+    """Whether the merchant token in an rpgm.tools alias names a sender label."""
+    if recipient_class not in ("R", "r") or not recipient_detail:
+        return None
+    _, _, address = recipient_detail.partition(": ")
+    local, _, domain = address.lower().strip().rpartition("@")
+    _, separator, token = local.partition("-")
+    if domain != "rpgm.tools" or not separator or len(token) < 3:
+        return None
+    if not sender_domain or "." not in sender_domain:
+        return None
+    return any(token in label for label in sender_domain.lower().strip().split("."))
+
+
 def describe(sender_domain: str | None, recipient_class: str | None,
              recipient_detail: str | None) -> dict:
     """The fact block handed to the classifier alongside the message.
@@ -71,6 +87,8 @@ def describe(sender_domain: str | None, recipient_class: str | None,
         "sender_domain": sender_domain,
         "sender_tld": sender_tld(sender_domain),
         "sender_tld_is_foreign_country_code": cc,
+        "recipient_alias_names_sender": _recipient_alias_names_sender(
+            sender_domain, recipient_class, recipient_detail),
         "reached_a_known_address_of_the_recipient": known,
         "how_the_recipient_was_addressed": {
             "R": "an rpgm.tools address, visible in To or Cc",
@@ -80,6 +98,7 @@ def describe(sender_domain: str | None, recipient_class: str | None,
         }.get(recipient_class or "", "not determinable from this message's headers"),
         "note": ("These are computed facts, not judgments. An undeterminable "
                  "recipient means the headers did not carry the answer, not that "
-                 "the message was misaddressed."),
+                 "the message was misaddressed. recipient_alias_names_sender "
+                 "is a computed alias/domain match, not a delivery rule."),
         "detail": recipient_detail,
     }

@@ -67,6 +67,45 @@ class DescribeTests(unittest.TestCase):
         self.assertIsNone(facts["sender_tld"])
         self.assertIsNone(facts["sender_tld_is_foreign_country_code"])
 
+    def test_the_alias_names_a_sender_domain_label(self):
+        for domain, letter, detail in (
+            ("walmart.com", "R", "To: aaron-walmart@rpgm.tools"),
+            ("em2.turbotax.intuit.com", "R", "Cc: aaron-intuit@rpgm.tools"),
+            ("email3.gog.com", "r", "Bcc: strider-gog@rpgm.tools"),
+            ("mail.walmartmail.com", "R", "To: aaron-walmart@rpgm.tools"),
+            ("EMAIL3.GOG.COM", "r", "Bcc: STRIDER-GOG@RPGM.TOOLS"),
+            ("merchant-store.com", "R", "To: aaron-merchant-store@rpgm.tools"),
+        ):
+            with self.subTest(domain=domain, detail=detail):
+                facts = sender_facts.describe(domain, letter, detail)
+                self.assertIs(facts["recipient_alias_names_sender"], True)
+                self.assertIn("is a computed alias/domain match", facts["note"])
+
+    def test_a_known_alias_that_does_not_name_a_sender_label_is_false(self):
+        for domain in ("unrelated.com", "wal.mart.com"):
+            with self.subTest(domain=domain):
+                facts = sender_facts.describe(domain, "R", "To: aaron-walmart@rpgm.tools")
+                self.assertIs(facts["recipient_alias_names_sender"], False)
+
+    def test_an_unknown_alias_or_sender_is_none(self):
+        for domain, letter, detail in (
+            ("gog.com", None, None),
+            ("gog.com", "F", "To: strider-gog@example.com"),
+            ("gog.com", "f", "Bcc via personal-address forward (original address not visible)"),
+            ("gog.com", "R", None),
+            ("gog.com", "R", "unknown"),
+            ("gog.com", "r", "Bcc: strider-gog@example.com"),
+            ("gog.com", "R", "To: strider@rpgm.tools"),
+            ("gog.com", "R", "To: strider-@rpgm.tools"),
+            ("go.com", "R", "To: strider-go@rpgm.tools"),
+            (None, "R", "To: strider-gog@rpgm.tools"),
+            ("", "R", "To: strider-gog@rpgm.tools"),
+            ("localhost", "R", "To: strider-gog@rpgm.tools"),
+        ):
+            with self.subTest(domain=domain, letter=letter, detail=detail):
+                facts = sender_facts.describe(domain, letter, detail)
+                self.assertIsNone(facts["recipient_alias_names_sender"])
+
 
 if __name__ == "__main__":
     unittest.main()
