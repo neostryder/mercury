@@ -1873,8 +1873,12 @@ REASONING: <reasoning>
 RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 """
     if facts:
+        # Only the computed yes/no facts reach the judge. The address detail
+        # stays out, since the judge sees redacted content and nothing else.
+        shown = {k: facts[k] for k in ("sender_domain", "recipient_alias_names_sender",
+                                       "how_the_recipient_was_addressed") if k in facts}
         prompt = _with_evidence(prompt, "Computed sender and recipient facts:\n"
-                                + json.dumps(facts) + "\n")
+                                + json.dumps(shown) + "\n")
     if structured_judge is None:
         result, _ = _parse_judge_reply(await judge.ask(prompt), all_rules)
         return result
