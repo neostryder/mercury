@@ -1872,6 +1872,9 @@ ALERT: <NONE|STANDARD|URGENT>
 REASONING: <reasoning>
 RULE_MATCH: <exact text of the standing rule that applied, or NONE>
 """
+    if facts:
+        prompt = _with_evidence(prompt, "Computed sender and recipient facts:\n"
+                                + json.dumps(facts) + "\n")
     if structured_judge is None:
         result, _ = _parse_judge_reply(await judge.ask(prompt), all_rules)
         return result
@@ -1936,27 +1939,37 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     try:
         content = await judge.ask(_with_evidence(
             prompt, verdict_policy.evidence_block(structured, decision)))
-    except Exception:                                         # noqa: BLE001
+    except Exception as exc:                                  # noqa: BLE001
+        event_log.log_event("admin_log", {
+            "at": _now(),
+            "event": "judge_unavailable_for_review",
+            "detail": type(exc).__name__,
+        })
+        result["reasoning"] += (" The language-model judge could not be reached, "
+                                "so the classifier decided alone.")
         return result
     judged, parsed = _parse_judge_reply(content, all_rules)
     _log_comparison(judged, decision, structured)
     # A verdict with no disposition line is parsed as a deferral (see
     # _parse_judge_reply), which is a guess, so only an explicit one counts.
     if not parsed or not re.search(r"DISPOSITION:\s*(250|421|550)", content):
+        event_log.log_event("admin_log", {
+            "at": _now(),
+            "event": "judge_unavailable_for_review",
+            "detail": "unreadable reply: no usable verdict or explicit disposition",
+        })
+        result["reasoning"] += (" The language-model judge's reply was unreadable, "
+                                "so the classifier decided alone.")
         return result
 
     disposition = judged["disposition"]
     held = decision["disposition"] == "550" and disposition == "250"
-    outranked = held and verdict_policy.accept_rule_outranks_classifier(
+    outranked = held and verdict_policy.judge_outranks_classifier(
         structured, judged, rules, authenticated, injection["label"])
     if outranked:
-        # The judge matched the recipient's own accept rule for an authenticated
-        # sender, so the classifier's rejection does not hold the message.
         held = False
     if held:
-        # One model's word does not deliver mail the classifier was about to
-        # bounce. Deferring it puts it in front of the recipient instead, under
-        # the classifier's label so the hold explains itself.
+        # The classifier's label explains the hold when neither path applies.
         disposition = "421"
     result.update(
         verdict=decision["verdict"] if held else judged["verdict"],
@@ -1972,9 +1985,14 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         result["reasoning"] += (" Deferred rather than delivered because the "
                                 "classifier had rejected it.")
     elif outranked:
-        result["reasoning"] += (" Delivered under the recipient's standing accept rule "
-                                "because the sender is authenticated, although the "
-                                "classifier had rejected it.")
+        if judged["triggered_rule"] in rules.get("250", []):
+            result["reasoning"] += (" Delivered because the recipient's standing accept "
+                                    "rule applies and the sender is authenticated, "
+                                    "although the classifier had rejected it.")
+        else:
+            result["reasoning"] += (" Delivered because the judge explicitly returned "
+                                    "LEGIT/250 and the sender is authenticated, "
+                                    "although the classifier had rejected it.")
     if failed_over:
         result["reasoning"] += (" The classifier's findings came from the calibrated "
                                 "failover model because the primary was unavailable.")
