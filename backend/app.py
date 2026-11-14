@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 import credential_prompts
 import digest
@@ -29,6 +29,7 @@ import sender_facts
 import verdict_policy
 from approvals import ApprovalStore
 from dedup import IngestDedupStore
+from training_store import TrainingStore
 from filtering import (
     FilteringPolicyStore,
     _domain_covers,
@@ -40,7 +41,7 @@ from filtering import (
 from providers.classifier import get_classifier
 from providers.judge import JudgeNoAnswer, get_judge
 from providers.notifier import get_notifier
-from providers.structured_judge import get_laya_judge, get_structured_judge
+from providers.structured_judge import SystemOneStructuredJudge, get_laya_judge, get_structured_judge
 from telegram_approvals import TelegramApprovals
 
 
@@ -244,6 +245,7 @@ _APPROVALS_KEY = base64.urlsafe_b64encode(
 )
 approval_store = ApprovalStore(PENDING_APPROVALS_PATH, _APPROVALS_KEY)
 dedup_store = IngestDedupStore(INGEST_DEDUP_PATH)
+training_store = TrainingStore()
 policy_store = FilteringPolicyStore(RULES_LEDGER_PATH)
 telegram_approvals = TelegramApprovals(
     approval_store,
@@ -1897,6 +1899,7 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         result, _ = _parse_judge_reply(content, all_rules)
         if structured is not None:
             _log_comparison(result, verdict_policy.decide(structured, rules), structured)
+        result["_structured"] = structured
         return result
 
     structured = await primary
@@ -1924,6 +1927,7 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     result = {k: decision[k] for k in
               ("verdict", "disposition", "category", "alert", "triggered_rule")}
     result["reasoning"] = verdict_policy.describe(decision, structured)
+    result["_structured"] = structured
     if failed_over:
         result["reasoning"] += (" Decided by the calibrated failover model because the "
                                 "primary structured judge was unavailable.")
@@ -2374,6 +2378,7 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # judge rather than left for a model to infer from the headers.
         recipient_class, recipient_detail = _classify_recipient(
             payload, payload.get("headers"), raw_message)
+        facts = sender_facts.describe(sender_domain, recipient_class, recipient_detail)
 
         if sender_match and not authentication_skip:
             injection, verdict = _deterministic_verdict(sender_match)
@@ -2381,13 +2386,14 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             injection = await classifier.check(message_body.judge_excerpt(redacted_content, 4000))
             verdict = await judge_email(
                 message_body.judge_excerpt(redacted_content, 6000), injection, policy["semantic_rules"],
-                facts=sender_facts.describe(sender_domain, recipient_class, recipient_detail),
+                facts=facts,
                 shadow_id=laya_shadow.shadow_id(dedup_key),
                 authenticated=sender_domain_is_authenticated(payload.get("dmarc"), sender_domain),
             )
             if authentication_skip:
                 verdict["reasoning"] = f"{authentication_skip} {verdict['reasoning']}"
 
+        structured = verdict.pop("_structured", None)
         enforced_disposition = "250" if SHADOW_MODE else verdict["disposition"]
         mode_note = (
             "(shadow mode - message delivered normally regardless of verdict)"
@@ -2404,8 +2410,9 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
         # Accepted mail and hard bounces remain in the dashboard and digest,
         # regardless of a judge or injection-checker alert recommendation.
         alert_eligible = enforced_disposition == "421"
+        received_at = _now()
         event_log.log_event("messages", {
-            "received_at": _now(),
+            "received_at": received_at,
             "from_display": from_display,
             "from_domain": sender_domain,
             "subject": subject,
@@ -2424,6 +2431,20 @@ async def ingest(request: Request, x_mercury_secret: str | None = Header(None)):
             "recipient_class": recipient_class,
             "recipient_detail": recipient_detail,
         })
+
+        if enforced_disposition in ("421", "550"):
+            try:
+                training_store.capture(
+                    received_at, sender_domain, subject,
+                    message_body.judge_excerpt(redacted_content, 6000), facts, structured, verdict,
+                )
+            except Exception as exc:
+                try:
+                    event_log.log_event("admin_log", {
+                        "at": _now(), "event": "training_capture_failed", "detail": type(exc).__name__,
+                    })
+                except Exception:
+                    pass
 
         delivery_result = None
         if enforced_disposition == "250" and not SHADOW_MODE:
@@ -2721,6 +2742,47 @@ async def reverse_rule_endpoint(request: Request, x_mercury_secret: str | None =
     if not removed:
         raise HTTPException(status_code=404, detail="rule not found in ledger")
     return {"ok": True, "removed": rule}
+
+
+@app.post("/training/label")
+async def label_training(request: Request, x_mercury_secret: str | None = Header(None)):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="expected an object")
+    received_at = payload.get("received_at")
+    from_domain = payload.get("from_domain")
+    subject = payload.get("subject")
+    verdict = payload.get("verdict")
+    correct_disposition = payload.get("correct_disposition")
+    if (not isinstance(received_at, str) or not received_at
+            or not isinstance(subject, str)
+            or (from_domain is not None and not isinstance(from_domain, str))
+            or verdict not in ("right", "wrong", "undo")
+            or correct_disposition not in (None, "250", "421", "550")
+            or (verdict == "wrong" and correct_disposition is None)):
+        raise HTTPException(status_code=400, detail="invalid training label")
+    stored = training_store.label(received_at, from_domain, subject, verdict, correct_disposition)
+    if not stored:
+        return {"ok": True, "stored": False, "reason": "no training text kept for this message"}
+    return {"ok": True, "stored": True}
+
+
+@app.get("/training/status")
+async def training_status(x_mercury_secret: str | None = Header(None)):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return training_store.status()
+
+
+@app.get("/training/export")
+async def export_training(x_mercury_secret: str | None = Header(None)):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    questions = SystemOneStructuredJudge._questions(
+        policy_store.load()["semantic_rules"], {"label": "SAFE", "score": 0.0})
+    return PlainTextResponse(training_store.export(questions))
 
 
 @app.post("/messages/accept")
