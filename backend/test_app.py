@@ -2582,7 +2582,38 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         table, fields = self.logged[0]
         self.assertEqual(table, "admin_log")
         self.assertEqual(fields["event"], "judge_unavailable_for_review")
-        self.assertEqual(fields["detail"], "RuntimeError")
+        self.assertRegex(fields["detail"], r"^RuntimeError elapsed=\d+\.\ds$")
+
+    def test_a_judge_http_failure_logs_the_status_and_elapsed_time(self):
+        request = httpx.Request("POST", "http://judge.test")
+        error = httpx.HTTPStatusError(
+            "gateway timeout", request=request,
+            response=httpx.Response(504, request=request))
+        app.judge = SimpleNamespace(ask=AsyncMock(side_effect=error))
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        result = self._run()
+        self.assertEqual(result["disposition"], "550")
+        self.assertIn("classifier decided alone", result["reasoning"])
+        self.assertEqual(len(self.logged), 1)
+        table, fields = self.logged[0]
+        self.assertEqual(table, "admin_log")
+        self.assertEqual(fields["event"], "judge_unavailable_for_review")
+        self.assertRegex(fields["detail"],
+                         r"^HTTPStatusError status=504 elapsed=\d+\.\ds$")
+
+    def test_the_judge_review_prompt_sets_a_time_budget(self):
+        app.structured_judge = SimpleNamespace(
+            classify=AsyncMock(return_value=_structured()))
+        app.STRUCTURED_JUDGE_AUTHORITATIVE = True
+        self._run()
+        prompt = app.judge.ask.await_args.args[0]
+        budget = ("You have a fixed time budget of about 150 seconds.\n"
+                  "Abandon any web lookup that stalls or times out, then answer from the evidence\n"
+                  "you already have in the required format rather than keep retrying.")
+        self.assertIn(budget, prompt)
+        self.assertLess(prompt.index(budget), prompt.rindex("\nFormat exactly as:\n"))
 
     def test_a_structured_failure_never_disturbs_the_verdict(self):
         app.structured_judge = SimpleNamespace(classify=AsyncMock(return_value=None))
@@ -2610,6 +2641,7 @@ class StructuredJudgeWiringTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "judge_unavailable_for_review")
         self.assertIn("unreadable reply", events[0]["detail"])
+        self.assertRegex(events[0]["detail"], r" elapsed=\d+\.\ds$")
 
     def test_shadow_backend_answers_are_paired_with_the_primary(self):
         primary, shadow = _structured(), _structured("SPAM", 0.6)
