@@ -231,6 +231,7 @@ notifier = get_notifier()
 structured_judge = get_structured_judge()
 STRUCTURED_JUDGE_AUTHORITATIVE = os.environ.get(
     "STRUCTURED_JUDGE_AUTHORITATIVE", "false").lower() == "true"
+JUDGE_REVIEW_BUDGET_SECONDS = 150
 # A second System One backend (LAYA_URL). It shadows the primary on every
 # message and its answers are paired with the primary's in laya_shadow.py, which
 # calibrates it. LAYA_FAILOVER lets it decide when the primary is unavailable,
@@ -1866,6 +1867,10 @@ Respond with:
   in the standing rules list above, so it can be identified and reversed
   later if it turns out to be wrong; NONE if no single listed rule applied
 
+You have a fixed time budget of about {JUDGE_REVIEW_BUDGET_SECONDS} seconds.
+Abandon any web lookup that stalls or times out, then answer from the evidence
+you already have in the required format rather than keep retrying.
+
 Format exactly as:
 VERDICT: <verdict>
 DISPOSITION: <250|421|550>
@@ -1944,14 +1949,19 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
     # classifier's findings in front of it as evidence. A judge outage or a
     # reply that cannot be read must not undo a decision that has already been
     # made, so any failure here keeps the classifier's decision and its line.
+    started = time.monotonic()
     try:
         content = await judge.ask(_with_evidence(
             prompt, verdict_policy.evidence_block(structured, decision)))
     except Exception as exc:                                  # noqa: BLE001
+        detail = type(exc).__name__
+        if isinstance(exc, httpx.HTTPStatusError):
+            detail += f" status={exc.response.status_code}"
+        detail += f" elapsed={time.monotonic() - started:.1f}s"
         event_log.log_event("admin_log", {
             "at": _now(),
             "event": "judge_unavailable_for_review",
-            "detail": type(exc).__name__,
+            "detail": detail,
         })
         result["reasoning"] += (" The language-model judge could not be reached, "
                                 "so the classifier decided alone.")
@@ -1964,7 +1974,8 @@ RULE_MATCH: <exact text of the standing rule that applied, or NONE>
         event_log.log_event("admin_log", {
             "at": _now(),
             "event": "judge_unavailable_for_review",
-            "detail": "unreadable reply: no usable verdict or explicit disposition",
+            "detail": ("unreadable reply: no usable verdict or explicit disposition"
+                       f" elapsed={time.monotonic() - started:.1f}s"),
         })
         result["reasoning"] += (" The language-model judge's reply was unreadable, "
                                 "so the classifier decided alone.")
