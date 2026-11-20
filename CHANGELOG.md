@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.5.0] - 2026-11-19
+
 ### Added
 
 - [Visible] [Pipeline] **Mercury now builds rule proposals through the judge's long background call, so slow instruction turns no longer die at the gateway timeout.** Proposals from the Thunderbird flag popup and Telegram replies to a proposal run in a background task, yet they called the judge's blocking `ask`, which the gateway ends with a 504 near 290 seconds; an instruction turn that needed about 8 minutes on 2026-11-19 failed twice and produced only an error message. The proposal task now waits on `ask_long` for up to 1620 seconds, falls back to `ask` when the judge has no long call, and retries once after a transport error or a 502, 503, or 504 response, while a reply the judge reports as failed or a job that never answers gets no retry. The ingest path does not use this call, because it must answer the mail host quickly (#137).
