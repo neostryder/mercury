@@ -527,14 +527,13 @@ def _recipient_email_from_candidates(candidates: object) -> str | None:
 
 
 async def _ask_judge_with_one_retry(prompt: str) -> str:
-    """Asks the judge, and once more when the gateway itself failed (it timed
-    out, was unreachable, or answered 502, 503 or 504). A stalled network or
-    agent call usually clears on the next try, and the person waiting on a
-    proposal would otherwise get an error for it. Only a proposal uses this:
-    the ingest path must answer the mail host quickly, so it never repeats a
-    judge call."""
+    """Ask the judge to build a rule proposal and return its reply. The call
+    waits up to 1620 seconds on `ask_long` and falls back to the blocking
+    `ask` when the judge has no long call. A transport error or a 502, 503,
+    or 504 gets one retry; a failed reply or silent job does not."""
+    ask = getattr(judge, "ask_long", None) or judge.ask
     try:
-        return await judge.ask(prompt)
+        return await ask(prompt)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code not in (502, 503, 504):
             raise
@@ -542,7 +541,7 @@ async def _ask_judge_with_one_retry(prompt: str) -> str:
     except httpx.TransportError as exc:
         reason = type(exc).__name__
     logging.getLogger(__name__).warning("agent gateway failed (%s); asking once more", reason)
-    return await judge.ask(prompt)
+    return await ask(prompt)
 
 
 def _parse_brief_response(content: str) -> dict:

@@ -682,6 +682,32 @@ RULE_MATCH: A concrete scam condition"""
         finally:
             app.judge = original
 
+    def test_a_proposal_uses_background_jobs_when_the_judge_has_them(self):
+        judge = SimpleNamespace(ask=AsyncMock(), ask_long=AsyncMock(return_value="reply"))
+        with patch.object(app, "judge", judge):
+            self.assertEqual(asyncio.run(app._ask_judge_with_one_retry("p")), "reply")
+        judge.ask_long.assert_awaited_once_with("p")
+        judge.ask.assert_not_called()
+
+    def test_a_proposal_retries_a_background_job_call_after_a_gateway_timeout(self):
+        import httpx
+
+        request = httpx.Request("POST", "http://gateway/agent/jobs")
+        error = httpx.HTTPStatusError("failed", request=request, response=httpx.Response(504, request=request))
+        judge = SimpleNamespace(ask=AsyncMock(), ask_long=AsyncMock(side_effect=[error, "reply"]))
+        with patch.object(app, "judge", judge):
+            self.assertEqual(asyncio.run(app._ask_judge_with_one_retry("p")), "reply")
+        self.assertEqual(judge.ask_long.await_count, 2)
+        judge.ask.assert_not_called()
+
+    def test_a_proposal_propagates_judge_job_errors_without_retrying(self):
+        for error in (JudgeNoAnswer, JudgeReportedError):
+            with self.subTest(error=error):
+                judge = SimpleNamespace(ask_long=AsyncMock(side_effect=error))
+                with patch.object(app, "judge", judge), self.assertRaises(error):
+                    asyncio.run(app._ask_judge_with_one_retry("p"))
+                judge.ask_long.assert_awaited_once_with("p")
+
     def test_a_failed_retry_pages_but_a_failed_first_attempt_does_not(self):
         self._whitelisted_delivery_setup()
         results = iter(["failed: TimeoutError: timed out", "failed: TimeoutError: timed out"])
