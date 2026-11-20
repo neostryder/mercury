@@ -1059,16 +1059,80 @@ CAVEAT: NONE""")
         fake_telegram = SimpleNamespace(
             propose_new=AsyncMock(return_value=("brief-1", "blacklist pattern: test", None))
         )
-        with patch.object(app, "telegram_approvals", fake_telegram):
-            response = asyncio.run(app.propose_rule(
+
+        async def run():
+            response = await app.propose_rule(
                 FakeRequest({"instruction": "bounce this pattern", "messages": []}),
                 "test-secret",
-            ))
+            )
+            await asyncio.gather(*app._propose_tasks)
+            return response
+
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            response = asyncio.run(run())
 
         self.assertTrue(response["ok"])
         instruction_arg, message_context_arg, _ = fake_telegram.propose_new.call_args[0]
         self.assertEqual(instruction_arg, "bounce this pattern")
         self.assertIn("no message attached", message_context_arg)
+
+    def test_propose_rule_answers_before_a_slow_proposal_finishes(self):
+        async def run():
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def slow_propose(*args, **kwargs):
+                started.set()
+                await release.wait()
+
+            fake_telegram = SimpleNamespace(propose_new=slow_propose)
+            with patch.object(app, "telegram_approvals", fake_telegram):
+                try:
+                    response = await asyncio.wait_for(
+                        app.propose_rule(FakeRequest({}), "test-secret"), timeout=1
+                    )
+                    self.assertEqual(response, {"ok": True, "status": "queued"})
+                    await asyncio.wait_for(started.wait(), timeout=1)
+                    task, = app._propose_tasks
+                    self.assertFalse(task.done())
+                finally:
+                    release.set()
+                    await asyncio.gather(*app._propose_tasks)
+
+        asyncio.run(run())
+
+    def test_propose_rule_notifies_when_the_queued_proposal_fails(self):
+        fake_telegram = SimpleNamespace(propose_new=AsyncMock(side_effect=RuntimeError("boom")))
+        fake_notifier = SimpleNamespace(send=AsyncMock())
+
+        async def run():
+            response = await app.propose_rule(FakeRequest({}), "test-secret")
+            await asyncio.gather(*app._propose_tasks)
+            return response
+
+        with (
+            patch.object(app, "telegram_approvals", fake_telegram),
+            patch.object(app, "notifier", fake_notifier),
+            self.assertLogs(app.__name__, level="ERROR"),
+        ):
+            response = asyncio.run(run())
+
+        self.assertEqual(response, {"ok": True, "status": "queued"})
+        fake_notifier.send.assert_awaited_once()
+        self.assertIn("rule-proposal error", fake_notifier.send.await_args.args[0])
+
+    def test_propose_rule_rejects_a_wrong_secret_without_queuing(self):
+        fake_telegram = SimpleNamespace(propose_new=AsyncMock())
+
+        async def run():
+            with self.assertRaises(app.HTTPException) as ctx:
+                await app.propose_rule(FakeRequest({}), "wrong-secret")
+            self.assertEqual(ctx.exception.status_code, 403)
+            self.assertFalse(app._propose_tasks)
+
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            asyncio.run(run())
+        fake_telegram.propose_new.assert_not_awaited()
 
 
 class TrainingEndpointTests(unittest.TestCase):
@@ -1673,11 +1737,16 @@ class ProposeRuleUnsubscribeContextTests(unittest.TestCase):
         fake_telegram = SimpleNamespace(
             propose_new=AsyncMock(return_value=("brief-1", None, "UNSUBSCRIBE: example.com"))
         )
-        with patch.object(app, "telegram_approvals", fake_telegram):
-            asyncio.run(app.propose_rule(
+
+        async def run():
+            await app.propose_rule(
                 FakeRequest({"instruction": "Unsubscribe me.", "messages": [message]}),
                 "test-secret",
-            ))
+            )
+            await asyncio.gather(*app._propose_tasks)
+
+        with patch.object(app, "telegram_approvals", fake_telegram):
+            asyncio.run(run())
         return fake_telegram.propose_new
 
     def test_recipient_comes_from_candidates_when_the_client_sent_none(self):

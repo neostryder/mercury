@@ -2870,10 +2870,9 @@ async def decide_approval(
 @app.post("/rules/propose")
 async def propose_rule(request: Request, x_mercury_secret: str | None = Header(None)):
     """Called by the Thunderbird extension when a message is flagged with a
-    free-text handling instruction. The instruction is interpreted into
-    typed filtering changes and, when needed, a scoped action on existing
-    mail, then sent to Telegram for approval. Nothing is committed or acted
-    on until the recipient approves it there.
+    free-text handling instruction. The proposal is built in the background
+    and sent to Telegram for approval. The response only acknowledges that
+    the proposal was queued.
     """
     if x_mercury_secret != SHARED_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
@@ -2919,23 +2918,40 @@ async def propose_rule(request: Request, x_mercury_secret: str | None = Header(N
             else NO_MESSAGE_CONTEXT
         )
         redacted_instruction = redact(instruction)
-        _, rule, action = await telegram_approvals.propose_new(
-            redacted_instruction,
-            message_context,
-            via_dictation,
-            message_metadata={"recipient_email": recipient_email} if recipient_email else None,
-        )
-        return {"ok": True, "status": "pending", "rule": rule, "action": action}
     except Exception as exc:
-        try:
-            await notifier.send(
-                "\U0001f6a8 Mercury rule-proposal error\n"
-                f"Instruction: {instruction}\n"
-                f"{type(exc).__name__}: {exc}"
-            )
-        except Exception:
-            pass
+        await _notify_rule_proposal_error(instruction, exc)
         return {"ok": False, "error": str(exc)}
+
+    async def build_proposal() -> None:
+        try:
+            await telegram_approvals.propose_new(
+                redacted_instruction,
+                message_context,
+                via_dictation,
+                message_metadata={"recipient_email": recipient_email} if recipient_email else None,
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Mercury rule-proposal error")
+            await _notify_rule_proposal_error(instruction, exc)
+
+    task = asyncio.create_task(build_proposal())
+    _propose_tasks.add(task)
+    task.add_done_callback(_propose_tasks.discard)
+    return {"ok": True, "status": "queued"}
+
+
+_propose_tasks: set[asyncio.Task] = set()
+
+
+async def _notify_rule_proposal_error(instruction: str, exc: Exception) -> None:
+    try:
+        await notifier.send(
+            "\U0001f6a8 Mercury rule-proposal error\n"
+            f"Instruction: {instruction}\n"
+            f"{type(exc).__name__}: {exc}"
+        )
+    except Exception:
+        pass
 
 
 @app.post("/telegram/relay")
