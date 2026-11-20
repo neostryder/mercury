@@ -35,6 +35,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+import cresset_mirror
 from link_filter import blocked_hostname, defang, defang_hostnames
 from providers.judge import Judge
 
@@ -737,6 +738,9 @@ async def run_digest_once(judge: Judge) -> None:
     html_body = render_html(stats, insights)
     subject = f"Mercury daily digest - {stats['generated_at'].strftime('%B %d, %Y')}"
     await asyncio.to_thread(send_email, subject, html_body)
+    await cresset_mirror.send_digest(
+        subject, html_body, stats["generated_at"].strftime("%Y-%m-%d")
+    )
 
 
 async def run_forever(judge: Judge) -> None:

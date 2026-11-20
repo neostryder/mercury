@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- [Visible] [Pipeline] **Approval prompts and flagged-message reports also go to Cresset as decisions.** When Mercury sends a rule or action proposal with Approve and Discard, or a flagged-message report with its five buttons, to Telegram, it also posts a Cresset decision with the same options, so the owner can answer wherever Cresset delivers it first. Answers return as signed POSTs to `/cresset/callback` and run the same code as a Telegram tap, and an old answer cannot approve a newer proposal. The Telegram message still goes out as before, and a failed Cresset send is logged as `cresset_mirror_failed` without affecting it. The mirror is off unless MERCURY_CRESSET_MODE is `both` and CRESSET_URL and CRESSET_MERCURY_TOKEN are set (#141).
+- [Visible] [Pipeline] **The daily digest is also posted to Cresset.** After the digest email goes out by SMTP, Mercury posts the same digest as a `digest` event whose body is the plain-text email, up to 8000 characters. The fingerprint `mercury-digest-<date>` makes a retry merge into the existing event instead of creating a duplicate. A failed post is logged as `cresset_mirror_failed` and does not affect the email. The digest mirror uses the same settings as the approvals mirror (#141).
+
 ## [1.5.0] - 2026-11-19
 
 ### Added

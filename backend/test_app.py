@@ -1404,6 +1404,67 @@ class WebApprovalEndpointTests(unittest.TestCase):
         fake.resolve_proposal.assert_not_awaited()
 
 
+class CressetCallbackTests(unittest.TestCase):
+    KEY = "crs_fake-source-key"
+
+    def _request(self, payload: dict, sign: bool = True, timestamp: str | None = None):
+        import hashlib
+        import hmac
+        import time
+
+        body = json.dumps(payload).encode()
+        stamp = timestamp or str(int(time.time()))
+        secret = hashlib.sha256(self.KEY.encode()).hexdigest().encode()
+        signature = "sha256=" + hmac.new(secret, f"{stamp}.".encode() + body, hashlib.sha256).hexdigest()
+        headers = {"x-cresset-timestamp": stamp, "x-cresset-signature": signature if sign else "sha256=bad"}
+
+        class Request:
+            def __init__(self):
+                self.headers = headers
+
+            async def body(self):
+                return body
+
+        return Request()
+
+    def _call(self, request, result="applied"):
+        fake = SimpleNamespace(apply_cresset_answer=AsyncMock(return_value=result))
+
+        async def run():
+            response = await app.cresset_callback(request)
+            await asyncio.gather(*list(app._relay_tasks))
+            return response
+
+        with patch.dict(os.environ, {"CRESSET_MERCURY_TOKEN": self.KEY}), patch.object(app, "telegram_approvals", fake):
+            return asyncio.run(run()), fake
+
+    ANSWER = {"external_ref": "mercury:ab12:p3", "outcome": "answered", "option_id": "approve"}
+
+    def test_a_signed_answer_runs_the_button(self):
+        response, fake = self._call(self._request(self.ANSWER))
+        self.assertEqual(response, {"ok": True, "handled": True})
+        fake.apply_cresset_answer.assert_awaited_once_with("ab12", "p3", "approve")
+
+    def test_a_bad_signature_is_refused_and_runs_nothing(self):
+        with self.assertRaises(app.HTTPException) as caught:
+            self._call(self._request(self.ANSWER, sign=False))
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_a_stale_timestamp_is_refused(self):
+        with self.assertRaises(app.HTTPException) as caught:
+            self._call(self._request(self.ANSWER, timestamp="1000"))
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_a_dismissed_or_foreign_decision_is_acknowledged_and_ignored(self):
+        for payload in (
+            {**self.ANSWER, "outcome": "dismissed", "option_id": None},
+            {**self.ANSWER, "external_ref": "scout:ab12:p3"},
+        ):
+            response, fake = self._call(self._request(payload))
+            self.assertFalse(response["handled"])
+            fake.apply_cresset_answer.assert_not_awaited()
+
+
 class UnsubscribeRouteExtractionTests(unittest.TestCase):
     """A sender whose plain-text alternative is a link-stripped rendering of
     the HTML leaves the word "Unsubscribe" and no URL, so the route has to be
