@@ -34,6 +34,10 @@ services:
       - MERCURY_JUHANDU_ACCESS_ID=${MERCURY_JUHANDU_ACCESS_ID:-}
       - MERCURY_JUHANDU_ACCESS_SECRET=${MERCURY_JUHANDU_ACCESS_SECRET:-}
       - MERCURY_JUHANDU_OUTBOX_PATH=/data/juhandu_outbox.json
+      - MERCURY_CRESSET_MODE=${MERCURY_CRESSET_MODE:-off}
+      - CRESSET_URL=${CRESSET_URL:-}
+      - CRESSET_MERCURY_TOKEN=${CRESSET_MERCURY_TOKEN:-}
+      - MERCURY_CRESSET_CALLBACK_URL=${MERCURY_CRESSET_CALLBACK_URL:-https://mercury-ingest.rpgm.tools/cresset/callback}
       # Structured judge. Both default false, so an image built without them
       # behaves exactly as it did before.
       - STRUCTURED_JUDGE_ENABLED=${STRUCTURED_JUDGE_ENABLED:-false}

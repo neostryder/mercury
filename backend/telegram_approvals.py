@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+import cresset_mirror
 import event_log
 from approvals import ApprovalStore
 
@@ -101,6 +102,9 @@ class TelegramApprovals:
         message_id = await self._send(text, keyboard=keyboard)
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
+        await cresset_mirror.ask_report(
+            brief_id, text, bool(message_metadata.get("already_delivered"))
+        )
 
     async def send_brief_message(self, brief_id: str, text: str) -> None:
         """Send backend-authored action progress into an existing brief."""
@@ -167,6 +171,9 @@ class TelegramApprovals:
             }
             message_id = await self._send(
                 text + "\n\nTap a button, or reply to THIS message with feedback.", keyboard=keyboard
+            )
+            await cresset_mirror.ask_proposal(
+                brief_id, len(self._store.get_brief(brief_id).get("history", [])), text
             )
         elif caveat or reply:
             # Nothing proposable, but there's something worth saying - either
@@ -405,21 +412,45 @@ class TelegramApprovals:
 
         if kind == "decision":
             decision, _, brief_id = ref.partition(":")
-            brief = self._store.get_brief(brief_id)
-            if (
-                decision not in ("unsubscribe", "soft", "hard", "deliver", "dismiss")
-                or not brief
-                or brief["status"] == "resolved"
-                or brief.get("message_decision")
-            ):
+            if not self._can_decide_message(brief_id, decision):
                 await self._answer_callback(callback_id, "Already handled.")
                 return
-            self._store.update_brief(brief_id, message_decision=decision)
             await self._answer_callback(callback_id, "Dismissed" if decision == "dismiss" else "Approved")
-            await self._run_message_decision(brief_id, brief, decision)
+            await self._decide_message(brief_id, decision)
             return
 
         await self._answer_callback(callback_id)
+
+    def _can_decide_message(self, brief_id: str, decision: str) -> bool:
+        brief = self._store.get_brief(brief_id)
+        return bool(
+            decision in ("unsubscribe", "soft", "hard", "deliver", "dismiss")
+            and brief
+            and brief["status"] != "resolved"
+            and not brief.get("message_decision")
+        )
+
+    async def _decide_message(self, brief_id: str, decision: str) -> None:
+        brief = self._store.get_brief(brief_id)
+        self._store.update_brief(brief_id, message_decision=decision)
+        await self._run_message_decision(brief_id, brief, decision)
+
+    async def apply_cresset_answer(self, brief_id: str, tag: str, option_id: str) -> str:
+        """This method runs the button the owner picked in Cresset, the owner's notification hub, through the same code a Telegram button tap runs and returns `applied`, `stale`, or `unavailable`. The tag names the kind of decision, with `p<N>` for a proposal sent when the brief held N turns and `report` for a flagged-message report. A proposal answer returns `stale` if the brief now holds a different number of turns than N, because the proposal changed after it was sent and an old answer cannot approve the newer proposal. The result is `unavailable` if the brief no longer exists, if the brief is already resolved (for example by a tap in Telegram), or if option_id is not one of the known buttons."""
+        if tag == "report":
+            if not self._can_decide_message(brief_id, option_id):
+                return "unavailable"
+            await self._decide_message(brief_id, option_id)
+            return "applied"
+        if tag.startswith("p") and tag[1:].isdigit():
+            brief = self._store.get_brief(brief_id)
+            if not brief or brief["status"] == "resolved":
+                return "unavailable"
+            if len(brief.get("history", [])) != int(tag[1:]):
+                return "stale"
+            if await self.resolve_proposal(brief_id, option_id):
+                return "applied"
+        return "unavailable"
 
     def pending_proposals(self) -> list[dict]:
         """The proposals waiting on Approve or Discard, in a form a web page can

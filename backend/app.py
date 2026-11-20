@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 import credential_prompts
+import cresset_mirror
 import digest
 import event_log
 import gandalf_relay
@@ -2992,3 +2993,40 @@ async def _handle_relayed_update(update: dict) -> None:
         await telegram_approvals.handle_relayed_update(update)
     except Exception:
         logging.getLogger(__name__).exception("relayed Telegram update failed")
+
+
+@app.post("/cresset/callback")
+async def cresset_callback(request: Request):
+    """This handler receives answers to Mercury's Cresset decisions, signed with HMAC-SHA256 over `<timestamp>.<body>` and keyed with the hex SHA-256 of the source token. It returns 403 when x-cresset-timestamp or x-cresset-signature is missing, the signature is wrong, or the timestamp is more than 600 seconds old, and the route takes no shared-secret header. A verified answer gets `{"ok": true, "handled": true}` at once and is applied in a background task, because Cresset waits only 5 seconds for a reply and an approved action can run for minutes. A dismissed or defaulted decision, or one that is not Mercury's, gets 200 with `handled: false` and changes nothing. The result of each applied answer is written to the admin log as a `cresset_answer` event."""
+    body = await request.body()
+    if not cresset_mirror.verify_callback(
+        body,
+        request.headers.get("x-cresset-timestamp"),
+        request.headers.get("x-cresset-signature"),
+    ):
+        raise HTTPException(status_code=403, detail="forbidden")
+    data = cresset_mirror.parse_callback_body(body)
+    ref = cresset_mirror.parse_ref(data.get("external_ref") if data else None)
+    if data is None or ref is None:
+        return {"ok": True, "handled": False, "reason": "not a Mercury decision"}
+    option_id = data.get("option_id")
+    if data.get("outcome") != "answered" or not isinstance(option_id, str):
+        return {"ok": True, "handled": False, "reason": "no option chosen"}
+    task = asyncio.create_task(_apply_cresset_answer(ref[0], ref[1], option_id))
+    _relay_tasks.add(task)
+    task.add_done_callback(_relay_tasks.discard)
+    await asyncio.sleep(0)
+    return {"ok": True, "handled": True}
+
+
+async def _apply_cresset_answer(brief_id: str, tag: str, option_id: str) -> None:
+    try:
+        result = await telegram_approvals.apply_cresset_answer(brief_id, tag, option_id)
+    except Exception:
+        logging.getLogger(__name__).exception("Cresset answer failed")
+        return
+    event_log.log_event("admin_log", {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "event": "cresset_answer",
+        "detail": f"{tag} {option_id}: {result}",
+    })
