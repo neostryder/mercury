@@ -62,10 +62,7 @@ flowchart LR
    that same fallback into a hard-bounce reported to the sender for an
    accepted message (see neostryder/mercury#53).
    A backend that is unreachable, slower than a fixed timeout, or returns anything but those three codes never produces a bounce, since infrastructure trouble is not a reason to reject a message. When the mailbox is also a recipient on the alias, the Worker accepts with a literal HTTP 200 and the message still arrives there. When Mercury is the only path into the mailbox (`CUSTODY_REQUIRED` on the Worker, set alongside `MERCURY_DELIVER_ACCEPTED_MAIL` on the backend), an accept would lose the message, so the Worker answers 421 and the mail host retries.
-3. **Any other path** (e.g. `/rules/propose`, used by the Thunderbird
-   extension) is proxied synchronously - the caller is a direct,
-   interactive user action, not something under SMTP bounce-risk, so the
-   Worker waits for the backend's real response and returns it as-is.
+3. **Any other path** is proxied synchronously, so the Worker waits for the backend's response and returns it unchanged, because the caller is a direct, interactive user action and no SMTP delivery is at risk of bouncing. The exception is `/rules/propose`, used by the Thunderbird extension, which answers at once. The backend checks the secret, reads the instruction and the attached messages, replies `{"ok": true, "status": "queued"}`, and then builds the proposal in a background task that sends it to Telegram for approval when it is ready. Building a proposal runs an agent turn on the judge that can take several minutes, and Cloudflare closes any proxied connection that waits more than 100 seconds for a response.
 4. The backend extracts and normalizes the sender address, then checks the
    deterministic blacklist (550), greylist (421), and whitelist (250).
    Exact-address matches take precedence over domain matches. The same

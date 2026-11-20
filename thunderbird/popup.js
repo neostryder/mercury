@@ -267,14 +267,24 @@ async function onSubmit(submitButton, statusEl) {
       body: JSON.stringify({ instruction, messages }),
     });
 
-    const data = await resp.json();
+    const body = await resp.text();
     statusEl.classList.remove("ok", "err");
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      statusEl.textContent = `Mercury answered HTTP ${resp.status} and not a rule proposal.`;
+      statusEl.classList.add("err");
+      submitButton.disabled = false;
+      return;
+    }
     if (data.ok) {
       const parts = [];
       if (data.rule) parts.push(`Proposed: ${data.rule}.`);
       if (data.action) parts.push(`${data.rule ? "Also proposed" : "Proposed"}: ${data.action}.`);
-      if (!parts.length) parts.push("Sent to Mercury.");
-      statusEl.textContent = `${parts.join(" ")} Check Telegram to approve.`;
+      statusEl.textContent = parts.length
+        ? `${parts.join(" ")} Check Telegram to approve.`
+        : "Sent to Mercury. The proposal will arrive on Telegram when it is ready.";
       statusEl.classList.add("ok");
     } else {
       statusEl.textContent = `Mercury reported an error: ${data.error || resp.status}`;
