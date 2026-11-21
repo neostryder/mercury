@@ -315,6 +315,39 @@ _CAUSE_CLAIM_PATTERNS = (
     ("behind", r"\b(?:behind the|underlying)\b"),
 )
 
+# An unqualified evaluative characterizes the window against a baseline the
+# brief never supplies: "Quiet day." asserts the window was quieter than a
+# normal day, and no earlier window is in evidence.  The brief permits
+# saying PLAINLY that nothing stood out -- "Nothing unusual stands out in
+# this window." -- so the vocabulary here deliberately excludes "unusual"
+# and "uneventful", which are shipped controls that must survive.
+#
+# The named group "eval" marks the evaluative word itself, so the negation
+# scope is the words before THAT word: for "the window was not quiet" the
+# negation sits between the window noun and the evaluative, and a check
+# anchored at the match start would read the sentence as unnegated.
+_UNQUALIFIED_EVALUATIVE_PATTERNS = (
+    (
+        "unqualified evaluative",
+        r"\b(?P<eval>quiet|slow|busy|unremarkable|normal|typical)\s+"
+        r"(?:\w+\s+){0,1}?"
+        r"(?:day|window|period|morning|afternoon|evening|night|week)\b",
+    ),
+    (
+        "unqualified evaluative",
+        r"\b(?:day|window|period|morning|afternoon|evening|night|week)\s+"
+        r"(?:was|were|is|are|seemed|felt|looked|stayed)\s+"
+        r"(?P<eval>quiet|slow|busy|unremarkable|normal|typical)\b",
+    ),
+)
+
+# The words that negate a claim.  Shared by the two negation-aware checks so
+# they cannot drift apart.
+_NEGATION_WORDS = (
+    r"\b(?:no|not(?!\s+only\b)|never|without|nothing|none|neither|nor|"
+    r"cannot|can't|doesn't|don't|didn't|isn't|aren't|wasn't|unable\s+to)\b"
+)
+
 _ADVICE_CLAIM_PATTERNS = (
     ("should", r"\b(?:should|ought to|must|needs? to|need to be)\b"),
     ("recommend", r"\b(?:recommend|recommends|recommended|recommendation|suggest|suggests|suggested|advise|advised|advisable)\b"),
@@ -394,6 +427,41 @@ def _has_unnegated_claim(pattern: str, sentence: str) -> bool:
     return False
 
 
+def _has_unnegated_evaluative(pattern: str, sentence: str) -> bool:
+    """Negation-aware check for an unqualified evaluative.
+
+    The negation scope is the words before the EVALUATIVE itself, not before
+    the match: "the window was not quiet" carries its negation between the
+    window noun and the evaluative, so a check anchored at the match start
+    would read it as unnegated and drop an honest sentence.
+    """
+    for match in re.finditer(pattern, sentence):
+        start = match.start("eval")
+        clause = re.split(r"[,;:.!?\n]|\b(?:but|however)\b", sentence[:start])[-1]
+        words = re.findall(r"\b[\w']+\b", clause)[-5:]
+        if not re.search(_NEGATION_WORDS, " ".join(words)):
+            return True
+    return False
+
+
+def _unqualified_evaluative_violation(sentence: str) -> list[str]:
+    """An evaluative that compares the window to a baseline nobody supplied.
+
+    This is checked for EVERY sentence, before the counter-noun gate.  The
+    gate is a scope filter -- it asks whether the sentence is about the
+    counters -- and an unqualified evaluative is about the WINDOW, so a
+    sentence naming no counter never reaches a matcher at all.  Measured
+    2026-11-20 against the running container: "Quiet day." was silent for
+    exactly that reason, and extending a matcher's vocabulary alone would
+    not have caught it.
+    """
+    lowered = sentence.lower()
+    for label, pattern in _UNQUALIFIED_EVALUATIVE_PATTERNS:
+        if _has_unnegated_evaluative(pattern, lowered):
+            return [f"unqualified evaluative ({label!r})"]
+    return []
+
+
 def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset()) -> list[str]:
     """The claim classes this sentence makes, if any.
 
@@ -404,6 +472,14 @@ def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset())
     All are unreadable as prose, so they are matched on their connectives and
     figures rather than parsed out of the sentence.
     """
+    # The unqualified-evaluative check runs FIRST, before the counter-noun
+    # gate.  The gate is a scope filter, not a claim filter: it asks whether
+    # the sentence is about the counters at all, so a sentence naming no
+    # counter never reaches a matcher.  An evaluative is about the WINDOW,
+    # so it must be judged before the gate decides it is out of scope.
+    evaluative = _unqualified_evaluative_violation(sentence)
+    if evaluative:
+        return evaluative
     if not _mentions_a_counter(sentence):
         return []
     lowered = sentence.lower()
@@ -524,6 +600,11 @@ Rules:
 - If nothing in this window stands out, say so plainly in one sentence instead
   of manufacturing significance.
 
+You have no tools for this task and you need none: the statistics below are
+the whole of the evidence, and the paragraph is one sentence of plain prose
+about them. Do not read files, do not run commands, do not search, and do not
+try to look anything up. Answer from the statistics above in a single reply.
+
 Respond with only the paragraph itself, nothing else.
 
 Statistics:
@@ -532,6 +613,16 @@ Statistics:
     try:
         paragraph = (await judge.ask(prompt)).strip()
     except Exception as exc:
+        # A placeholder that ships silently is how a compliant-but-undelivered
+        # paragraph reaches the mailbox as "Insights unavailable this run",
+        # with nothing in the log to show a compliant paragraph was produced
+        # and thrown away.  Log it at WARNING, with the session's duration
+        # beside it, so the shape is visible in the container log.
+        logger.warning(
+            "Daily digest: the judge did not answer within its budget "
+            "(%s: %s); the digest will ship the placeholder instead",
+            type(exc).__name__, exc,
+        )
         return f"Insights unavailable this run ({type(exc).__name__}: {exc})."
 
     cleaned, violations = _strip_claim_violations(paragraph, _stat_numbers(stats))

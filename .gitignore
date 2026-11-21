@@ -5,6 +5,13 @@ __pycache__/
 .venv/
 .env
 *.env
+# Backups of the secrets file are the SAME secrets. Match the PATTERN, not
+# the filename that happens to be there today: '.env' and '*.env' match the
+# live file and nothing else -- '.env.bak', '.env.bak.20260920-231907' and
+# 'env.backup' all slip past them. Keep any real backup OUTSIDE the working
+# tree, or encrypted.
+*.env.*
+*.bak
 data/
 identities.json
 worker/wrangler.toml
