@@ -15,6 +15,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import alert_settings
 import credential_prompts
 import cresset_mirror
 import digest
@@ -2206,6 +2207,43 @@ async def submit_credential_prompt(token: str, request: Request):
     if not credential_prompts.submit(token, username, password):
         return {"ok": False, "error": "expired or already used"}
     return {"ok": True}
+
+
+@app.get("/settings/alerts")
+async def get_alert_settings(x_mercury_secret: str | None = Header(None)):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {
+        "cresset": alert_settings.current_mode(),
+        "saved": alert_settings.saved_mode() is not None,
+        "modes": list(alert_settings.MODES),
+        "configured": bool(cresset_mirror._url() and cresset_mirror._token()),
+    }
+
+
+@app.post("/settings/alerts")
+async def change_alert_settings(
+    request: Request, x_mercury_secret: str | None = Header(None)
+):
+    if x_mercury_secret != SHARED_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="body must be JSON")
+    mode = payload.get("cresset") if isinstance(payload, dict) else None
+    if mode not in alert_settings.MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cresset must be one of {', '.join(alert_settings.MODES)}",
+        )
+    alert_settings.save_mode(mode)
+    event_log.log_event("admin_log", {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "event": "alert_setting_changed",
+        "detail": f"cresset={mode}",
+    })
+    return {"ok": True, "cresset": mode}
 
 
 @app.get("/filtering")

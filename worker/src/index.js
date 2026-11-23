@@ -585,6 +585,13 @@ async function handleDashboard(pathname, search, env, request, ctx) {
       return proxyFilteringPolicy(request, env);
     }
 
+    if (pathname === '/dashboard/api/settings/alerts') {
+      if (request.method !== 'GET' && request.method !== 'POST') {
+        return new Response('method not allowed', { status: 405 });
+      }
+      return proxyFilteringPolicy(request, env, '/settings/alerts');
+    }
+
     if (pathname === '/dashboard/api/trends') {
       const db = env.MERCURY_LOG;
       const [volumeRows, categoryRows] = await Promise.all([
@@ -1243,7 +1250,7 @@ async function reverseRule(rule, env) {
 // dashboard is already gated by the Cloudflare Access application on this
 // path; this hop additionally uses the backend's shared secret and never
 // exposes it to browser JavaScript.
-async function proxyFilteringPolicy(request, env) {
+async function proxyFilteringPolicy(request, env, backendPath = '/filtering') {
   const headers = { 'X-Mercury-Secret': env.MERCURY_SHARED_SECRET };
   let body;
   if (request.method === 'POST') {
@@ -1259,7 +1266,7 @@ async function proxyFilteringPolicy(request, env) {
   }
 
   try {
-    const response = await fetch(`${env.BACKEND_BASE_URL}/filtering`, {
+    const response = await fetch(`${env.BACKEND_BASE_URL}${backendPath}`, {
       method: request.method,
       headers,
       body,

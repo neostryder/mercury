@@ -35,6 +35,7 @@ services:
       - MERCURY_JUHANDU_ACCESS_SECRET=${MERCURY_JUHANDU_ACCESS_SECRET:-}
       - MERCURY_JUHANDU_OUTBOX_PATH=/data/juhandu_outbox.json
       - MERCURY_CRESSET_MODE=${MERCURY_CRESSET_MODE:-off}
+      - MERCURY_ALERT_SETTINGS_PATH=/data/alert_settings.json
       - CRESSET_URL=${CRESSET_URL:-}
       - CRESSET_MERCURY_TOKEN=${CRESSET_MERCURY_TOKEN:-}
       - MERCURY_CRESSET_CALLBACK_URL=${MERCURY_CRESSET_CALLBACK_URL:-https://mercury-ingest.rpgm.tools/cresset/callback}

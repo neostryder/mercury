@@ -25,6 +25,8 @@ ENV = {
     "MERCURY_CRESSET_MODE": "both",
     "CRESSET_URL": "https://cresset.example.com",
     "CRESSET_MERCURY_TOKEN": SOURCE_KEY,
+    "MERCURY_CRESSET_ALLOW_UNDER_TEST": "1",
+    "MERCURY_ALERT_SETTINGS_PATH": str(Path(__file__).parent / "no-such-alert-settings.json"),
 }
 
 
@@ -47,6 +49,27 @@ class EnabledTests(unittest.TestCase):
                 self.assertFalse(mirror.enabled())
         with patch.dict(os.environ, {**ENV, "MERCURY_CRESSET_MODE": "cresset"}, clear=True):
             self.assertFalse(mirror.enabled())
+
+
+class TestRunGuardTests(unittest.TestCase):
+    """A test run that inherits a live Cresset address and key must never reach it."""
+
+    LIVE = {k: v for k, v in ENV.items() if k != "MERCURY_CRESSET_ALLOW_UNDER_TEST"}
+
+    def test_a_test_run_stays_off_without_the_opt_in(self):
+        with patch.dict(os.environ, self.LIVE, clear=True):
+            self.assertFalse(mirror.enabled())
+
+    def test_the_opt_in_turns_it_back_on(self):
+        with patch.dict(os.environ, ENV, clear=True):
+            self.assertTrue(mirror.enabled())
+
+    def test_nothing_is_posted_to_a_live_address_from_a_test_run(self):
+        with patch.dict(os.environ, self.LIVE, clear=True),                 patch.object(mirror.httpx, "AsyncClient", side_effect=AssertionError("network used")) as client:
+            asyncio.run(mirror.ask_proposal("ab12", 1, "Approve the new rule?"))
+            asyncio.run(mirror.ask_report("ab12", "A message was flagged", False))
+            asyncio.run(mirror.send_digest("Daily digest", "<p>hi</p>", "2026-11-22"))
+            client.assert_not_called()
 
 
 class VerifyCallbackTests(unittest.TestCase):

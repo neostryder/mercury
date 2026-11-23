@@ -9,12 +9,14 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 
 import httpx
 
+import alert_settings
 import event_log
 
 logger = logging.getLogger(__name__)
@@ -53,9 +55,22 @@ def _callback_url() -> str:
     return os.environ.get("MERCURY_CRESSET_CALLBACK_URL", DEFAULT_CALLBACK_URL).strip()
 
 
+def _under_test() -> bool:
+    argv0 = (sys.argv[0] if sys.argv else "").replace("\\", "/").lower()
+    return bool(
+        os.environ.get("PYTEST_CURRENT_TEST")
+        or "pytest" in sys.modules
+        or "/unittest" in argv0
+        or argv0.endswith("unittest")
+    )
+
+
 def enabled() -> bool:
-    mode = os.environ.get("MERCURY_CRESSET_MODE", "off").strip().lower()
-    return mode == "both" and bool(_url() and _token())
+    # A test run that inherits a real Cresset address and key must never post to it, so
+    # under a test runner the mirror stays off unless a test opts in on purpose.
+    if _under_test() and os.environ.get("MERCURY_CRESSET_ALLOW_UNDER_TEST") != "1":
+        return False
+    return alert_settings.current_mode() == "both" and bool(_url() and _token())
 
 
 def _record_failure(what: str, detail: str) -> None:
