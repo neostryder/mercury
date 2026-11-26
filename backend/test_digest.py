@@ -465,5 +465,169 @@ class DigestInsightPromptTests(unittest.TestCase):
         self.assertIn("Hard bounces: 15", prompt)
 
 
+class DigestRankMatcherExemptionTests(unittest.TestCase):
+    """A comparative bound stating a SHARE of the same counter family is a
+    ratio the brief PERMITS, not a ranking claim (locked 2026-11-23).
+
+    The brief says: "The ratio of hard bounces to messages is what this
+    window shows."  The guard used to catch "more than a third of what
+    arrived hard-bounced" as a rank claim, because "more than" is a rank
+    term with no exemption -- while the SAME ratio worded differently
+    ("roughly one bounce in three messages") passed cleanly.
+
+    The remedy is a narrow exemption on the MATCHER, never a relaxation
+    of the rule.  These controls hold BOTH directions: the permitted form
+    survives, and the forbidden rankings still fail.
+    """
+
+    _stats = DigestInsightOutputTests._stats
+    _paragraph = DigestInsightOutputTests._paragraph
+
+    def test_a_permitted_comparative_ratio_survives(self):
+        out = self._paragraph(
+            "More than a third of what arrived hard-bounced in this window. "
+            "The rest of the window was uneventful."
+        )
+        self.assertIn("hard-bounced", out.lower())
+        self.assertNotEqual(out.strip(),
+                            "The rest of the window was uneventful.")
+
+    def test_the_same_ratio_wording_differs_but_also_survives(self):
+        out = self._paragraph(
+            "Roughly one bounce in three messages was recorded in this "
+            "window. The rest of the window was uneventful."
+        )
+        self.assertIn("one bounce in three", out.lower())
+
+    def test_a_genuine_ranking_is_still_removed(self):
+        out = self._paragraph(
+            "Spam outnumbered legitimate mail in this window. "
+            "The rest of the window was uneventful."
+        )
+        self.assertNotIn("outnumbered", out.lower())
+
+    def test_a_comparative_bound_naming_a_different_quantity_is_still_removed(self):
+        out = self._paragraph(
+            "More than half the mail was promotional compared to last week. "
+            "The rest of the window was uneventful."
+        )
+        self.assertNotIn("more than half", out.lower())
+
+    def test_the_other_rank_terms_are_untouched(self):
+        out = self._paragraph(
+            "The largest category was promotional mail in this window. "
+            "The rest of the window was uneventful."
+        )
+        self.assertNotIn("largest", out.lower())
+
+
+class DigestRankClaimExemptionScopeTests(unittest.TestCase):
+    """A guard's exemption is scoped to the CLAIM it licenses, not to the
+    sentence that carries it (locked 2026-11-26).
+
+    Measured 2026-11-26 against the running container: the exemption was
+    applied to the whole SENTENCE, so a bound riding alongside any ranking
+    waived it.  All four claim forms the advisory named stayed open, and a
+    paragraph carrying three forbidden claims shipped to the mailbox owner.
+
+    These controls hold BOTH directions: every breach form is DROPPED, and
+    every licensed bound form is KEPT.
+    """
+
+    _stats = DigestInsightOutputTests._stats
+    _paragraph = DigestInsightOutputTests._paragraph
+
+    _FORMS = (
+        ("ran ahead of",
+         "At least one third of the mail was hard bounces, and spam ran "
+         "ahead of every other verdict in the window.",
+         "At least one third of the mail was hard bounces in the window."),
+        ("split evenly",
+         "At most a fifth of the mail was promotional, and the verdicts split "
+         "evenly between spam and legitimate mail.",
+         "At most a fifth of the mail was promotional in the window."),
+        ("the remainder",
+         "At least one third of the mail was hard bounces, and the remainder "
+         "was promotional.",
+         "At least one third of the mail was hard bounces in the window."),
+        ("the largest",
+         "At most a fifth of the mail was hard bounces, and spam was the "
+         "largest category in the window.",
+         "At most a fifth of the mail was hard bounces in the window."),
+    )
+
+    def test_every_named_breach_form_is_dropped(self):
+        for label, breach, _licensed in self._FORMS:
+            with self.subTest(label):
+                out = self._paragraph(breach + " The rest of the window was uneventful.")
+                # The breach sentence is dropped; the honest tail survives.
+                self.assertEqual(out.strip(), "The rest of the window was uneventful.",
+                                 "the breach form survived: %s" % label)
+                self.assertNotIn(breach[:40].lower(), out.lower(),
+                                 "the breach form survived: %s" % label)
+
+    def test_every_named_licensed_form_is_kept(self):
+        for label, _breach, licensed in self._FORMS:
+            with self.subTest(label):
+                out = self._paragraph(licensed + " The rest of the window was uneventful.")
+                self.assertIn(licensed, out, "the licensed form was dropped: %s" % label)
+
+    def test_a_bound_alone_is_still_not_a_ranking(self):
+        text = ("At least 10 rules applied during this window, and the day "
+                "was uneventful.")
+        self.assertEqual(self._paragraph(text), text)
+
+    def test_a_share_elsewhere_does_not_license_a_different_comparative(self):
+        out = self._paragraph(
+            "More than half the mail was promotional, and more than a third "
+            "of what arrived hard-bounced. The rest of the window was "
+            "uneventful."
+        )
+        self.assertNotIn("more than half", out.lower())
+
+
+class DigestComparisonBandAndOperationalConclusionTests(unittest.TestCase):
+    """Two rule classes the brief forbids had NO matcher at all
+    (measured 2026-11-26: 6 of 8 rule probes were dropped, and the two
+    that survived are exactly the forms the shipped paragraph used).
+
+    A comparison of the SPREAD of two breakdowns asserts a relationship
+    between counters the statistics do not relate.  A conclusion about the
+    PIPELINE's operation is a claim about the window, so it is judged
+    before the counter-noun gate.
+    """
+
+    _stats = DigestInsightOutputTests._stats
+    _paragraph = DigestInsightOutputTests._paragraph
+
+    def test_a_comparison_band_claim_is_removed(self):
+        out = self._paragraph(
+            "Verdicts settled into a narrow band while the senders behind "
+            "them spread across a wider mix of categories. The rest of the "
+            "window was uneventful."
+        )
+        self.assertNotIn("narrow band", out.lower())
+        self.assertNotIn("wider mix", out.lower())
+
+    def test_an_operational_conclusion_is_removed(self):
+        out = self._paragraph(
+            "The pipeline closed the day with an empty queue and no items "
+            "awaiting review. The rest of the window was uneventful."
+        )
+        self.assertNotIn("closed the day", out.lower())
+
+    def test_a_word_form_of_a_restated_figure_is_removed(self):
+        out = self._paragraph(
+            "The rules doing the filtering changed once over the past week. "
+            "The rest of the window was uneventful."
+        )
+        self.assertNotIn("changed once", out.lower())
+
+    def test_honest_prose_still_survives(self):
+        text = ("Two senders accounted for the new rules; the rest of the "
+                "window was uneventful.")
+        self.assertEqual(self._paragraph(text), text)
+
+
 if __name__ == "__main__":
     unittest.main()
