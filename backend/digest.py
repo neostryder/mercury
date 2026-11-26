@@ -278,6 +278,16 @@ _RANK_CLAIM_INFLECTIONS = (
     ("outnumber", r"\boutnumber(?:s|ed|ing)?\b"),
     ("dominate", r"\bdominat(?:e|es|ed|ing)\b"),
     ("share", r"\bshares\b"),
+    # Ranking claim FORMS the plain term list could not reach at all.
+    # Measured 2026-11-26: the 2026-11-25 advisory named these three
+    # ("runs ahead of", "split evenly", "the remainder") as claims that ride
+    # ALONGSIDE a bound, and the live guard had no vocabulary for any of
+    # them, so scoping the exemption alone could not catch them.
+    ("ran ahead of", r"\bran ahead of\b"),
+    ("split evenly", r"\bsplit evenly\b"),
+    # Scoped to a CLAIM about the remainder ("the remainder was
+    # promotional"), not to the harmless "the remainder of the window".
+    ("the remainder", r"\bthe remainder (?:was|were|is|are)\b"),
 )
 
 _CORRESPONDENCE_CLAIM_INFLECTIONS = (
@@ -301,8 +311,17 @@ _TREND_CLAIM_PATTERNS = (
     ("drop", r"\b(?:drop|drops|dropped|dropping|decline|declines|declined|declining)\b"),
     ("rise", r"\b(?:rise|rises|rose|risen|rising|climb|climbs|climbed|climbing)\b"),
     ("increase", r"\b(?:increase|increases|increased|increasing|decrease|decreases|decreased|decreasing)\b"),
-    ("change", r"\b(?:jump|jumps|jumped|grew|grow|grows|growth|fell|fall|falls|falling|uptick|downturn)\b"),
-    ("earlier window", r"\b(?:yesterday|previous day|prior day|earlier window|last week|baseline)\b"),
+    # "changed" joins the existing change-vocabulary (jump, grew, fell):
+    # the brief forbids a rate of change, and the matcher read every OTHER
+    # form of that claim while leaving the plainest one open.  The word
+    # form was the unadjudicated FORM, not a new rule.
+    ("change", r"\b(?:jump|jumps|jumped|grew|grow|grows|growth|fell|fall|falls|falling|uptick|downturn|"
+                r"chang(?:e|es|ed|ing))\b"),
+    # "past week" joins the existing "last week": the brief states that no
+    # earlier window is supplied, so a week reference is the SAME claim in a
+    # different form.  The word form was unadjudicated until now (the
+    # matcher read one form of the reference and left the other open).
+    ("earlier window", r"\b(?:yesterday|previous day|prior day|earlier window|last week|past week|baseline)\b"),
     ("than usual", r"\b(?:than usual|than normal|than typical|than before|than earlier|up from|down from)\b"),
     ("usual", r"\b(?:usually|normally|typically|as usual)\b"),
 )
@@ -386,7 +405,176 @@ _COUNTER_NOUNS = (
 )
 
 # "at least 10" and "at most 5" are numeric bounds, not ranking claims.
+#
+# The exemption is scoped to the COMPARATIVE the bound licenses, not to the
+# whole sentence.  An exemption keyed on the sentence waived every OTHER
+# ranking claim riding alongside the bound: measured 2026-11-26 against the
+# live container, 0 of 4 named claim forms were closed while every LICENSED
+# bound form was kept, and a paragraph carrying three forbidden claims
+# shipped to the mailbox owner.  The bound now licenses its own
+# comparative, and every other comparative in the sentence is still scanned.
 _RANK_TERM_EXCEPTIONS = ("at least", "at most")
+
+
+def _rank_scan_text(sentence: str) -> str:
+    """The text the RANK matcher scans.
+
+    The bound phrases are removed, so the comparative a bound licenses
+    ("least" in "at least") is not itself read as a ranking claim, while
+    every other comparative in the sentence still is.  This is the scoping
+    the 2026-11-25 advisory prescribed and the 2026-11-26 measurement
+    confirmed the live guard never received.
+    """
+    out = sentence
+    for bound in _RANK_TERM_EXCEPTIONS:
+        out = out.replace(bound, " ")
+    return out
+
+# A COMPARATIVE BOUND whose right-hand side is a SHARE of the same counter
+# family is a ratio statement, not a ranking claim.
+#
+# Measured 2026-11-23: the insights brief explicitly PERMITS the ratio --
+# "The ratio of hard bounces to messages is what this window shows" -- but
+# the guard caught "more than a third of what arrived hard-bounced" as a
+# rank claim, because "more than" is in _RANK_CLAIM_TERMS with no
+# exemption for a comparative bound whose right-hand side is a share of
+# the same counter family.  The guard passes 7 of the 8 permitted forms
+# tested; the SAME ratio worded differently ("roughly one bounce in three
+# messages") passes cleanly.  So the defect is the ONE lexical form, not
+# the rule and not the guard's coverage.
+#
+# The remedy is a narrow MATCHER exemption, never a relaxation of the
+# rule: a genuine ranking ("spam outnumbered legitimate mail", "more than
+# half the mail was promotional compared to last week") must still fail.
+# See the rule in the `cron-run-artifact-adjudication` skill, "A matcher
+# that catches a PERMITTED phrasing is a lexical defect, and the remedy is
+# the MATCHER, not the rule" (locked 2026-11-23).
+
+# The comparative bound and the share that must follow it.
+_SAME_FAMILY_SHARE = re.compile(
+    r"\b(?:more|less|fewer|greater)\s+than\s+"
+    r"(?:"
+    r"(?:a|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|half|quarter)"
+    r"|(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+in\s+"
+    r"(?:two|three|four|five|six|seven|eight|nine|ten)"
+    r"|(?:a|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|half|quarter)"
+    r"\s+of\s+(?:what|those|the|these|all)\s+"
+    r"(?:arrived|received|messages?|mail|mails?|sends?|traffic|deliveries|"
+    r"items?|bounces?)"
+    r")",
+    re.I)
+
+# The SHARE alone -- the right-hand side of a comparative bound.  Kept apart
+# from the bound so the exemption can be scoped to the comparative it
+# licenses: a share attached to ONE comparative does not license a different
+# one (locked 2026-11-26).
+_SAME_FAMILY_SHARE_TAIL = re.compile(
+    r"\s+(?:"
+    r"(?:a|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|half|quarter)"
+    r"|(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+in\s+"
+    r"(?:two|three|four|five|six|seven|eight|nine|ten)"
+    r"|(?:a|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|half|quarter)"
+    r"\s+of\s+(?:what|those|the|these|all)\s+"
+    r"(?:arrived|received|messages?|mail|mails?|sends?|traffic|deliveries|"
+    r"items?|bounces?)"
+    r")",
+    re.I)
+
+#
+# A claim about the SPREAD of two breakdowns -- "verdicts settled into a
+# narrow band while the senders behind them spread across a wider mix".
+# The brief forbids asserting a relationship between counters the statistics
+# do not relate, and the counters below ARE independent, so comparing the
+# spread of two of them is the SEMANTIC form of that rule.
+_COMPARISON_BAND_PATTERNS = (
+    ("comparison band", r"\b(?:narrow|narrower|wider|broad)\s+"
+                         r"(?:band|mix|spread|range)\b"),
+)
+
+# A conclusion about the PIPELINE's own operation -- "the pipeline closed
+# the day with an empty queue".  These are claims about how the pipeline
+# ran, not about the counters, so they are judged BEFORE the counter-noun
+# gate for the same reason the unqualified evaluative is (measured
+# 2026-11-26: the live guard had no matcher for the class at all, and a
+# paragraph using it shipped to the mailbox owner).
+_OPERATIONAL_CONCLUSION_PATTERNS = (
+    ("operational conclusion", r"\b(?:closed\s+(?:out\s+)?the\s+day|"
+                               r"(?:the\s+)?day\s+closed|"
+                               r"pipeline\s+(?:closed|shut\s+down))\b"),
+)
+
+
+def _is_same_family_share(sentence: str) -> bool:
+    """True when a comparative bound states a share of the same family.
+
+    This is the EXEMPTION, and it is deliberately narrow: the bound's
+    right-hand side must be a fraction ("a third", "one in three") or a
+    possessive share of a counter noun ("of what arrived", "of the
+    messages").  A comparative bound whose right-hand side names a
+    DIFFERENT quantity ("more than half the mail was promotional compared
+    to last week") is a ranking and is NOT exempt.
+    """
+    return bool(_SAME_FAMILY_SHARE.search(sentence))
+
+
+def _unnegated_occurrences(term: str, sentence: str) -> list[re.Match]:
+    """Every occurrence of `term` that is not negated.
+
+    The negation scope is the words before the match within its clause --
+    the same rule the claim checkers use, so a negated comparative does not
+    need an exemption it never needed.
+    """
+    hits = []
+    for match in re.finditer(r"\b" + re.escape(term) + r"\b", sentence):
+        clause = re.split(r"[,;:.!?\n]|\b(?:but|however)\b",
+                           sentence[:match.start()])[-1]
+        words = re.findall(r"\b[\w']+\b", clause)[-5:]
+        if not re.search(
+            r"\b(?:no|not(?!s+only\b)|never|without|nothing|none|neither|nor|"
+            r"cannot|can't|doesn't|don't|didn't|isn't|aren't|wasn't|unable\s+to)\b",
+            " ".join(words),
+        ):
+            hits.append(match)
+    return hits
+
+
+def _licenses_bound(sentence: str, term: str) -> bool:
+    """True when THIS comparative term is licensed by a bound it owns.
+
+    The exemption is scoped to the CLAIM it licenses (locked 2026-11-26).
+    Two scopes matter, and the live guard had neither:
+
+    * the BOUND scope -- "at least"/"at most" exempts the comparative it
+      licenses, so a sentence that ALSO carries a separate ranking claim
+      is still dropped.  The live guard applied the exemption to the
+      whole SENTENCE, so a bound riding alongside any ranking waived it.
+    * the SHARE scope -- a same-family share licenses only the
+      comparative it is attached to, and only that OCCURRENCE.  The live
+      guard let a share anywhere in the sentence license every
+      comparative in it.
+
+    So EVERY unnegated occurrence must be licensed: one licensed
+    occurrence does not excuse an unlicensed one beside it.
+
+    Measured 2026-11-26 against the live container: with the sentence-
+    scoped exemption, 0 of 4 named claim forms were closed.
+    """
+    if term not in ("more than", "less than", "fewer than", "greater than"):
+        return False
+    occurrences = _unnegated_occurrences(term, sentence)
+    if not occurrences:
+        return False
+    for match in occurrences:
+        # The share must follow THIS occurrence, not merely appear in the
+        # sentence.
+        if not _SAME_FAMILY_SHARE_TAIL.match(sentence[match.end():]):
+            return False
+    return True
+
 
 
 def _mentions_a_counter(sentence: str) -> bool:
@@ -480,6 +668,13 @@ def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset())
     evaluative = _unqualified_evaluative_violation(sentence)
     if evaluative:
         return evaluative
+    # A conclusion about the PIPELINE's operation is likewise about the
+    # window, not about the counters, so it is judged before the gate too
+    # (measured 2026-11-26: "the pipeline closed the day with an empty
+    # queue" named no counter and so never reached a matcher at all).
+    for label, pattern in _OPERATIONAL_CONCLUSION_PATTERNS:
+        if _has_unnegated_claim(pattern, sentence.lower()):
+            return [f"operational conclusion ({label!r})"]
     if not _mentions_a_counter(sentence):
         return []
     lowered = sentence.lower()
@@ -497,15 +692,31 @@ def _claim_violations(sentence: str, stat_numbers: frozenset[str] = frozenset())
         repeated = {n for n in re.findall(r"\b\d+\b", lowered) if n in stat_numbers}
         if len(repeated) >= 2:
             found.append("restatement of the tables")
+    # A comparison of the SPREAD of two breakdowns asserts a relationship
+    # between counters the statistics do not relate, so it is a claim class
+    # of its own (measured 2026-11-26: the live guard had no matcher for
+    # it at all, and the paragraph that used it shipped to the mailbox).
+    for label, pattern in _COMPARISON_BAND_PATTERNS:
+        if _has_unnegated_claim(pattern, lowered):
+            found.append(f"rank claim ({label!r})")
+            break
+    # The RANK matcher scans the sentence with the BOUND phrases removed,
+    # so a bound licenses only the comparative it licenses and a separate
+    # ranking claim riding alongside it is still caught (locked 2026-11-26).
+    rank_text = _rank_scan_text(lowered)
     for term in _RANK_CLAIM_TERMS:
-        if not _has_unnegated_claim(r"\b" + re.escape(term) + r"\b", lowered):
+        if not _has_unnegated_claim(r"\b" + re.escape(term) + r"\b", rank_text):
             continue
-        if any(exc in lowered for exc in _RANK_TERM_EXCEPTIONS):
+        # A comparative bound stating a SHARE of the same counter family is
+        # a ratio the brief permits, not a ranking claim.  The exemption is
+        # on the MATCHER, not on the rule (locked 2026-11-23), and it is
+        # scoped to the comparative the share licenses (locked 2026-11-26).
+        if _licenses_bound(rank_text, term):
             continue
         found.append(f"rank claim ({term!r})")
         break
     for label, pattern in _RANK_CLAIM_INFLECTIONS:
-        if _has_unnegated_claim(pattern, lowered):
+        if _has_unnegated_claim(pattern, rank_text):
             found.append(f"rank claim ({label!r})")
             break
     for term in _CORRESPONDENCE_CLAIM_TERMS:
