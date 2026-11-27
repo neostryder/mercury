@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import digest
 
@@ -148,6 +148,27 @@ class LinkFilterTests(unittest.TestCase):
             with self.assertRaises(digest.smtplib.SMTPDataError):
                 digest.send_email("Digest", "<p>hello</p>")
         self.assertEqual(server.send_message.call_count, 1)
+
+
+class DigestDeliveryTests(unittest.TestCase):
+    def test_cresset_mode_keeps_smtp_as_the_primary_digest_delivery(self):
+        async def post(path, payload):
+            smtp.assert_called_once_with("Mercury daily digest - November 19, 2026", "<p>All quiet.</p>")
+            self.assertEqual(path, "/v1/events")
+            self.assertEqual(payload["fingerprint"], "mercury-digest-2026-11-19")
+            return True
+
+        stats = {"generated_at": datetime(2026, 11, 19, tzinfo=timezone.utc)}
+        with (
+            patch.object(digest, "gather_stats", AsyncMock(return_value=stats)),
+            patch.object(digest, "build_insights", AsyncMock(return_value="All quiet.")),
+            patch.object(digest, "render_html", return_value="<p>All quiet.</p>"),
+            patch.object(digest, "send_email") as smtp,
+            patch.object(digest.cresset_mirror, "delivery_mode", AsyncMock(return_value="cresset")),
+            patch.object(digest.cresset_mirror, "_post", AsyncMock(side_effect=post)) as send_copy,
+        ):
+            asyncio.run(digest.run_digest_once(None))
+        send_copy.assert_awaited_once()
 
 
 class DigestInsightOutputTests(unittest.TestCase):

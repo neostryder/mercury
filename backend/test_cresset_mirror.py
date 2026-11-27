@@ -35,20 +35,64 @@ def _sign(body: bytes, timestamp: str, key: str = SOURCE_KEY) -> str:
     return "sha256=" + hmac.new(secret, f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
 
 
-class EnabledTests(unittest.TestCase):
-    def test_off_by_default(self):
-        with patch.dict(os.environ, {"CRESSET_URL": "https://x.example", "CRESSET_MERCURY_TOKEN": "t"}, clear=True):
-            self.assertFalse(mirror.enabled())
+def _mock_client(handler):
+    client = mirror.httpx.AsyncClient
+    transport = mirror.httpx.MockTransport(handler)
+    return patch.object(mirror.httpx, "AsyncClient", side_effect=lambda **kwargs: client(transport=transport, **kwargs))
 
-    def test_needs_both_mode_url_and_key(self):
-        with patch.dict(os.environ, ENV, clear=True):
-            self.assertTrue(mirror.enabled())
+
+class RegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = SimpleNamespace(monotonic=lambda: self.now)
+        self.now = 0
+        for patcher in (
+            patch.dict(os.environ, ENV, clear=True),
+            patch.object(mirror, "_sender_config", None),
+            patch.object(mirror, "time", self.clock),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_the_mode_is_cached_and_refreshed_after_ten_minutes(self):
+        modes = iter(("cresset", "direct"))
+
+        def config(request):
+            self.assertEqual(request.method, "GET")
+            self.assertEqual(str(request.url), f"{ENV['CRESSET_URL']}/v1/sender-config?sender=mercury")
+            self.assertEqual(request.headers["authorization"], f"Bearer {SOURCE_KEY}")
+            return mirror.httpx.Response(200, json={"sender": "mercury", "mode": next(modes)})
+
+        with _mock_client(config) as client:
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "cresset")
+            self.now = 599
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "cresset")
+            client.assert_called_once_with(timeout=1.5)
+            self.now = 600
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "off")
+            self.assertEqual(client.call_count, 2)
+
+    def test_hub_failure_uses_stale_mode_then_local_mode_if_credentials_change(self):
+        def config(request):
+            if self.now:
+                raise mirror.httpx.ConnectError("down")
+            return mirror.httpx.Response(200, json={"sender": "mercury", "mode": "cresset"})
+
+        with _mock_client(config):
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "cresset")
+            self.now = 601
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "cresset")
+            with patch.dict(os.environ, {"CRESSET_MERCURY_TOKEN": "other-fixture"}):
+                self.assertEqual(asyncio.run(mirror.delivery_mode()), "both")
+
+    def test_hub_failure_without_a_cache_uses_the_local_mode(self):
+        with _mock_client(lambda request: mirror.httpx.Response(503)):
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "both")
+
+    def test_missing_credentials_skip_the_registry(self):
         for missing in ("CRESSET_URL", "CRESSET_MERCURY_TOKEN"):
-            env = {k: v for k, v in ENV.items() if k != missing}
-            with patch.dict(os.environ, env, clear=True):
-                self.assertFalse(mirror.enabled())
-        with patch.dict(os.environ, {**ENV, "MERCURY_CRESSET_MODE": "cresset"}, clear=True):
-            self.assertFalse(mirror.enabled())
+            with self.subTest(missing=missing), patch.dict(os.environ, {missing: ""}), _mock_client(None) as client:
+                self.assertEqual(asyncio.run(mirror.delivery_mode()), "off")
+                client.assert_not_called()
 
 
 class TestRunGuardTests(unittest.TestCase):
@@ -58,16 +102,15 @@ class TestRunGuardTests(unittest.TestCase):
 
     def test_a_test_run_stays_off_without_the_opt_in(self):
         with patch.dict(os.environ, self.LIVE, clear=True):
-            self.assertFalse(mirror.enabled())
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "off")
 
     def test_the_opt_in_turns_it_back_on(self):
-        with patch.dict(os.environ, ENV, clear=True):
-            self.assertTrue(mirror.enabled())
+        with patch.dict(os.environ, ENV, clear=True), patch.object(mirror.alert_settings, "saved_mode", return_value="both"):
+            self.assertEqual(asyncio.run(mirror.delivery_mode()), "both")
 
     def test_nothing_is_posted_to_a_live_address_from_a_test_run(self):
         with patch.dict(os.environ, self.LIVE, clear=True),                 patch.object(mirror.httpx, "AsyncClient", side_effect=AssertionError("network used")) as client:
             asyncio.run(mirror.ask_proposal("ab12", 1, "Approve the new rule?"))
-            asyncio.run(mirror.ask_report("ab12", "A message was flagged", False))
             asyncio.run(mirror.send_digest("Daily digest", "<p>hi</p>", "2026-11-22"))
             client.assert_not_called()
 
@@ -127,6 +170,9 @@ class SendTests(unittest.TestCase):
         patcher = patch.dict(os.environ, ENV, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        pin = patch.object(mirror.alert_settings, "saved_mode", return_value="both")
+        pin.start()
+        self.addCleanup(pin.stop)
 
     def test_a_proposal_becomes_a_decision_with_a_callback(self):
         with patch.object(mirror, "_post", AsyncMock(return_value={"id": "d1"})) as post:
@@ -140,8 +186,8 @@ class SendTests(unittest.TestCase):
 
     def test_a_report_offers_five_buttons_and_relabels_deliver(self):
         with patch.object(mirror, "_post", AsyncMock(return_value={})) as post:
-            asyncio.run(mirror.ask_report("ab12", "report", False))
-            asyncio.run(mirror.ask_report("ab12", "report", True))
+            asyncio.run(mirror.ask_report("ab12", "report", False, mode="both"))
+            asyncio.run(mirror.ask_report("ab12", "report", True, mode="both"))
         first, second = (call.args[1] for call in post.await_args_list)
         self.assertEqual([o["id"] for o in first["options"]], ["unsubscribe", "soft", "hard", "deliver", "dismiss"])
         self.assertEqual(first["options"][3]["label"], "Deliver + whitelist")
@@ -161,7 +207,7 @@ class SendTests(unittest.TestCase):
     def test_nothing_is_sent_when_off(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(mirror, "_post", AsyncMock()) as post:
             asyncio.run(mirror.ask_proposal("ab12", 1, "x"))
-            asyncio.run(mirror.ask_report("ab12", "x", False))
+            asyncio.run(mirror.ask_report("ab12", "x", False, mode="off"))
             asyncio.run(mirror.send_digest("s", "<p>x</p>", "2026-11-19"))
         post.assert_not_awaited()
 
@@ -180,7 +226,7 @@ class SendTests(unittest.TestCase):
                 raise OSError("down")
 
         with patch.object(mirror.httpx, "AsyncClient", Boom), patch.object(mirror.event_log, "log_event") as log:
-            self.assertIsNone(asyncio.run(mirror._post("/v1/events", {})))
+            self.assertFalse(asyncio.run(mirror._post("/v1/events", {})))
         self.assertEqual(log.call_args.args[1]["event"], "cresset_mirror_failed")
 
     def test_the_key_goes_only_in_the_authorization_header(self):
@@ -244,6 +290,62 @@ class ApplyCressetAnswerTests(unittest.TestCase):
         self.assertEqual(args[0], brief_id)
         self.assertEqual(args[1], len(self.store.get_brief(brief_id)["history"]))
         self.assertIn("standing change", args[2])
+
+    def test_cresset_mode_keeps_the_telegram_approval_buttons(self):
+        async def post(path, payload):
+            self.telegram._send.assert_awaited_once()
+            return True
+
+        with (
+            patch.object(mirror, "delivery_mode", AsyncMock(return_value="cresset")),
+            patch.object(mirror, "_post", AsyncMock(side_effect=post)) as send_copy,
+        ):
+            brief_id, _, _ = asyncio.run(self.telegram.propose_new("Whitelist them", "From: a@b.example"))
+
+        buttons = self.telegram._send.await_args.kwargs["keyboard"]["inline_keyboard"][0]
+        self.assertEqual([button["callback_data"] for button in buttons], [f"approve:{brief_id}", f"discard:{brief_id}"])
+        send_copy.assert_awaited_once()
+
+    def _send_report_with_hub(self, mode, outcome=204):
+        calls = []
+
+        def handle(request):
+            if request.method == "GET":
+                return mirror.httpx.Response(200, json={"sender": "mercury", "mode": mode})
+            self.assertEqual(request.url.path, "/v1/decisions")
+            calls.append("cresset")
+            if isinstance(outcome, Exception):
+                raise outcome
+            return mirror.httpx.Response(outcome)
+
+        async def send(text, keyboard):
+            calls.append("telegram")
+            self.assertEqual(len(keyboard["inline_keyboard"]), 3)
+            return 1
+
+        self.telegram._send.side_effect = send
+        with (
+            patch.dict(os.environ, ENV, clear=True),
+            patch.object(mirror, "_sender_config", None),
+            patch.object(mirror.event_log, "log_event"),
+            _mock_client(handle),
+        ):
+            asyncio.run(self.telegram.send_trackable_report("Mercury report", "ctx", {}))
+        return calls
+
+    def test_the_registry_selects_report_delivery_order(self):
+        for mode, expected in (
+            ("direct", ["telegram"]),
+            ("both", ["telegram", "cresset"]),
+            ("cresset", ["cresset"]),
+        ):
+            with self.subTest(mode=mode):
+                self.assertEqual(self._send_report_with_hub(mode), expected)
+
+    def test_cresset_first_reports_fall_back_to_telegram_on_failure(self):
+        for outcome in (401, 403, 429, 503, mirror.httpx.ConnectError("down"), mirror.httpx.ReadTimeout("timeout")):
+            with self.subTest(outcome=outcome):
+                self.assertEqual(self._send_report_with_hub("cresset", outcome), ["cresset", "telegram"])
 
     def test_approve_in_cresset_runs_the_same_approval(self):
         brief_id, args = self._proposal()

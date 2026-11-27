@@ -81,9 +81,12 @@ class TelegramApprovals:
         # accepted - once it landed (enforced 250), that button would just
         # re-propose the whitelist half of what "deliver" normally offers,
         # so it's relabeled to say so rather than implying redelivery.
-        deliver_label = (
-            "Whitelist" if message_metadata.get("already_delivered") else "Deliver + whitelist"
-        )
+        already_delivered = bool(message_metadata.get("already_delivered"))
+        mode = await cresset_mirror.delivery_mode()
+        if mode == "cresset" and await cresset_mirror.ask_report(brief_id, text, already_delivered, mode=mode):
+            return
+
+        deliver_label = "Whitelist" if already_delivered else "Deliver + whitelist"
         keyboard = {
             "inline_keyboard": [
                 [
@@ -102,9 +105,8 @@ class TelegramApprovals:
         message_id = await self._send(text, keyboard=keyboard)
         if message_id is not None:
             self._store.track_message(message_id, brief_id)
-        await cresset_mirror.ask_report(
-            brief_id, text, bool(message_metadata.get("already_delivered"))
-        )
+        if mode == "both":
+            await cresset_mirror.ask_report(brief_id, text, already_delivered, mode=mode)
 
     async def send_brief_message(self, brief_id: str, text: str) -> None:
         """Send backend-authored action progress into an existing brief."""
