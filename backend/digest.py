@@ -283,7 +283,24 @@ _RANK_CLAIM_INFLECTIONS = (
     # ("runs ahead of", "split evenly", "the remainder") as claims that ride
     # ALONGSIDE a bound, and the live guard had no vocabulary for any of
     # them, so scoping the exemption alone could not catch them.
-    ("ran ahead of", r"\bran ahead of\b"),
+    #
+    # "run ahead of" is IRREGULAR: (?:s|ed|ing)? on "ran" yields
+    # rans/raned/raning and still misses "runs ahead of" and "running ahead
+    # of", so the forms are enumerated rather than suffixed.
+    #
+    # The OBJECT of "ahead of" must be a COUNTER.  A rank claim compares one
+    # counter against another; "ahead of schedule" and "ahead of the morning"
+    # are English idioms, and a bare form over-fired on them (measured
+    # 2026-11-27 against the patched source: "The filter was running ahead of
+    # schedule" and "Cleanup ran ahead of the morning" were both dropped).
+    # A matcher that over-fires is a defect too -- it removes an honest
+    # sentence from the email.
+    ("run ahead of",
+     r"\b(?:(?:run|runs|ran|running)\s+)?ahead\s+of\s+(?:the\s+|its\s+|their\s+|"
+     r"that\s+|all\s+the\s+|some\s+the\s+)?(?:\w+\s+){0,2}?"
+     r"(?:message|mail|bounce|rule|action|alert|verdict|categor|spam|phish|"
+     r"hostile|legit|legitimate|urgent|sender|domain|list|filter|count|"
+     r"share|volume|traffic|breakdown|remainder|rest|other)s?\b"),
     ("split evenly", r"\bsplit evenly\b"),
     # Scoped to a CLAIM about the remainder ("the remainder was
     # promotional"), not to the harmless "the remainder of the window".
@@ -750,17 +767,23 @@ def _strip_claim_violations(
 
 
 def _safe_insights(stats: dict) -> str:
-    """A paragraph that cannot make an unsupported claim, built from the
-    statistics themselves rather than from the model."""
-    summary = stats.get("summary") or {}
-    last24h = summary.get("last24h") or {}
-    total = last24h.get("total", len(stats.get("recent_messages") or []))
-    bounces = last24h.get("hardBounces", len(stats.get("hard_bounces") or []))
-    actions = last24h.get("actions", 0)
+    """A paragraph that cannot make an unsupported claim, because it names no
+    figure and asserts no comparison.
+
+    The fallback must obey the SAME brief the judge is given.  It used to
+    restate the raw counters ("This window processed 43 messages, with 13
+    hard bounces and 30 actions taken"), which the brief forbids -- the stat
+    cards and the breakdown tables already carry those counts, directly above
+    and below this box -- so the remedy traded a forbidden claim for a
+    forbidden restatement.
+
+    It asserts NOTHING about the window either: "nothing stands out" would be
+    its own unsupported claim, because the reason the judge was filtered is
+    that something DID stand out.  It points at the tables, where the numbers
+    live, and stops.
+    """
     return (
-        f"This window processed {total} messages, with {bounces} hard bounces "
-        f"and {actions} actions taken. The breakdown tables below carry the "
-        f"counts per category."
+        "This window's figures are in the breakdown tables below."
     )
 
 
@@ -844,7 +867,22 @@ Statistics:
             len(violations),
             "; ".join(violations),
         )
-    return cleaned or _safe_insights(stats)
+    if not cleaned:
+        # The fallback is scanned by the SAME guard as the judge's paragraph.
+        # It used to bypass the guard entirely, so its restatement of the
+        # counters was never checked -- the one path to the mailbox that the
+        # guard did not read.
+        cleaned, fallback_violations = _strip_claim_violations(
+            _safe_insights(stats), _stat_numbers(stats)
+        )
+        if fallback_violations:
+            logger.warning(
+                "Daily digest: the FALLBACK paragraph carried %d claim "
+                "sentence(s) (%s)",
+                len(fallback_violations),
+                "; ".join(fallback_violations),
+            )
+    return cleaned
 
 
 def _esc(value: object) -> str:

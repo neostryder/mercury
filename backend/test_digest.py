@@ -212,11 +212,57 @@ class DigestInsightOutputTests(unittest.TestCase):
         self.assertNotIn("tracks", out.lower())
         self.assertNotIn("reflects", out.lower())
 
-    def test_a_paragraph_with_only_claim_sentences_falls_back_to_the_statistics(self):
+    def test_a_paragraph_with_only_claim_sentences_falls_back_without_restating(self):
+        # CORRECTED 2026-11-27.  This test used to assert that the fallback
+        # RESTATES the figures ("18", "7").  That assertion encoded a defect:
+        # the stat cards and the breakdown tables already carry those counts,
+        # directly above and below the insights box, so a fallback that
+        # repeats them is the forbidden restatement the brief bans.  The
+        # remedy that closed the exemption leak traded a forbidden claim for
+        # a forbidden restatement, and this is where that trade showed up.
+        #
+        # The fallback must still be a NON-EMPTY paragraph -- the email
+        # always ships one -- but it must name NO figure and assert NO
+        # comparison.
         out = self._paragraph("Hard bounces were the largest share of all messages.")
         self.assertNotIn("largest", out.lower())
-        self.assertIn("18", out)
-        self.assertIn("7", out)
+        self.assertTrue(out.strip(), "the fallback must still ship a paragraph")
+        self.assertNotIn("18", out)
+        self.assertNotIn("7", out)
+
+    def test_the_fallback_is_scanned_by_the_guard(self):
+        # The fallback used to BYPASS the guard: build_insights returned
+        # `cleaned or _safe_insights(stats)`, so the one path to the mailbox
+        # the guard never read was the one that shipped when the judge's
+        # paragraph was entirely stripped.  It is scanned now.
+        out = self._paragraph("Hard bounces were the largest share of all messages.")
+        self.assertEqual(digest._claim_violations(out, digest._stat_numbers(self._stats())), [])
+
+    def test_every_tense_of_run_ahead_of_is_a_rank_claim(self):
+        # "run ahead of" is IRREGULAR: (?:s|ed|ing)? on "ran" yields
+        # rans/raned/raning and misses "runs ahead of".  The forms are
+        # enumerated, and the object of "ahead of" must be a COUNTER so the
+        # English idiom ("ahead of schedule") is not dropped.
+        for sentence in (
+            "The bounce rate ran ahead of the message volume.",
+            "The bounce rate runs ahead of the message volume.",
+            "The bounce rate is running ahead of the message volume.",
+            "The bounce rate ahead of the message volume.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertTrue(digest._claim_violations(sentence, digest._stat_numbers(self._stats())))
+
+    def test_the_idiom_ahead_of_schedule_is_not_a_rank_claim(self):
+        # A matcher that over-fires is a defect too: it removes an honest
+        # sentence from the email.  "ahead of schedule" names no counter, so
+        # it is not a comparison of counters.
+        for sentence in (
+            "The filter was running ahead of schedule.",
+            "The new rule is running ahead of the curve.",
+        ):
+            with self.subTest(sentence=sentence):
+                violations = digest._claim_violations(sentence, digest._stat_numbers(self._stats()))
+                self.assertFalse([v for v in violations if "rank claim" in v], violations)
 
     def test_an_honest_paragraph_survives_untouched(self):
         text = "Two senders accounted for the new rules; the rest of the window was uneventful."
