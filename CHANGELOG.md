@@ -9,6 +9,14 @@
 - [Visible] [Pipeline] **The owner can now choose whether Mercury also sends its alerts to Cresset.** The setting has two values: `off` sends to Telegram and the digest email only, and `both` adds a copy to Cresset. Read it with `GET /settings/alerts` and change it with `POST /settings/alerts` and a body of `{"cresset": "off"}` or `{"cresset": "both"}`, each with the `X-Mercury-Secret` header, or go through the dashboard proxy at `/dashboard/api/settings/alerts`, since the dashboard has no control for it yet. The choice is saved in `/data/alert_settings.json` and overrides `MERCURY_CRESSET_MODE`, which now only supplies the starting value when nothing is saved, and mirroring still needs the Cresset URL and key to be set.
 - [Visible] [Pipeline] **The Cresset mirror stays off while the backend test suite runs, even when the environment holds the address and key of a working Cresset hub.** A run counts as a test run when unittest or pytest starts it, and only a test that sets `MERCURY_CRESSET_ALLOW_UNDER_TEST=1` turns the mirror on. Before this change, a test run on a machine with those variables posted fixture prompts to the owner's hub as decisions, and 113 of them had piled up there.
 
+### Changed
+
+- [Visible] [Pipeline] **When the guard strips the whole insights paragraph, the digest now shows "This window's figures are in the breakdown tables below." in place of a paragraph of raw counts.** The old fallback repeated the message, bounce, and action counts already shown in the stat cards and breakdown tables, and it skipped the guard. The new text names no figure or comparison and goes through the same guard, and a violation in it is logged as a warning. The "ran ahead of" matcher now covers run, runs, ran, and running and requires a counter such as messages, bounces, or rules as its object, so "ahead of schedule" stays in the email.
+
+### Fixed
+
+- [Visible] [Pipeline] **The digest's insights paragraph now loses a ranking claim even when the same sentence also says "at least" or "at most".** Before this fix, any bound in a sentence switched off the rank check for the whole sentence, so a paragraph with three forbidden claims could reach your mailbox. A bound now covers only the comparison it qualifies, and a share of the same kind only where the bound is attached, so sentences that state a bound and nothing more still appear. The guard also catches phrasings it used to miss, such as "ran ahead of", "split evenly", "the remainder" used as a claim ("the remainder of the window" still passes), a comparison of how spread out two breakdowns are, and a conclusion about how Mercury's own pipeline runs.
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
