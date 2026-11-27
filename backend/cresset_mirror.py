@@ -1,8 +1,9 @@
-"""This module copies Mercury's Telegram approval prompts and the daily digest to Cresset, the owner's notification hub, as a second delivery path alongside the existing Telegram and SMTP sends. It is active only when MERCURY_CRESSET_MODE is `both` and both CRESSET_URL and CRESSET_MERCURY_TOKEN are set. CRESSET_MERCURY_TOKEN is a send-scope source token and goes only in the Authorization header.
+"""Mercury uses the Cresset sender registry when CRESSET_URL and CRESSET_MERCURY_TOKEN are set and no local choice is saved. CRESSET_MERCURY_TOKEN is a send-scope source token and goes only in the Authorization header.
 
 A proposal becomes a decision with Approve and Discard options and external_ref `mercury:<brief id>:p<N>`, where N is the brief's turn count when the proposal was sent. A flagged-message report becomes a decision with its five options and external_ref `mercury:<brief id>:report`. The digest is posted after the email as a `digest` event whose body is the plain-text email, capped at 8000 characters, with fingerprint `mercury-digest-<date>` so a retry merges into the same event.
 
-Every send is best-effort. A failure is written to the admin log as a `cresset_mirror_failed` event and is never raised, because the Telegram message or digest email has already been delivered."""
+Approval prompts and the digest reach Telegram and SMTP first. Flagged-message reports try Cresset first in `cresset` mode and fall back to Telegram on failure. Failed posts are logged as `cresset_mirror_failed`."""
+import asyncio
 import hashlib
 import hmac
 import json
@@ -23,8 +24,12 @@ logger = logging.getLogger(__name__)
 
 PROJECT = "mercury"
 USER_AGENT = "mercury-backend (cresset mirror)"
+SENDER_CONFIG_TTL = 600
+SENDER_CONFIG_TIMEOUT = 1.5
 CALLBACK_MAX_AGE_SECONDS = 600
 DEFAULT_CALLBACK_URL = "https://mercury-ingest.rpgm.tools/cresset/callback"
+
+_sender_config: tuple[tuple[str, bytes], float, str] | None = None
 
 PROPOSAL_OPTIONS = [
     {"id": "approve", "label": "Approve"},
@@ -65,12 +70,46 @@ def _under_test() -> bool:
     )
 
 
-def enabled() -> bool:
-    # A test run that inherits a real Cresset address and key must never post to it, so
-    # under a test runner the mirror stays off unless a test opts in on purpose.
+async def delivery_mode() -> str:
+    # A test run can inherit live Cresset credentials, so tests must opt in before using them.
     if _under_test() and os.environ.get("MERCURY_CRESSET_ALLOW_UNDER_TEST") != "1":
-        return False
-    return alert_settings.current_mode() == "both" and bool(_url() and _token())
+        return "off"
+    url, token = _url(), _token()
+    if not url or not token:
+        return "off"
+    saved = alert_settings.saved_mode()
+    if saved is not None:
+        return saved
+
+    global _sender_config
+    key = (url, hashlib.sha256(token.encode()).digest())
+    cached = _sender_config
+    stale = None
+    if cached is not None and cached[0] == key:
+        _, expires_at, stale = cached
+        if time.monotonic() < expires_at:
+            return stale
+
+    try:
+        async with asyncio.timeout(SENDER_CONFIG_TIMEOUT):
+            async with httpx.AsyncClient(timeout=SENDER_CONFIG_TIMEOUT) as client:
+                response = await client.get(
+                    f"{url}/v1/sender-config",
+                    params={"sender": PROJECT},
+                    headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT},
+                )
+                response.raise_for_status()
+                data = response.json()
+    except (httpx.HTTPError, httpx.InvalidURL, OSError, ValueError):
+        return stale or alert_settings.environment_mode()
+
+    if isinstance(data, dict) and data.get("sender") == PROJECT:
+        mode = data.get("mode")
+        if mode in ("direct", "both", "cresset"):
+            mode = "off" if mode == "direct" else mode
+            _sender_config = (key, time.monotonic() + SENDER_CONFIG_TTL, mode)
+            return mode
+    return stale or alert_settings.environment_mode()
 
 
 def _record_failure(what: str, detail: str) -> None:
@@ -91,7 +130,7 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "."
 
 
-async def _post(path: str, payload: dict) -> dict | None:
+async def _post(path: str, payload: dict) -> bool:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
@@ -100,12 +139,12 @@ async def _post(path: str, payload: dict) -> dict | None:
                 headers={"Authorization": f"Bearer {_token()}", "User-Agent": USER_AGENT},
             )
             response.raise_for_status()
-            return response.json()
+            return True
     except httpx.HTTPStatusError as exc:
         _record_failure(path, f"HTTP {exc.response.status_code}")
     except Exception as exc:
         _record_failure(path, type(exc).__name__)
-    return None
+    return False
 
 
 def proposal_ref(brief_id: str, turn_count: int) -> str:
@@ -117,7 +156,7 @@ def report_ref(brief_id: str) -> str:
 
 
 async def ask_proposal(brief_id: str, turn_count: int, text: str) -> None:
-    if not enabled():
+    if await delivery_mode() == "off":
         return
     await _post("/v1/decisions", {
         "project": PROJECT,
@@ -129,10 +168,10 @@ async def ask_proposal(brief_id: str, turn_count: int, text: str) -> None:
     })
 
 
-async def ask_report(brief_id: str, text: str, already_delivered: bool) -> None:
-    if not enabled():
-        return
-    await _post("/v1/decisions", {
+async def ask_report(brief_id: str, text: str, already_delivered: bool, *, mode: str) -> bool:
+    if mode == "off":
+        return False
+    return await _post("/v1/decisions", {
         "project": PROJECT,
         "title": "Mercury flagged a message",
         "description": _clip(text, 1000),
@@ -178,7 +217,7 @@ def html_to_text(html: str) -> str:
 
 
 async def send_digest(subject: str, html_body: str, day: str) -> None:
-    if not enabled():
+    if await delivery_mode() == "off":
         return
     text = html_to_text(html_body)
     await _post("/v1/events", {

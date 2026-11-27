@@ -1,12 +1,12 @@
 """The owner's choice of where Mercury's notifications go, kept in one small JSON file.
 
-`off` sends Telegram messages and the digest email only. `both` also copies each approval prompt and the daily digest to Cresset. A saved choice wins over the MERCURY_CRESSET_MODE environment variable, which only supplies the starting value when nothing has been saved. The file is replaced atomically so an interruption cannot leave half a setting behind."""
+`off` uses Mercury's own delivery, `both` adds Cresset copies, and `cresset` tries Cresset first for flagged-message reports. A saved choice pins the mode and skips the registry. MERCURY_CRESSET_MODE is the fallback when the registry has no answer. The file is replaced atomically so an interruption cannot leave half a setting behind."""
 import json
 import os
 import tempfile
 from pathlib import Path
 
-MODES = ("off", "both")
+MODES = ("off", "both", "cresset")
 
 
 def _path() -> Path:
@@ -22,12 +22,13 @@ def saved_mode() -> str | None:
     return mode if mode in MODES else None
 
 
-def current_mode() -> str:
-    saved = saved_mode()
-    if saved is not None:
-        return saved
+def environment_mode() -> str:
     env = os.environ.get("MERCURY_CRESSET_MODE", "off").strip().lower()
     return env if env in MODES else "off"
+
+
+def current_mode() -> str:
+    return saved_mode() or environment_mode()
 
 
 def save_mode(mode: str) -> None:

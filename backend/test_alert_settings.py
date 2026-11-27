@@ -38,6 +38,8 @@ class StoreTests(unittest.TestCase):
         os.environ["MERCURY_CRESSET_MODE"] = "both"
         self.assertEqual(alert_settings.current_mode(), "both")
         os.environ["MERCURY_CRESSET_MODE"] = "cresset"
+        self.assertEqual(alert_settings.current_mode(), "cresset")
+        os.environ["MERCURY_CRESSET_MODE"] = "loud"
         self.assertEqual(alert_settings.current_mode(), "off")
 
     def test_a_saved_choice_wins_over_the_environment(self):
@@ -50,7 +52,7 @@ class StoreTests(unittest.TestCase):
 
     def test_an_unknown_mode_is_refused_and_nothing_is_written(self):
         with self.assertRaises(ValueError):
-            alert_settings.save_mode("cresset")
+            alert_settings.save_mode("loud")
         self.assertFalse(self.path.exists())
 
     def test_a_damaged_file_is_ignored(self):
@@ -74,12 +76,13 @@ class MirrorUsesTheSettingTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_the_saved_setting_turns_the_mirror_on_and_off(self):
-        self.assertFalse(cresset_mirror.enabled())
-        alert_settings.save_mode("both")
-        self.assertTrue(cresset_mirror.enabled())
-        alert_settings.save_mode("off")
-        self.assertFalse(cresset_mirror.enabled())
+    def test_each_saved_mode_pins_delivery_without_a_lookup(self):
+        with patch.object(cresset_mirror.httpx, "AsyncClient") as client:
+            for mode in alert_settings.MODES:
+                with self.subTest(mode=mode):
+                    alert_settings.save_mode(mode)
+                    self.assertEqual(asyncio.run(cresset_mirror.delivery_mode()), mode)
+            client.assert_not_called()
 
 
 class EndpointTests(unittest.TestCase):
@@ -109,12 +112,12 @@ class EndpointTests(unittest.TestCase):
 
     def test_a_change_is_saved_and_read_back(self):
         self.assertEqual(asyncio.run(app.get_alert_settings(app.SHARED_SECRET))["cresset"], "off")
-        self.assertEqual(self._post({"cresset": "both"}), {"ok": True, "cresset": "both"})
+        self.assertEqual(self._post({"cresset": "cresset"}), {"ok": True, "cresset": "cresset"})
         view = asyncio.run(app.get_alert_settings(app.SHARED_SECRET))
-        self.assertEqual((view["cresset"], view["saved"], view["modes"]), ("both", True, ["off", "both"]))
+        self.assertEqual((view["cresset"], view["saved"], view["modes"]), ("cresset", True, ["off", "both", "cresset"]))
 
     def test_a_bad_mode_is_a_400(self):
-        for payload in ({"cresset": "cresset"}, {}, [], "both"):
+        for payload in ({"cresset": "loud"}, {}, [], "both"):
             with self.assertRaises(app.HTTPException) as caught:
                 self._post(payload)
             self.assertEqual(caught.exception.status_code, 400)
